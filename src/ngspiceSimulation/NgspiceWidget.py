@@ -39,7 +39,7 @@ class NgspiceWidget(QtWidgets.QWidget):
                      '{}'
                      '</span>')
 
-    def __init__(self, netlist: str, sim_end_signal: pyqtSignal) -> None:
+    def __init__(self, netlist: str, sim_end_signal: pyqtSignal, plotFlag: Optional[bool] = None) -> None:
         """
         Initialize the NgspiceWidget.
         
@@ -53,6 +53,13 @@ class NgspiceWidget(QtWidgets.QWidget):
                           simulation interaction and plotting data if successful
         """
         super().__init__()
+
+        # **CRITICAL FIX**: Set expanding size policy
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                          QtWidgets.QSizePolicy.Expanding)
+
+        # Set minimum size
+        self.setMinimumSize(300, 200)
         
         self.obj_appconfig = Appconfig()
         self.project_dir = self.obj_appconfig.current_project["ProjectName"]
@@ -319,3 +326,7 @@ class NgspiceWidget(QtWidgets.QWidget):
         """Scroll the terminal console to the bottom."""
         scrollbar = self.terminal_ui.simulationConsole.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def sizeHint(self) -> QtCore.QSize:
+        """Provide proper size hint."""
+        return QtCore.QSize(800, 600)

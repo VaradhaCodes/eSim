@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QAction, QFileDialog, QColorDialog, QInputDialog,
                              QMessageBox, QErrorMessage, QStatusBar, QStyle,
                              QSplitter, QToolButton, QWidgetAction, QGridLayout,
-                             QSpacerItem, QSizePolicy)
+                             QSpacerItem, QSizePolicy,QScrollArea)
 from PyQt5.QtGui import (QColor, QBrush, QPalette, QKeySequence,
                          QPainter, QPixmap, QFont)
 
@@ -164,27 +164,36 @@ class CustomListWidget(QListWidget):
         super().paintEvent(event)
 
 
-class plotWindow(QMainWindow):
+class plotWindow(QWidget):  # Changed from QMainWindow to QWidget
     """
-    Main plotting window for NGSpice simulation results.
+    Main plotting widget for NGSpice simulation results.
 
-    This window provides comprehensive plotting capabilities for AC, DC, and
+    This widget provides comprehensive plotting capabilities for AC, DC, and
     Transient analysis results with interactive features like cursors,
     zoom, and export functionality.
     """
 
-    def __init__(self, file_path: str, project_name: str) -> None:
+    def __init__(self, file_path: str, project_name: str, parent=None) -> None:
         """
         Initialize the plot window.
 
         Args:
             file_path: Path to simulation data files
             project_name: Name of the project
+            parent: Parent widget
         """
-        super().__init__()
+        super().__init__(parent)  # QWidget init
 
         self.file_path = file_path
         self.project_name = project_name
+
+        # **CRITICAL FIX**: Set proper size policy for dock embedding
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                           QtWidgets.QSizePolicy.Expanding)
+
+        # Set minimum size to prevent weird behavior
+        self.setMinimumSize(400, 300)
+
         self.obj_appconfig = Appconfig()
 
         logger.info(f"Complete Project Path: {self.file_path}")
@@ -199,9 +208,8 @@ class plotWindow(QMainWindow):
         # Initialize configuration
         self._initialize_configuration()
 
-        # Create UI
+        # Create UI (modified for QWidget)
         self.create_main_frame()
-        self.restore_geometry()
 
         # Load simulation data
         self.load_simulation_data()
@@ -292,195 +300,166 @@ class plotWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error saving config: {e}")
 
-    def save_geometry(self) -> None:
-        """Save window geometry and state."""
-        self.settings.setValue('geometry', super().saveGeometry())
-        self.settings.setValue('windowState', super().saveState())
-        if hasattr(self, 'splitter'):
-            self.settings.setValue('splitterState', self.splitter.saveState())
-
-    def restore_geometry(self) -> None:
-        """Restore window geometry and state."""
-        geometry = self.settings.value('geometry')
-        if geometry:
-            super().restoreGeometry(geometry)
-        else:
-            self.setGeometry(100, 100, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-
-        state = self.settings.value('windowState')
-        if state:
-            super().restoreState(state)
-        else:
-            self.showMaximized()
-
-        splitter_state = self.settings.value('splitterState')
-        if splitter_state and hasattr(self, 'splitter'):
-            self.splitter.restoreState(splitter_state)
-
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """
-        Handle window close event.
+        Handle widget close event.
 
         Args:
             event: Close event
         """
-        self.save_geometry()
         self.save_config()
+
+        # Clean up matplotlib resources
+        if hasattr(self, 'canvas'):
+            self.canvas.close()
+        if hasattr(self, 'fig'):
+            plt.close(self.fig)
+
         super().closeEvent(event)
 
     def apply_theme(self) -> None:
-        """Apply clean theme without interfering with custom colors."""
+        """Apply clean theme with curved white background boxes only."""
         theme_stylesheet = """
-            QMainWindow {
-                background-color: #FFFFFF;
-                color: #212121;
-            }
-            QWidget {
-                background-color: #FFFFFF;
-                color: #212121;
-            }
-            QListWidget {
-                background-color: #FFFFFF;
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                padding: 2px;
-                outline: none;
-                selection-background-color: transparent;
-                selection-color: inherit;
-            }
-            QListWidget::item {
-                min-height: 32px;
-                padding: 6px 8px;
-                border-radius: 4px;
-                margin: 2px 4px;
-                background-color: transparent;
-                border: none;
-            }
-            QListWidget::item:selected {
-                background-color: transparent;
-                border: none;
-            }
-            QListWidget::item:hover {
-                background-color: rgba(0, 0, 0, 0.04);
-            }
-            QListWidget::item:focus {
-                outline: none;
-            }
-            QGroupBox {
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                margin-top: 0.5em;
-                padding-top: 0.5em;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px 0 5px;
-            }
-            QPushButton {
-                background-color: #FFFFFF;
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #F2F2F2;
-                border-color: #1976D2;
-            }
-            QPushButton:pressed {
-                background-color: #E0E0E0;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QMenu {
-                background-color: #FFFFFF;
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #E3F2FD;
-            }
-            QLineEdit {
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                padding: 6px 12px;
-                background-color: #FAFAFA;
-            }
-            QLineEdit:focus {
-                border-color: #1976D2;
-                background-color: #FFFFFF;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #E0E0E0;
-                height: 4px;
-                background: #E0E0E0;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #1976D2;
-                border: 1px solid #1976D2;
-                width: 16px;
-                height: 16px;
-                margin: -6px 0;
-                border-radius: 8px;
-            }
-            QScrollBar:vertical {
-                background-color: #F5F5F5;
-                width: 12px;
-                border: none;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #BDBDBD;
-                border-radius: 6px;
-                min-height: 20px;
-                margin: 2px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #9E9E9E;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
-            QScrollBar:horizontal {
-                background-color: #F5F5F5;
-                height: 12px;
-                border: none;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:horizontal {
-                background-color: #BDBDBD;
-                border-radius: 6px;
-                min-width: 20px;
-                margin: 2px;
-            }
-            QScrollBar::handle:horizontal:hover {
-                background-color: #9E9E9E;
-            }
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {
-                width: 0px;
-            }
+        QMenuBar {
+            border-radius: 8px;
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            padding: 2px;
+        }
+        QStatusBar {
+            border-radius: 8px;
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            padding: 2px;
+        }
+        QWidget {
+            background-color: #FFFFFF;
+            color: #212121;
+        }
+        QListWidget {
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            padding: 2px;
+            outline: none;
+            selection-background-color: transparent;
+            selection-color: inherit;
+        }
+        QListWidget::item {
+            min-height: 32px;
+            padding: 6px 8px;
+            margin: 2px 4px;
+            background-color: transparent;
+            border: none;
+        }
+        QListWidget::item:selected {
+            background-color: transparent;
+            border: none;
+        }
+        QListWidget::item:hover {
+            background-color: rgba(0, 0, 0, 0.04);
+        }
+        QListWidget::item:focus {
+            outline: none;
+        }
+        QGroupBox {
+            border: 1px solid #E0E0E0;
+            margin-top: 0.5em;
+            padding-top: 0.5em;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px 0 5px;
+        }
+        QPushButton {
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+            padding: 6px 12px;
+            font-weight: 500;
+        }
+        QPushButton:hover {
+            background-color: #F2F2F2;
+            border-color: #1976D2;
+        }
+        QPushButton:pressed {
+            background-color: #E0E0E0;
+        }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+        }
+        QMenu {
+            background-color: #FFFFFF;
+            border: 1px solid #E0E0E0;
+        }
+        QMenu::item:selected {
+            background-color: #E3F2FD;
+        }
+        QLineEdit {
+            border: 1px solid #E0E0E0;
+            padding: 6px 12px;
+            background-color: #FAFAFA;
+        }
+        QLineEdit:focus {
+            border-color: #1976D2;
+            background-color: #FFFFFF;
+        }
+        QSlider::groove:horizontal {
+            border: 1px solid #E0E0E0;
+            height: 4px;
+            background: #E0E0E0;
+        }
+        QSlider::handle:horizontal {
+            background: #1976D2;
+            border: 1px solid #1976D2;
+            width: 16px;
+            height: 16px;
+            margin: -6px 0;
+        }
+        QScrollBar:vertical {
+            background-color: #F5F5F5;
+            width: 8px;
+            border: none;
+            border-radius: 4px;
+        }
+        QScrollBar::handle:vertical {
+            background-color: #BDBDBD;
+            border-radius: 4px;
+            min-height: 20px;
+            margin: 2px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background-color: #9E9E9E;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: transparent;
+        }
         """
         self.setStyleSheet(theme_stylesheet)
 
     def create_main_frame(self) -> None:
-        """Create the main application frame with all UI components."""
-        self.main_widget = QWidget()
-        self.setCentralWidget(self.main_widget)
+        """Create the main application frame with proper size policies."""
+        # Main layout for the widget
+        main_widget_layout = QVBoxLayout(self)
+        main_widget_layout.setContentsMargins(5, 5, 5, 5)  # Reduce margins
 
-        main_layout = QHBoxLayout(self.main_widget)
+        # Create menu bar as a widget menu bar
+        self.menu_bar = QtWidgets.QMenuBar(self)
+        main_widget_layout.addWidget(self.menu_bar)
+
+        # Create main content widget with expanding policy
+        content_widget = QWidget()
+        content_widget.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                   QtWidgets.QSizePolicy.Expanding)
+        main_layout = QHBoxLayout(content_widget)
 
         # Create splitter for resizable panels
         self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                  QtWidgets.QSizePolicy.Expanding)
 
         # Create main UI sections
         left_widget = self.create_waveform_list()
@@ -490,18 +469,64 @@ class plotWindow(QMainWindow):
         self.splitter.addWidget(center_widget)
 
         right_widget = self.create_control_panel()
-        self.splitter.addWidget(right_widget)
 
+        # --- New code: wrap right_widget in a scroll area ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(right_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QtWidgets.QFrame.NoFrame)
+        
+        # **REMOVE HORIZONTAL SCROLLBAR COMPLETELY**
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+
+        # Thin, minimal, rounded corner vertical scrollbar CSS
+        scrollbar_style = '''
+                QScrollBar:vertical {
+                background-color: #F5F5F5;
+                width: 8px;
+                border: none;
+                border-radius: 4px;
+                }
+                QScrollBar::handle:vertical {
+                background-color: #BDBDBD;
+                border-radius: 4px;
+                min-height: 20px;
+                margin: 2px;
+                }
+                QScrollBar::handle:vertical:hover {
+                background-color: #9E9E9E;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+}
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+                }
+                '''
+        scroll_area.verticalScrollBar().setStyleSheet(scrollbar_style)
+
+        # Now add the scroll area to the splitter, not the plain right_widget
+        self.splitter.addWidget(scroll_area)
         # Set initial splitter sizes
         self.splitter.setSizes([280, 840, 280])
 
         main_layout.addWidget(self.splitter)
+        main_widget_layout.addWidget(content_widget)
 
-        # Create additional UI components
-        self.create_status_bar()
+        # Create status bar as a widget
+        self.status_bar = QStatusBar()
+        self.coord_label = QLabel("X: --, Y: --")
+        self.status_bar.addWidget(self.coord_label)
+        self.measure_label = QLabel("")
+        self.status_bar.addPermanentWidget(self.measure_label)
+        main_widget_layout.addWidget(self.status_bar)
+
+        # Create menus
         self.create_menu_bar()
 
-        # Set window title
+        # Set window title (for dock title)
         self.setWindowTitle(f'Python Plotting - {self.project_name}')
 
     def create_waveform_list(self) -> QWidget:
@@ -703,30 +728,17 @@ class plotWindow(QMainWindow):
 
         return right_widget
 
-    def create_status_bar(self) -> None:
-        """Create the status bar with coordinate and measurement labels."""
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-
-        self.coord_label = QLabel("X: --, Y: --")
-        self.status_bar.addWidget(self.coord_label)
-
-        self.measure_label = QLabel("")
-        self.status_bar.addPermanentWidget(self.measure_label)
-
     def create_menu_bar(self) -> None:
         """Create the menu bar with file and view menus."""
-        menubar = self.menuBar()
-
         # File menu
-        file_menu = menubar.addMenu('File')
+        file_menu = self.menu_bar.addMenu('File')
 
         export_action = QAction('Export Image...', self)
         export_action.triggered.connect(self.export_image)
         file_menu.addAction(export_action)
 
         # View menu
-        view_menu = menubar.addMenu('View')
+        view_menu = self.menu_bar.addMenu('View')
 
         zoom_in_action = QAction('Zoom In', self)
         zoom_in_action.setShortcut('Ctrl++')
@@ -2012,3 +2024,23 @@ class plotWindow(QMainWindow):
     def on_push_dc(self) -> None:
         """Plot DC Analysis."""
         self._plot_analysis_data('dc')
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        """Handle resize events to maintain proper dock behavior."""
+        super().resizeEvent(event)
+
+        # Notify parent dock widget of size changes
+        if self.parent():
+            self.parent().updateGeometry()
+
+        # Force canvas redraw if matplotlib is loaded
+        if hasattr(self, 'canvas') and self.canvas:
+            self.canvas.draw_idle()
+
+    def sizeHint(self) -> QtCore.QSize:
+        """Provide size hint for proper dock widget sizing."""
+        return QtCore.QSize(1200, 800)
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        """Provide minimum size hint."""
+        return QtCore.QSize(400, 300)
