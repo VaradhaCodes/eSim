@@ -321,7 +321,7 @@ Add \\TLV here if desired\
             self.process.start(cmd)
             print(
                 "Makerchip IDE command process pid ---------->",
-                self.process.pid())
+                self.process.processId())
         except BaseException as e:
             print(e)
             self.msg = QtWidgets.QErrorMessage(self)

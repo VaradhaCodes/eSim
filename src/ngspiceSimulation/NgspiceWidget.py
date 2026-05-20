@@ -127,7 +127,7 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.obj_appconfig.process_obj.append(process)
         current_project_name = self.obj_appconfig.current_project['ProjectName']
         if current_project_name in self.obj_appconfig.proc_dict:
-            self.obj_appconfig.proc_dict[current_project_name].append(process.pid())
+            self.obj_appconfig.proc_dict[current_project_name].append(process.processId())
 
     def _start_process(self) -> None:
         """Start the NGSpice process and register it with the application."""
@@ -311,8 +311,7 @@ class NgspiceWidget(QtWidgets.QWidget):
             True if simulation was successful, False otherwise
         """
         return (exit_status == QtCore.QProcess.ExitStatus.NormalExit and
-                exit_code == 0 and
-                error_type == QtCore.QProcess.ProcessError.UnknownError)
+                exit_code == 0)
 
     def _show_cancellation_message(self) -> None:
         """Display simulation cancellation message."""

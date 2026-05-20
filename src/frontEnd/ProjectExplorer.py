@@ -124,7 +124,7 @@ class ProjectExplorer(QtWidgets.QWidget):
             openfile = menu.addAction(self.tr("Open"))
             openfile.triggered.connect(self.openProject)
 
-        menu.exec_(self.treewidget.viewport().mapToGlobal(position))
+        menu.exec(self.treewidget.viewport().mapToGlobal(position))
 
     def openProject(self):
         self.indexItem = self.treewidget.currentIndex()
