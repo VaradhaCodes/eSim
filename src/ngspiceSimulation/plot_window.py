@@ -31,8 +31,8 @@ from PyQt6.QtGui import (QColor, QBrush, QPalette, QKeySequence,
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.backend_bases import NavigationToolbar2
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D

@@ -139,7 +139,7 @@ class ProjectExplorer(QtWidgets.QWidget):
             snapshot = menu.addAction(self.tr("Snapshot"))
             snapshot.triggered.connect(self.takeSnapshot)
 
-        menu.exec_(self.treewidget.viewport().mapToGlobal(position))
+        menu.exec(self.treewidget.viewport().mapToGlobal(position))
 
     def openProject(self):
         self.indexItem = self.treewidget.currentIndex()
