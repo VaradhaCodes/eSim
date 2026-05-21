@@ -6,7 +6,7 @@ import os
 import sys
 import shutil
 import subprocess
-from PyQt5 import QtGui, QtCore, QtWidgets
+from PyQt6 import QtGui, QtCore, QtWidgets
 from configparser import ConfigParser
 from Appconfig import Appconfig
 from createKicadLibrary import AutoSchematic
@@ -60,7 +60,7 @@ class Mainwindow(QtWidgets.QWidget):
         self.termedit.setReadOnly(1)
         pal = QtGui.QPalette()
         bgc = QtGui.QColor(0, 0, 0)
-        pal.setColor(QtGui.QPalette.Base, bgc)
+        pal.setColor(QtGui.QPalette.ColorRole.Base, bgc)
         self.termedit.setPalette(pal)
         self.termedit.setStyleSheet("QTextEdit {color:white}")
 
@@ -139,9 +139,9 @@ class Mainwindow(QtWidgets.QWidget):
                 "<b>This model already exist. Do you want to " +
                 "overwrite it?</b><br/> If yes press ok, else cancel it and " +
                 "change the name of your vhdl file.",
-                QtWidgets.QMessageBox.Ok, QtWidgets.QMessageBox.Cancel
+                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
             )
-            if ret == QtWidgets.QMessageBox.Ok:
+            if ret == QtWidgets.QMessageBox.StandardButton.Ok:
                 print("Overwriting existing model " + self.modelname)
                 if os.name == 'nt':
                     cmd = "rmdir " + self.modelname + "/s /q"
@@ -275,7 +275,7 @@ class Mainwindow(QtWidgets.QWidget):
             path = os.getcwd()  # noqa
             self.process = QtCore.QProcess(self)
             self.process.start(cmd)
-            print("make command process pid ---------- >", self.process.pid())
+            print("make command process pid ---------- >", self.process.processId())
 
             if os.name == "nt":
                 self.process.finished.connect(self.createSchematicLib)
@@ -439,7 +439,7 @@ def main():
     # Mainwindow() object must be assigned to a variable.
     # Otherwise, it is destroyed as soon as it gets created.
     w = Mainwindow()    # noqa
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 if __name__ == '__main__':
