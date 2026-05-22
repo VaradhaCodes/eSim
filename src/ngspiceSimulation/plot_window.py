@@ -237,6 +237,7 @@ class plotWindow(QWidget):
         self.create_main_frame()
         self.load_simulation_data()
         self.apply_theme()
+        self._setup_matplotlib_style()
 
     def _initialize_data_structures(self) -> None:
         self.traces: Dict[int, Trace] = {}
@@ -295,32 +296,44 @@ class plotWindow(QWidget):
         super().closeEvent(event)
 
     def apply_theme(self) -> None:
-        theme_stylesheet = """
-        QMenuBar { border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }
-        QStatusBar { border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }
-        QWidget { background-color: #FFFFFF; color: #212121; }
-        QListWidget { background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; outline: none; selection-background-color: transparent; selection-color: inherit; }
-        QListWidget::item { min-height: 32px; padding: 6px 8px; margin: 2px 4px; background-color: transparent; border: none; }
-        QListWidget::item:selected { background-color: transparent; border: none; }
-        QListWidget::item:hover { background-color: rgba(0, 0, 0, 0.04); }
-        QListWidget::item:focus { outline: none; }
-        QGroupBox { border: 1px solid #E0E0E0; margin-top: 0.5em; padding-top: 0.5em; }
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }
-        QPushButton { background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 6px 12px; font-weight: 500; }
-        QPushButton:hover { background-color: #F2F2F2; border-color: #1976D2; }
-        QPushButton:pressed { background-color: #E0E0E0; }
-        QCheckBox::indicator { width: 16px; height: 16px; }
-        QMenu { background-color: #FFFFFF; border: 1px solid #E0E0E0; }
-        QMenu::item:selected { background-color: #E3F2FD; }
-        QLineEdit { border: 1px solid #E0E0E0; padding: 6px 12px; background-color: #FAFAFA; }
-        QLineEdit:focus { border-color: #1976D2; background-color: #FFFFFF; }
-        QSlider::groove:horizontal { border: 1px solid #E0E0E0; height: 4px; background: #E0E0E0; }
-        QSlider::handle:horizontal { background: #1976D2; border: 1px solid #1976D2; width: 16px; height: 16px; margin: -6px 0; }
-        QScrollBar:vertical { background-color: #F5F5F5; width: 8px; border: none; border-radius: 4px; }
-        QScrollBar::handle:vertical { background-color: #BDBDBD; border-radius: 4px; min-height: 20px; margin: 2px; }
-        QScrollBar::handle:vertical:hover { background-color: #9E9E9E; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+        em      = self._em
+        sb_w    = max(6,  em // 2)
+        ind     = max(12, em - 2)
+        sldr    = max(10, em - 4)
+        sldr_m  = -(sldr // 2)
+        item_h  = max(28, em + 12)
+        item_pv = max(4,  em // 4)
+        item_ph = max(6,  em // 2)
+        btn_pv  = max(3,  em // 4)
+        btn_ph  = max(6,  em // 2)
+        le_p    = max(4,  em // 3)
+
+        theme_stylesheet = f"""
+        QMenuBar {{ border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }}
+        QStatusBar {{ border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }}
+        QWidget {{ background-color: #FFFFFF; color: #212121; }}
+        QListWidget {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; outline: none; selection-background-color: transparent; selection-color: inherit; }}
+        QListWidget::item {{ min-height: {item_h}px; padding: {item_pv}px {item_ph}px; margin: 1px 2px; background-color: transparent; border: none; }}
+        QListWidget::item:selected {{ background-color: transparent; border: none; }}
+        QListWidget::item:hover {{ background-color: rgba(0, 0, 0, 0.04); }}
+        QListWidget::item:focus {{ outline: none; }}
+        QGroupBox {{ border: 1px solid #E0E0E0; margin-top: 0.5em; padding-top: 0.5em; }}
+        QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }}
+        QPushButton {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: {btn_pv}px {btn_ph}px; font-weight: 500; }}
+        QPushButton:hover {{ background-color: #F2F2F2; border-color: #1976D2; }}
+        QPushButton:pressed {{ background-color: #E0E0E0; }}
+        QCheckBox::indicator {{ width: {ind}px; height: {ind}px; }}
+        QMenu {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; }}
+        QMenu::item:selected {{ background-color: #E3F2FD; }}
+        QLineEdit {{ border: 1px solid #E0E0E0; padding: {le_p}px {btn_ph}px; background-color: #FAFAFA; }}
+        QLineEdit:focus {{ border-color: #1976D2; background-color: #FFFFFF; }}
+        QSlider::groove:horizontal {{ border: 1px solid #E0E0E0; height: 4px; background: #E0E0E0; }}
+        QSlider::handle:horizontal {{ background: #1976D2; border: 1px solid #1976D2; width: {sldr}px; height: {sldr}px; margin: {sldr_m}px 0; }}
+        QScrollBar:vertical {{ background-color: #F5F5F5; width: {sb_w}px; border: none; border-radius: {sb_w // 2}px; }}
+        QScrollBar::handle:vertical {{ background-color: #BDBDBD; border-radius: {sb_w // 2}px; min-height: 20px; margin: 2px; }}
+        QScrollBar::handle:vertical:hover {{ background-color: #9E9E9E; }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
         """
         self.setStyleSheet(theme_stylesheet)
 
@@ -334,9 +347,12 @@ class plotWindow(QWidget):
         main_layout = QHBoxLayout(content_widget)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
+        em = self._em
         left_widget = self.create_waveform_list()
+        left_widget.setMinimumWidth(em * 10)
         self.splitter.addWidget(left_widget)
         center_widget = self.create_plot_area()
+        center_widget.setMinimumWidth(em * 18)
         self.splitter.addWidget(center_widget)
         right_widget = self.create_control_panel()
         scroll_area = QScrollArea()
@@ -345,10 +361,11 @@ class plotWindow(QWidget):
         scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scrollbar_style = "QScrollBar:vertical{background-color:#F5F5F5;width:8px;border:none;border-radius:4px;}QScrollBar::handle:vertical{background-color:#BDBDBD;border-radius:4px;min-height:20px;margin:2px;}QScrollBar::handle:vertical:hover{background-color:#9E9E9E;}QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0px;}QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}"
-        scroll_area.verticalScrollBar().setStyleSheet(scrollbar_style)
+        scroll_area.setMinimumWidth(em * 12)
         self.splitter.addWidget(scroll_area)
-        self.splitter.setSizes([280, 840, 280])
+        self.splitter.setStretchFactor(0, 20)
+        self.splitter.setStretchFactor(1, 57)
+        self.splitter.setStretchFactor(2, 23)
         main_layout.addWidget(self.splitter)
         main_widget_layout.addWidget(content_widget)
         self.status_bar = QStatusBar()
@@ -363,8 +380,11 @@ class plotWindow(QWidget):
     def create_waveform_list(self) -> QWidget:
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
+        em = self._em
         self.analysis_label = QLabel()
-        self.analysis_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
+        self.analysis_label.setStyleSheet(
+            f"font-weight: bold; font-size: {max(11, em - 4)}px; padding: {max(3, em // 5)}px;"
+        )
         left_layout.addWidget(self.analysis_label)
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search waveforms...")
@@ -400,6 +420,7 @@ class plotWindow(QWidget):
         self.nav_toolbar.addAction(fig_options_action)
         center_layout.addWidget(self.nav_toolbar)
         center_layout.addWidget(self.canvas)
+        self.canvas.mpl_connect('resize_event', self._on_canvas_resize)
         self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
         self.canvas.mpl_connect('button_release_event', self.on_canvas_release)
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
@@ -409,13 +430,22 @@ class plotWindow(QWidget):
         return center_widget
 
     def create_control_panel(self) -> QWidget:
+        em = self._em
+        iv = max(2, em // 6)
+        ih = max(4, em // 4)
+        sp = max(1, em // 8)
+
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setSpacing(0)
 
         # Display Options
         display_box = CollapsibleBox("Display Options")
         display_group = QWidget()
         display_layout = QVBoxLayout(display_group)
+        display_layout.setContentsMargins(ih, iv, ih, iv)
+        display_layout.setSpacing(sp)
         self.grid_check = QCheckBox("Show Grid")
         self.grid_check.setChecked(True)
         self.grid_check.stateChanged.connect(self.toggle_grid)
@@ -434,10 +464,12 @@ class plotWindow(QWidget):
         display_box.addWidget(display_group)
         right_layout.addWidget(display_box)
 
-        # Digital Timing Controls (UI Reverted to Original)
+        # Digital Timing Controls
         self.timing_box = CollapsibleBox("Digital Timing Controls")
         timing_group = QWidget()
         timing_layout = QVBoxLayout(timing_group)
+        timing_layout.setContentsMargins(ih, iv, ih, iv)
+        timing_layout.setSpacing(sp)
         threshold_layout = QHBoxLayout()
         threshold_layout.addWidget(QLabel("Threshold:"))
         self.threshold_spinbox = QDoubleSpinBox()
@@ -468,8 +500,11 @@ class plotWindow(QWidget):
         cursor_box = CollapsibleBox("Cursor Measurements")
         cursor_group = QWidget()
         cursor_layout = QVBoxLayout(cursor_group)
+        cursor_layout.setContentsMargins(ih, iv, ih, iv)
+        cursor_layout.setSpacing(sp)
         cursor_hint = QLabel("Left click: C1  ·  Right click: C2  ·  Drag to move")
-        cursor_hint.setStyleSheet("color: #757575; font-size: 10px;")
+        cursor_hint.setWordWrap(True)
+        cursor_hint.setStyleSheet("color: #757575;")
         cursor_layout.addWidget(cursor_hint)
         self.cursor1_label = QLabel("Cursor 1: Not set")
         self.cursor2_label = QLabel("Cursor 2: Not set")
@@ -487,6 +522,8 @@ class plotWindow(QWidget):
         export_box = CollapsibleBox("Export Tools")
         export_group = QWidget()
         export_layout = QVBoxLayout(export_group)
+        export_layout.setContentsMargins(ih, iv, ih, iv)
+        export_layout.setSpacing(sp)
         self.export_btn = QPushButton("Export Image")
         self.export_btn.clicked.connect(self.export_image)
         export_layout.addWidget(self.export_btn)
@@ -797,6 +834,8 @@ class plotWindow(QWidget):
     def on_timing_view_changed(self, state: int) -> None:
         timing_enabled = state == Qt.CheckState.Checked.value
         self.timing_box.content_area.setEnabled(timing_enabled)
+        if timing_enabled:
+            self.timing_box.toggle_button.setChecked(True)
         self.autoscale_check.setEnabled(not timing_enabled)
         self.refresh_plot()
 
@@ -836,10 +875,11 @@ class plotWindow(QWidget):
                 self.axes.set_xlim(saved_xlim)
                 self.axes.set_ylim(saved_ylim)
             if self.legend_check.isChecked():
-                self.fig.subplots_adjust(top=0.85, bottom=0.1)
                 self.position_legend()
-            else:
-                self.fig.subplots_adjust(top=0.95, bottom=0.1)
+            try:
+                self.fig.tight_layout(pad=1.2)
+            except Exception:
+                pass
         self._restore_cursors()
         self.canvas.draw()
         self._last_was_timing = self.timing_check.isChecked()
@@ -854,7 +894,7 @@ class plotWindow(QWidget):
                     labels.append(t.name)
             if handles:
                 ncol = min(6, len(handles)) if len(handles) > 6 else min(4, len(handles))
-                legend = self.axes.legend(handles, labels, bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=ncol, frameon=True, fancybox=False, shadow=False, fontsize=LEGEND_FONT_SIZE, borderaxespad=0, columnspacing=1.5)
+                legend = self.axes.legend(handles, labels, bbox_to_anchor=(0.5, 1.02), loc='lower center', ncol=ncol, frameon=True, fancybox=False, shadow=False, borderaxespad=0, columnspacing=1.5)
                 frame = legend.get_frame()
                 frame.set_facecolor('white')
                 frame.set_edgecolor('#E0E0E0')
@@ -881,7 +921,7 @@ class plotWindow(QWidget):
         if self.plot_type[0] != DataExtraction.TRANSIENT_ANALYSIS:
             self.axes.text(0.5, 0.5, 'Digital timing view is only\navailable for transient analysis.',
                            ha='center', va='center', transform=self.axes.transAxes,
-                           fontsize=11, color='#757575')
+                           color='#757575')
             self.axes.set_yticks([])
             self.axes.set_yticklabels([])
             return
@@ -965,24 +1005,24 @@ class plotWindow(QWidget):
                     1.01, y_center,
                     f"DC: {_format_measurement(float(trace_vmax), trace_unit)}",
                     transform=xform, va='center', ha='left',
-                    fontsize=8, color=t.color, clip_on=False))
+                    color=t.color, clip_on=False))
             else:
                 ann.append(self.axes.text(
                     1.01, rank * spacing + 0.82,
                     f"H: {_format_measurement(float(trace_vmax), trace_unit)}",
                     transform=xform, va='center', ha='left',
-                    fontsize=8, color=t.color, clip_on=False))
+                    color=t.color, clip_on=False))
                 ann.append(self.axes.text(
                     1.01, rank * spacing + 0.18,
                     f"L: {_format_measurement(float(trace_vmin), trace_unit)}",
                     transform=xform, va='center', ha='left',
-                    fontsize=8, color=t.color, clip_on=False))
+                    color=t.color, clip_on=False))
                 freq = _detect_frequency(trace_time, logic_normalized)
                 if freq is not None:
                     ann.append(self.axes.text(
                         1.01, y_center, _format_frequency(freq),
                         transform=xform, va='center', ha='left',
-                        fontsize=7.5, color=t.color, alpha=0.75, clip_on=False))
+                        color=t.color, alpha=0.75, clip_on=False))
             self.timing_annotations[idx] = ann
 
         # Y-axis bounds: normalized traces sit in [0,1] per rank, evenly spaced.
@@ -990,7 +1030,7 @@ class plotWindow(QWidget):
         margin = 0.15 * spacing
         self.axes.set_ylim(-margin, total_height + margin)
         self.axes.set_yticks(yticks)
-        self.axes.set_yticklabels(ylabels, fontsize=8)
+        self.axes.set_yticklabels(ylabels)
 
         self.update_timing_tick_colors()
         self.set_time_axis_label(time_data)
@@ -1003,7 +1043,7 @@ class plotWindow(QWidget):
                                   color='red', linestyle=':', alpha=THRESHOLD_ALPHA, linewidth=0.8)
 
         if not self.legend_check.isChecked():
-            self.axes.set_title('Digital Timing Diagram', fontsize=10, pad=10)
+            self.axes.set_title('Digital Timing Diagram', pad=10)
 
     def set_time_axis_label(self, time_data: Optional["np.ndarray"] = None) -> None:
         if not hasattr(self, 'axes') or not hasattr(self.obj_dataext, 'x'):
@@ -1011,7 +1051,7 @@ class plotWindow(QWidget):
         if time_data is None:
             time_data = np.asarray(self.obj_dataext.x, dtype=float)
         if len(time_data) < 2:
-            self.axes.set_xlabel('Time (s)', fontsize=10)
+            self.axes.set_xlabel('Time (s)')
             return
         scale, unit = self._get_time_scale_and_unit(time_data)
         scaled_time = time_data * scale
@@ -1019,7 +1059,7 @@ class plotWindow(QWidget):
             if line:
                 line.set_xdata(line.get_xdata() * scale)
         self.axes.set_xlim(scaled_time[0], scaled_time[-1])
-        self.axes.set_xlabel(f'Time ({unit})', fontsize=10)
+        self.axes.set_xlabel(f'Time ({unit})')
 
     def on_threshold_changed(self, value: float) -> None:
         if self.timing_check.isChecked():
@@ -1383,6 +1423,51 @@ class plotWindow(QWidget):
     def on_push_dc(self) -> None:
         self._plot_analysis_data('dc')
 
+    def _setup_matplotlib_style(self) -> None:
+        dpi = max(72, self.logicalDpiY())
+        base_pt = max(6.5, round(8.0 * 96.0 / dpi, 1))
+        plt.rcParams.update({
+            'font.size':       base_pt,
+            'axes.labelsize':  base_pt + 1,
+            'axes.titlesize':  base_pt + 1,
+            'xtick.labelsize': base_pt,
+            'ytick.labelsize': base_pt,
+            'legend.fontsize': base_pt,
+        })
+
+    def _on_canvas_resize(self, event) -> None:
+        if hasattr(self, 'fig') and self.fig.get_axes():
+            try:
+                self.fig.tight_layout(pad=1.2)
+            except Exception:
+                pass
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+
+    @property
+    def _em(self) -> int:
+        """Font height in pixels — base unit for all adaptive sizing."""
+        return max(12, QtGui.QFontMetrics(self.font()).height())
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if not getattr(self, '_splitter_initialized', False):
+            QtCore.QTimer.singleShot(0, self._init_splitter_sizes)
+
+    def _init_splitter_sizes(self) -> None:
+        if getattr(self, '_splitter_initialized', False):
+            return
+        total = self.splitter.width()
+        if total > 100:
+            self.splitter.setSizes([
+                int(total * 0.20),
+                int(total * 0.57),
+                int(total * 0.23),
+            ])
+            self._splitter_initialized = True
+        else:
+            QtCore.QTimer.singleShot(50, self._init_splitter_sizes)
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         if self.parent():
@@ -1391,7 +1476,9 @@ class plotWindow(QWidget):
             self.canvas.draw_idle()
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(1200, 800)
+        em = self._em
+        return QtCore.QSize(em * 80, em * 50)
 
     def minimumSizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(400, 300)
+        em = self._em
+        return QtCore.QSize(em * 25, em * 20)
