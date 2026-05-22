@@ -57,18 +57,24 @@ class CollapsibleBox(QWidget):
         self.toggle_button.setText(self.title)
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(True)
+        self.toggle_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
 
     def _setup_content_area(self) -> None:
         """Set up the content area and its layout."""
         self.content_area = QWidget()
         self.content_layout = QVBoxLayout()
+        self.content_layout.setContentsMargins(4, 2, 4, 4)
+        self.content_layout.setSpacing(3)
         self.content_area.setLayout(self.content_layout)
 
     def _setup_layout(self) -> None:
         """Set up the main layout for the widget."""
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setContentsMargins(0, 2, 0, 6)
         main_layout.addWidget(self.toggle_button)
         main_layout.addWidget(self.content_area)
 
