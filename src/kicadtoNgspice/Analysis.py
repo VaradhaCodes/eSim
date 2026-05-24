@@ -327,13 +327,15 @@ class Analysis(QtWidgets.QWidget):
                     self.Dec.setChecked(False)
                     self.Oct.setChecked(True)
 
-                self.ac_entry_var[0].setText(root[0][3].text)
-                self.ac_entry_var[1].setText(root[0][4].text)
-                self.ac_entry_var[2].setText(root[0][5].text)
-                index = self.start_fre_combo.findText(root[0][6].text)
-                self.start_fre_combo.setCurrentIndex(index)
-                index = self.stop_fre_combo.findText(root[0][7].text)
-                self.stop_fre_combo.setCurrentIndex(index)
+                self.ac_entry_var[0].setText(root[0][3].text or "")
+                self.ac_entry_var[1].setText(root[0][4].text or "")
+                self.ac_entry_var[2].setText(root[0][5].text or "")
+                index = self.start_fre_combo.findText(root[0][6].text or "")
+                if index >= 0:
+                    self.start_fre_combo.setCurrentIndex(index)
+                index = self.stop_fre_combo.findText(root[0][7].text or "")
+                if index >= 0:
+                    self.stop_fre_combo.setCurrentIndex(index)
 
             except BaseException:
                 print("AC Analysis XML Parse Error")
@@ -609,26 +611,32 @@ class Analysis(QtWidgets.QWidget):
         ")
         if check:
             try:
-                self.dc_entry_var[0].setText(root[1][0].text)
-                self.dc_entry_var[1].setText(root[1][1].text)
-                self.dc_entry_var[2].setText(root[1][2].text)
-                self.dc_entry_var[3].setText(root[1][3].text)
-                index = self.start_combo.findText(root[1][5].text)
-                self.start_combo.setCurrentIndex(index)
-                index = self.increment_combo.findText(root[1][6].text)
-                self.increment_combo.setCurrentIndex(index)
-                index = self.stop_combo.findText(root[1][7].text)
-                self.stop_combo.setCurrentIndex(index)
-                self.dc_entry_var[4].setText(root[1][8].text)
-                self.dc_entry_var[5].setText(root[1][9].text)
-                self.dc_entry_var[6].setText(root[1][10].text)
-                self.dc_entry_var[7].setText(root[1][11].text)
-                index = self.start_combo2.findText(root[1][12].text)
-                self.start_combo2.setCurrentIndex(index)
-                index = self.increment_combo2.findText(root[1][13].text)
-                self.increment_combo2.setCurrentIndex(index)
-                index = self.stop_combo2.findText(root[1][14].text)
-                self.stop_combo2.setCurrentIndex(index)
+                self.dc_entry_var[0].setText(root[1][0].text or "")
+                self.dc_entry_var[1].setText(root[1][1].text or "")
+                self.dc_entry_var[2].setText(root[1][2].text or "")
+                self.dc_entry_var[3].setText(root[1][3].text or "")
+                index = self.start_combo.findText(root[1][5].text or "")
+                if index >= 0:
+                    self.start_combo.setCurrentIndex(index)
+                index = self.increment_combo.findText(root[1][6].text or "")
+                if index >= 0:
+                    self.increment_combo.setCurrentIndex(index)
+                index = self.stop_combo.findText(root[1][7].text or "")
+                if index >= 0:
+                    self.stop_combo.setCurrentIndex(index)
+                self.dc_entry_var[4].setText(root[1][8].text or "")
+                self.dc_entry_var[5].setText(root[1][9].text or "")
+                self.dc_entry_var[6].setText(root[1][10].text or "")
+                self.dc_entry_var[7].setText(root[1][11].text or "")
+                index = self.start_combo2.findText(root[1][12].text or "")
+                if index >= 0:
+                    self.start_combo2.setCurrentIndex(index)
+                index = self.increment_combo2.findText(root[1][13].text or "")
+                if index >= 0:
+                    self.increment_combo2.setCurrentIndex(index)
+                index = self.stop_combo2.findText(root[1][14].text or "")
+                if index >= 0:
+                    self.stop_combo2.setCurrentIndex(index)
 
                 if root[1][4].text == 1:
                     self.check.setChecked(True)
@@ -791,15 +799,18 @@ class Analysis(QtWidgets.QWidget):
         ")
         if check:
             try:
-                self.tran_entry_var[0].setText(root[2][0].text)
-                self.tran_entry_var[1].setText(root[2][1].text)
-                self.tran_entry_var[2].setText(root[2][2].text)
-                index = self.start_combobox.findText(root[2][3].text)
-                self.start_combobox.setCurrentIndex(index)
-                index = self.step_combobox.findText(root[2][4].text)
-                self.step_combobox.setCurrentIndex(index)
-                index = self.stop_combobox.findText(root[2][5].text)
-                self.stop_combobox.setCurrentIndex(index)
+                self.tran_entry_var[0].setText(root[2][0].text or "")
+                self.tran_entry_var[1].setText(root[2][1].text or "")
+                self.tran_entry_var[2].setText(root[2][2].text or "")
+                index = self.start_combobox.findText(root[2][3].text or "")
+                if index >= 0:
+                    self.start_combobox.setCurrentIndex(index)
+                index = self.step_combobox.findText(root[2][4].text or "")
+                if index >= 0:
+                    self.step_combobox.setCurrentIndex(index)
+                index = self.stop_combobox.findText(root[2][5].text or "")
+                if index >= 0:
+                    self.stop_combobox.setCurrentIndex(index)
             except BaseException:
                 print("Transient Analysis XML Parse Error")
 
