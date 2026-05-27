@@ -4,7 +4,9 @@ Data extraction module for NGSpice simulation results.
 
 Parses plot_data_v.txt and plot_data_i.txt produced by ngspice.
 
-Transient / DC format:
+Transient / DC format (two variants):
+
+  Variant A — older ngspice / multi-group files (has * markers):
   * /path/to/circuit.cir          <- marks start of each column group
   Transient Analysis  date        <- analysis type line
   ----...                         <- separator
@@ -12,16 +14,25 @@ Transient / DC format:
   ----...
   0\tt0\tv1\tv2\t                 <- data rows (tab-separated, trailing \t)
   ...
-  54\tt54\tv1\tv2\t
-                                  <- blank line
-  Index   time   node1   node2    <- page-break header (every ~55 rows, same group)
-  ----...
-  55\tt55\tv1\tv2\t
-  ...
-  * /path/to/circuit.cir          <- new column group (circuit with many nodes)
+  * /path/to/circuit.cir          <- new column group (additional nodes, same x axis)
   Transient Analysis  date
   Index   time   node3   node4
-  0\tt0\tv3\tv4\t                 <- same time axis, new node values
+  0\tt0\tv3\tv4\t
+
+  Variant B — newer ngspice files (no * markers), one or more column groups:
+  <title text>                    <- any non-Index, non-dash text, skipped
+  Transient Analysis  date
+  ----...
+  Index   time   node1   node2    <- first Index treated as new group directly
+  ----...
+  0\tt0\tv1\tv2\t
+  ...
+  Index   time   node3   node4    <- DIFFERENT column names = new group, same x axis
+  ----...
+  0\tt0\tv3\tv4\t
+
+  Page-break header (both variants, every ~55 rows within same group):
+  Index   time   node1   node2    <- SAME column names = page-break, ignored
 
 AC format (differs from Transient/DC):
   Each node value is split into TWO tab columns per row:
@@ -95,7 +106,7 @@ class DataExtraction:
         # Indices into all_data for the columns of the current group.
         # On a page-break (same group, same header) we reuse the same indices.
         current_indices: Optional[List[int]] = None
-        new_group_incoming: bool = False
+        new_group_incoming: bool = True
         collecting_x: bool = True
         cols_per_node: int = 2 if is_ac else 1
 
@@ -139,15 +150,26 @@ class DataExtraction:
 
                     if stripped.startswith('Index'):
                         parts = stripped.split()
+                        col_names = parts[2:]
                         if new_group_incoming:
                             x_name = parts[1]
-                            col_names = parts[2:]
                             current_indices = []
                             for name in col_names:
                                 all_names.append(name)
                                 all_data.append([])
                                 current_indices.append(len(all_data) - 1)
                             new_group_incoming = False
+                        elif (current_indices is not None
+                              and col_names != [all_names[i] for i in current_indices]):
+                            # New column group without a * marker (newer ngspice format).
+                            # Distinct column names signal a new signal group, not a
+                            # page-break. Time axis is shared → stop collecting x.
+                            collecting_x = False
+                            current_indices = []
+                            for name in col_names:
+                                all_names.append(name)
+                                all_data.append([])
+                                current_indices.append(len(all_data) - 1)
                         # else: page-break — same group, same columns, same indices
                         continue
 

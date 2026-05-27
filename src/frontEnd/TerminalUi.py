@@ -94,7 +94,7 @@ class TerminalUi(QtWidgets.QMainWindow):
     def redoSimulation(self):
         """This function reruns the ngspice simulation
         """
-        self.Flag = "Flase"
+        self.Flag = False
         self.cancelSimulationButton.setEnabled(True)
         self.redoSimulationButton.setEnabled(False)
 

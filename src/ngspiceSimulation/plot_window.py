@@ -240,6 +240,10 @@ class plotWindow(QWidget):
         self._setup_matplotlib_style()
 
     def _initialize_data_structures(self) -> None:
+        self._resize_timer: QtCore.QTimer = QtCore.QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(120)
+        self._resize_timer.timeout.connect(self._do_deferred_resize)
         self.traces: Dict[int, Trace] = {}
         self.cursor_lines: List[Optional[Line2D]] = []
         self.cursor_positions: List[Optional[float]] = []
@@ -1383,6 +1387,8 @@ class plotWindow(QWidget):
             if first_visible is None:
                 first_visible = idx
             y_data = np.asarray(self.obj_dataext.y[idx], dtype=float)
+            n_pts = min(len(x_data), len(y_data))
+            x_plot, y_plot = x_data[:n_pts], y_data[:n_pts]
             plot_style = '-' if t.style == 'steps-post' else t.style
             plot_kwargs: dict = {}
             if t.style == 'steps-post' and analysis_type in ['transient', 'dc']:
@@ -1392,7 +1398,7 @@ class plotWindow(QWidget):
                 plot_func = self.axes.semilogx
             else:
                 plot_func = self.axes.plot
-            line, = plot_func(x_data, y_data, color=t.color, label=t.name,
+            line, = plot_func(x_plot, y_plot, color=t.color, label=t.name,
                               linewidth=t.thickness, linestyle=plot_style, **plot_kwargs)
             t.line_object = line
 
@@ -1436,11 +1442,9 @@ class plotWindow(QWidget):
         })
 
     def _on_canvas_resize(self, event) -> None:
-        if hasattr(self, 'fig') and self.fig.get_axes():
-            try:
-                self.fig.tight_layout(pad=1.2)
-            except Exception:
-                pass
+        self._resize_timer.start()  # restart on every event; fires 120ms after last one
+
+    def _do_deferred_resize(self) -> None:
         if hasattr(self, 'canvas'):
             self.canvas.draw_idle()
 
