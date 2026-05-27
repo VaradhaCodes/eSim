@@ -205,13 +205,9 @@ class NgspiceWidget(QtWidgets.QWidget):
         if not has_error_occurred and self.terminal_ui.simulationCancelled:
             return
 
-        # Update UI state after simulation completion
-        self._update_ui_after_simulation()
-
-        # Get actual exit code and status if not provided
+        # Resolve exit code and status before any UI work so finally block has them
         if exit_code is None:
             exit_code = self.process.exitCode()
-
         error_type = self.process.error()
         if error_type in (QtCore.QProcess.ProcessError.FailedToStart,
                           QtCore.QProcess.ProcessError.Crashed,
@@ -220,28 +216,34 @@ class NgspiceWidget(QtWidgets.QWidget):
         elif exit_status is None:
             exit_status = self.process.exitStatus()
 
-        # Handle different simulation outcomes
-        if self.terminal_ui.simulationCancelled:
-            self._show_cancellation_message()
-        elif self._is_simulation_successful(exit_status, exit_code, error_type):
-            self._show_success_message()
+        try:
+            # Update UI state after simulation completion
+            self._update_ui_after_simulation()
 
-            # On redo-simulation, TerminalUi sets "redoPlotFlag" on the process
-            # to pass the user's plot choice back here
-            redo_flag = self.process.property("redoPlotFlag")
-            if redo_flag is not None:
-                self.plotFlag = redo_flag
+            # Handle different simulation outcomes
+            if self.terminal_ui.simulationCancelled:
+                self._show_cancellation_message()
+            elif self._is_simulation_successful(exit_status, exit_code, error_type):
+                self._show_success_message()
 
-            if self.plotFlag:
-                self.open_ngspice_plots()
-        else:
-            self._show_failure_message(error_type)
+                # On redo-simulation, TerminalUi sets "redoPlotFlag" on the process
+                # to pass the user's plot choice back here
+                redo_flag = self.process.property("redoPlotFlag")
+                if redo_flag is not None:
+                    self.plotFlag = redo_flag
 
-        # Scroll terminal to bottom
-        self._scroll_terminal_to_bottom()
+                if self.plotFlag:
+                    self.open_ngspice_plots()
+            else:
+                self._show_failure_message(error_type)
 
-        # Emit completion signal
-        sim_end_signal.emit(exit_status, exit_code)
+            # Scroll terminal to bottom
+            self._scroll_terminal_to_bottom()
+        except Exception as e:
+            logger.error(f"finish_simulation UI error: {e}", exc_info=True)
+        finally:
+            # Emit completion signal — must always run so plot window can open
+            sim_end_signal.emit(exit_status, exit_code)
 
     def open_ngspice_plots(self) -> None:
         """
@@ -276,7 +278,7 @@ class NgspiceWidget(QtWidgets.QWidget):
                     f"ngspice -r {shlex.quote(raw_file)} {shlex.quote(self.command)}"
                 )
                 self.xterm_process = QtCore.QProcess(self)
-                self.xterm_process.start('xterm', ['-hold', '-e', xterm_command])
+                self.xterm_process.start('xterm', ['-hold', '-e', 'sh', '-c', xterm_command])
 
                 self._register_process(self.xterm_process)
 
