@@ -34,6 +34,118 @@ import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
 
 
+_HEADER_RE = re.compile(r'\(kicad_symbol_lib[^\n]*\n')
+_SYM_NAME_RE = re.compile(r'\(\s*symbol\s+"([^"]+)"')
+
+
+def _parse_lib(content):
+    """Split a kicad_sym file into (header, [blocks], footer).
+
+    Blocks are top-level (symbol ...) s-expressions inside
+    (kicad_symbol_lib ...).  Paren-balance counting is used so that
+    blocks whose opener has been merged onto a previous block's closing
+    `))` (as historically produced by createSym) are still recognised.
+
+    Returns (header, blocks, footer) or None if the file is malformed.
+    """
+    m = _HEADER_RE.match(content)
+    if not m:
+        return None
+    header = m.group(0)
+    rest = content[len(header):].rstrip()
+    if not rest.endswith(')'):
+        return None
+    body = rest[:-1].rstrip()
+
+    blocks = []
+    i = 0
+    n = len(body)
+    while i < n:
+        while i < n and body[i] in ' \t\r\n':
+            i += 1
+        if i >= n:
+            break
+        if body[i] != '(':
+            i += 1
+            continue
+        start = i
+        depth = 0
+        in_string = False
+        while i < n:
+            ch = body[i]
+            if in_string:
+                if ch == '"' and body[i - 1] != '\\':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+            i += 1
+        blocks.append(body[start:i])
+    return header, blocks, ')\n'
+
+
+def _render_lib(header, blocks, footer):
+    if not blocks:
+        return header + '\n' + footer
+    return header + '\n' + '\n\n'.join(blocks) + '\n' + footer
+
+
+def _remove_blocks(content, modelname):
+    """Return content with every top-level entry related to *modelname*
+    removed.  In addition to the canonical `(symbol "modelname" ...)`
+    block, this also strips:
+
+      * sub-symbols (`modelname_0_1`, `modelname_1_1`, ...) that have
+        bubbled up to the top level because a previous run wrote a
+        block without its opener;
+      * orphan top-level entries that are not `(symbol ...)` at all
+        (stray `(property ...)` lines from the same corruption).
+
+    If the header itself is malformed the content is returned
+    unchanged."""
+    parsed = _parse_lib(content)
+    if parsed is None:
+        return content
+    header, blocks, footer = parsed
+    sub_re = re.compile(r'^' + re.escape(modelname) + r'_\d+_\d+$')
+    kept = []
+    for blk in blocks:
+        m = _SYM_NAME_RE.match(blk)
+        if not m:
+            continue
+        name = m.group(1)
+        if name == modelname or sub_re.match(name):
+            continue
+        kept.append(blk)
+    return _render_lib(header, kept, footer)
+
+
+def _append_block(content, new_block):
+    """Insert new_block as the last top-level entry before the final `)`.
+
+    Falls back to writing a fresh empty library if content is empty or
+    malformed."""
+    if not content.strip():
+        header = ("(kicad_symbol_lib (version 20211014) "
+                  "(generator kicad_symbol_editor)\n")
+        return _render_lib(header, [new_block], ')\n')
+    parsed = _parse_lib(content)
+    if parsed is None:
+        header = ("(kicad_symbol_lib (version 20211014) "
+                  "(generator kicad_symbol_editor)\n")
+        return _render_lib(header, [new_block], ')\n')
+    header, blocks, footer = parsed
+    blocks.append(new_block)
+    return _render_lib(header, blocks, footer)
+
+
 class AutoSchematic:
     def init(self, modelname, modelpath):
         self.App_obj = Appconfig.Appconfig()
@@ -66,6 +178,10 @@ class AutoSchematic:
         if xmlFound is None:
             self.getPortInformation()
             self.createXML()
+            # The kicad_sym file may still hold a stale block from an
+            # earlier aborted run or a manually-deleted XML — clean
+            # before appending so we don't accumulate duplicates.
+            self.removeOldLibrary()
             self.createSym()
 
         elif (xmlFound == os.path.join(self.xml_loc, 'Ngveri')):
@@ -158,121 +274,62 @@ class AutoSchematic:
 
     def removeOldLibrary(self):
         '''
-            removing the old library
+            Remove every top-level (symbol "<modelname>" ...) block from
+            eSim_Ngveri.kicad_sym.  Uses paren-balanced s-expression
+            parsing so it works regardless of how the block opener is
+            laid out on the line (handles legacy `))(symbol "X"...`
+            merged-line writes too).
         '''
-        cwd = os.getcwd()
-        os.chdir(self.lib_loc)
-        print("Changing directory to ", self.lib_loc)
-        sym_file = open(self.kicad_ngveri_sym)
-        lines = sym_file.readlines()
-        sym_file.close()
-        lines = lines[0:-2]
-        output = []
-        line_reading_flag = False
-
-        for line in lines:
-            if line.startswith("(symbol"):    # Eeschema Template start
-                if line.split()[1] == f"\"{self.modelname}\"":
-                    line_reading_flag = True
-            if not line_reading_flag:
-                output.append(line)
-            if line.startswith("))"):        # Eeschema Template end
-                line_reading_flag = False
-
-        sym_file = open(self.kicad_ngveri_sym, 'w')
-        for line in output:
-            sym_file.write(line)
-
-        os.chdir(cwd)
-        print("Leaving directory, ", self.lib_loc)
+        if not os.path.exists(self.kicad_ngveri_sym):
+            return
+        with open(self.kicad_ngveri_sym, 'r') as f:
+            content = f.read()
+        new_content = _remove_blocks(content, self.modelname)
+        with open(self.kicad_ngveri_sym, 'w', newline='') as f:
+            f.write(new_content)
 
     def createSym(self):
         '''
-            creating the symbol
-            (pins snapped to KiCad-6 grid)
+            Build the (symbol ...) block for this model in memory and
+            insert it into eSim_Ngveri.kicad_sym before the file's
+            closing `)`.  Pins are snapped to the KiCad-6 grid.
         '''
         self.grid = 0.635
-        self.dist_port = 4 * self.grid         # Distance between two ports # 100 mil (= 2.54 mm)
-        self.inc_size = self.dist_port      # Increment size of a block (mil)
+        self.dist_port = 4 * self.grid         # 100 mil between ports
+        self.inc_size = self.dist_port
+
         def snap(val):
-                snapped = round(float(val) / self.grid) * self.grid
-                return f"{snapped:.3f}"
-        cwd = os.getcwd()
-        os.chdir(self.lib_loc)
-        print("Changing directory to ", self.lib_loc)
+            snapped = round(float(val) / self.grid) * self.grid
+            return f"{snapped:.3f}"
 
-        # Removing ")" from "eSim_Ngveri.kicad_sym"
-        file = open(self.kicad_ngveri_sym, "r")
-        content_file = file.read()
-        new_content_file = content_file[:-2]
-        file.close()
-        file = open(self.kicad_ngveri_sym, "w")
-        file.write(new_content_file)
-        file.close()
+        start_def = self.template["start_def"].replace(
+            'comp_name', self.modelname)
+        u_field = self.template["U_field"]
+        comp_name_field = self.template["comp_name_field"].replace(
+            'comp_name', self.modelname)
+        blank_field_0 = self.template["blank_field"][0].replace(
+            'blank_quotes', '""')
+        blank_field_1 = self.template["blank_field"][1].replace(
+            'blank_quotes', '""')
 
-        # Appending new schematic block
-        sym_file = open(self.kicad_ngveri_sym, "a")
-        line1 = self.template["start_def"]
-        line1 = line1.split()
-        line1 = [w.replace('comp_name', self.modelname) for w in line1]
-        self.template["start_def"] = ' '.join(line1)
-
-        if os.stat(self.kicad_ngveri_sym).st_size == 0:
-            sym_file.write(
-                "(kicad_symbol_lib (version 20211014) " +
-                "(generator kicad_symbol_editor)" +
-                "\n\n"
-            )                       # Eeschema starter code
-
-        # sym_file.write("#encoding utf-8"+ "\n"+ "#"+ "\n" +
-        # "#test_compo" + "\n"+ "#"+ "\n")
-        sym_file.write(
-            self.template["start_def"] + "\n" + self.template["U_field"] + "\n"
+        draw_pos = self.template["draw_pos"].replace(
+            'comp_name', f"{self.modelname}_0_1").split()
+        draw_pos[8] = snap(
+            float(draw_pos[8]) +
+            float(self.findBlockSize() * self.inc_size)
         )
-
-        line3 = self.template["comp_name_field"]
-        line3 = line3.split()
-        line3 = [w.replace('comp_name', self.modelname) for w in line3]
-        self.template["comp_name_field"] = ' '.join(line3)
-
-        sym_file.write(self.template["comp_name_field"] + "\n")
-
-        line4 = self.template["blank_field"]
-        line4_1 = line4[0]
-        line4_2 = line4[1]
-        line4_1 = line4_1.split()
-        line4_1 = [w.replace('blank_quotes', '""') for w in line4_1]
-        line4_2 = line4_2.split()
-        line4_2 = [w.replace('blank_quotes', '""') for w in line4_2]
-        line4[0] = ' '.join(line4_1)
-        line4[1] = ' '.join(line4_2)
-        self.template["blank_qoutes"] = line4
-
-        sym_file.write(line4[0] + "\n" + line4[1] + "\n")
-
-        draw_pos = self.template["draw_pos"]
-        draw_pos = draw_pos.split()
-
-        draw_pos = \
-            [w.replace('comp_name', f"{self.modelname}_0_1") for w in draw_pos]
-        draw_pos[8] = snap(float(draw_pos[8]) +           # previously it is (-)
-                          float(self.findBlockSize() * self.inc_size))
         draw_pos_rec = draw_pos[8]
+        draw_pos_line = ' '.join(draw_pos)
 
-        self.template["draw_pos"] = ' '.join(draw_pos)
-
-        sym_file.write(
-            self.template["draw_pos"] + "\n" + self.template["start_draw"] +
-            " \"" + f"{self.modelname}_1_1\"" + "\n"
+        start_draw_line = (
+            self.template["start_draw"] + " \"" + f"{self.modelname}_1_1\""
         )
 
-        input_port = self.template["input_port"]
-        input_port = input_port.split()
-        output_port = self.template["output_port"]
-        output_port = output_port.split()
+        input_port = self.template["input_port"].split()
+        output_port = self.template["output_port"].split()
         input_port[3] = snap(float(input_port[3]))
         output_port[3] = snap(float(output_port[3]))
-        inputs = self.portInfo[0: self.input_length]
+        inputs = self.portInfo[0:self.input_length]
         outputs = self.portInfo[self.input_length:]
         inputName = []
         outputName = []
@@ -290,41 +347,47 @@ class AutoSchematic:
 
         inputs = self.char_sum(inputs)
         outputs = self.char_sum(outputs)
-
         total = inputs + outputs
 
         port_list = []
-
-        # Set input & output port
         input_port[4] = draw_pos_rec
         output_port[4] = draw_pos_rec
 
-        j = 0
         for i in range(total):
-            if (i < inputs):
+            if i < inputs:
                 input_port[9] = f"\"{inputName[i]}\""
                 input_port[13] = f"\"{str(i + 1)}\""
-                input_port[4] = \
-                    snap(float(input_port[4]) - float(self.dist_port))
-                input_list = ' '.join(input_port)
-                port_list.append(input_list)
-                j = j + 1
-
+                input_port[4] = snap(
+                    float(input_port[4]) - float(self.dist_port))
+                port_list.append(' '.join(input_port))
             else:
                 output_port[9] = f"\"{outputName[i - inputs]}\""
                 output_port[13] = f"\"{str(i + 1)}\""
-                output_port[4] = \
-                    snap(float(output_port[4]) - float(self.dist_port))
-                output_list = ' '.join(output_port)
-                port_list.append(output_list)
+                output_port[4] = snap(
+                    float(output_port[4]) - float(self.dist_port))
+                port_list.append(' '.join(output_port))
 
-        for ports in port_list:
-            sym_file.write(ports + "\n")
-        sym_file.write(
-            self.template["end_draw"] + "\n\n\n"+")"
-        )
-        sym_file.close()
-        os.chdir(cwd)
+        block_lines = [
+            start_def,
+            u_field,
+            comp_name_field,
+            blank_field_0,
+            blank_field_1,
+            draw_pos_line,
+            start_draw_line,
+        ]
+        block_lines.extend(port_list)
+        block_lines.append(self.template["end_draw"])
+        new_block = '\n'.join(block_lines)
+
+        content = ''
+        if os.path.exists(self.kicad_ngveri_sym):
+            with open(self.kicad_ngveri_sym, 'r') as f:
+                content = f.read()
+
+        new_content = _append_block(content, new_block)
+        with open(self.kicad_ngveri_sym, 'w', newline='') as f:
+            f.write(new_content)
 
 
 class PortInfo:

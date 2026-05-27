@@ -31,6 +31,7 @@
 from PyQt6 import QtCore, QtWidgets
 from . import Maker
 from . import ModelGeneration
+from . import createkicad
 import os
 import shutil
 from configuration.Appconfig import Appconfig
@@ -271,8 +272,16 @@ class NgVeri(QtWidgets.QWidget):
 
     def edit_modlst(self, text):
         '''
-            This is used to remove models in modlst of Ngspice folder if
-            the user wants to remove a model. Note: files do not get removed.
+            Remove a model added via NgVeri.  This now performs a full
+            cleanup so the entry disappears from both the simulator and
+            the KiCad symbol library:
+
+              * `modpath.lst`  — the model is dropped from the build list.
+              * Parameter XML  — `library/modelParamXML/Ngveri/<name>.xml`.
+              * KiCad symbol   — every top-level `(symbol "<name>" ...)`
+                                 block inside `eSim_Ngveri.kicad_sym`.
+              * Source folder  — the generated Ngveri/<name>/ directory.
+              * Rebuild + reinstall so ngspice forgets the model too.
         '''
         if text == "Remove Verilog Models":
             return
@@ -280,40 +289,92 @@ class NgVeri(QtWidgets.QWidget):
         self.entry_var[1].removeItem(index)
         self.entry_var[1].setCurrentIndex(0)
         ret = QtWidgets.QMessageBox.warning(
-            None, "Warning", '''<b>Do you want to remove the model: ''' +
-            text,
-            QtWidgets.QMessageBox.StandardButton.Ok, QtWidgets.QMessageBox.StandardButton.Cancel
+            None, "Warning",
+            "<b>Remove the model '" + text + "'?</b><br/>"
+            "This deletes its parameter XML, KiCad symbol and "
+            "generated source files.",
+            QtWidgets.QMessageBox.StandardButton.Ok,
+            QtWidgets.QMessageBox.StandardButton.Cancel
         )
-        if ret == QtWidgets.QMessageBox.StandardButton.Ok:
-            mod = open(self.digital_home + '/modpath.lst', 'r')
-            data = mod.readlines()
-            mod.close()
+        if ret != QtWidgets.QMessageBox.StandardButton.Ok:
+            return
 
-            data.remove(text + "\n")
-            mod = open(self.digital_home + '/modpath.lst', 'w')
-            for item in data:
-                mod.write(item)
-            self.fname = Maker.verilogFile[self.filecount]
+        errors = []
+
+        # 1. modpath.lst — drop the line if present.
+        modpath = self.digital_home + '/modpath.lst'
+        try:
+            if os.path.exists(modpath):
+                with open(modpath, 'r') as f:
+                    data = f.readlines()
+                data = [ln for ln in data if ln.strip() != text]
+                with open(modpath, 'w') as f:
+                    f.writelines(data)
+        except OSError as err:
+            errors.append("modpath.lst: " + str(err))
+
+        # 2/3. Parameter XML and KiCad symbol — both routed through the
+        # createkicad helper so paths stay consistent with model creation.
+        schematicLib = createkicad.AutoSchematic()
+        try:
+            schematicLib.init(text, "")
+            xml_path = os.path.join(
+                schematicLib.xml_loc, 'Ngveri', text + '.xml')
+            if os.path.exists(xml_path):
+                os.remove(xml_path)
+        except OSError as err:
+            errors.append("XML: " + str(err))
+
+        try:
+            schematicLib.removeOldLibrary()
+        except OSError as err:
+            errors.append("kicad_sym: " + str(err))
+        except PermissionError as err:
+            errors.append(
+                "kicad_sym (need write access to "
+                + schematicLib.kicad_ngveri_sym + "): " + str(err))
+
+        # 4. Generated model source folder.
+        model_dir = os.path.join(self.digital_home, text)
+        if os.path.isdir(model_dir):
+            try:
+                shutil.rmtree(model_dir)
+            except OSError as err:
+                errors.append("source dir: " + str(err))
+
+        # 5. Rebuild & reinstall so the simulator forgets the model.
+        try:
+            self.fname = (
+                Maker.verilogFile[self.filecount]
+                if self.filecount < len(Maker.verilogFile) else ""
+            )
             model = ModelGeneration.ModelGeneration(
                 self.fname, self.entry_var[0])
-
-            try:
-                model.runMake()
-
-                if os.name != 'nt':
-                    model.runMakeInstall()
-                else:
-                    shutil.copy(
-                        self.release_dir + "/src/xspice/icm/Ngveri/Ngveri.cm",
-                        self.nghdl_home + "/lib/ngspice/"
-                    )
-            except BaseException as err:
-                QtWidgets.QMessageBox.critical(
-                    None, "Error Message",
-                    "The verilog model '" + str(text) +
-                    "' could not be removed: " + str(err),
-                    QtWidgets.QMessageBox.StandardButton.Ok
+            model.runMake()
+            if os.name != 'nt':
+                model.runMakeInstall()
+            else:
+                shutil.copy(
+                    self.release_dir + "/src/xspice/icm/Ngveri/Ngveri.cm",
+                    self.nghdl_home + "/lib/ngspice/"
                 )
+        except BaseException as err:
+            errors.append("rebuild: " + str(err))
+
+        if errors:
+            QtWidgets.QMessageBox.critical(
+                None, "Error Message",
+                "Model '" + text + "' was only partially removed:<br/>"
+                + "<br/>".join(errors),
+                QtWidgets.QMessageBox.StandardButton.Ok
+            )
+        else:
+            QtWidgets.QMessageBox.information(
+                None, "Model Removed",
+                "Model '" + text + "' was removed from ngspice and "
+                "the KiCad symbol library.",
+                QtWidgets.QMessageBox.StandardButton.Ok
+            )
 
     def lint_off_edit(self, text):
         '''

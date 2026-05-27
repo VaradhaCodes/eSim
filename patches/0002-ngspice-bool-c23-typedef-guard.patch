@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: eSim Team <esim@fossee.iitb.ac.in>
+Date: Sat, 24 May 2026 00:00:00 +0530
+Subject: [PATCH] ngspice: guard typedef int bool for C23
+
+    Under GCC 15 (default -std=gnu23) `bool` is a reserved keyword,
+    so the unconditional `typedef int bool;` in ngspice/bool.h breaks
+    the xspice build with:
+
+        error: cannot use keyword 'bool' as enumeration constant
+        error: two or more data types in declaration specifiers
+
+    Skip the typedef whenever the compiler advertises C23 (or any
+    later C standard) or when the unit is compiled as C++. Pre-C23
+    builds keep the legacy behaviour untouched.
+
+    Apply against the ngspice source tree fetched by the eSim Windows
+    installer, before invoking `make` in src/xspice/icm.
+
+Signed-off-by: eSim Team <esim@fossee.iitb.ac.in>
+---
+ src/include/ngspice/bool.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/include/ngspice/bool.h b/src/include/ngspice/bool.h
+--- a/src/include/ngspice/bool.h
++++ b/src/include/ngspice/bool.h
+@@
++#if !defined(__cplusplus) && \
++    (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L)
+ typedef int bool;
++#endif
+--
+2.50.1

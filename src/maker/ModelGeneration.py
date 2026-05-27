@@ -73,6 +73,76 @@ class ModelGeneration(QtWidgets.QWidget):
         self.digital_home = self.parser.get(
                             'NGHDL', 'DIGITAL_MODEL') + "/Ngveri"
 
+    def _build_env(self):
+        '''
+        Hermetic environment for NgVeri subprocesses. On Windows, pin PATH
+        and PERL5LIB to the bundled MSYS toolchain so external GCC/Perl
+        installations on the user's system cannot leak in. On Linux, the
+        system environment is passed through unchanged.
+        '''
+        env = QtCore.QProcessEnvironment.systemEnvironment()
+        if os.name != 'nt':
+            return env
+
+        msys = self.parser.get('COMPILER', 'MSYS_HOME').replace('\\', '/')
+        required = [
+            msys + '/usr/bin/bash.exe',
+            msys + '/usr/bin/perl.exe',
+            msys + '/usr/bin/make.exe',
+            msys + '/mingw64/bin/gcc.exe',
+            msys + '/mingw64/bin/g++.exe',
+        ]
+        missing = [p for p in required if not os.path.exists(p)]
+        if missing:
+            raise RuntimeError(
+                'NgVeri toolchain not found under MSYS_HOME=' + msys +
+                '. Missing: ' + ', '.join(missing) +
+                '. Reinstall eSim or fix [COMPILER] MSYS_HOME in '
+                '~/.nghdl/config.ini.'
+            )
+
+        env.insert('PATH', msys + '/mingw64/bin;' + msys + '/usr/bin')
+        env.insert(
+            'PERL5LIB',
+            msys + '/usr/share/perl5/site_perl;' +
+            msys + '/usr/share/perl5/vendor_perl;' +
+            msys + '/usr/share/perl5/core_perl;' +
+            msys + '/usr/lib/perl5/core_perl'
+        )
+        for var in ('PERL_LOCAL_LIB_ROOT', 'PERL_MB_OPT', 'PERL_MM_OPT'):
+            env.remove(var)
+        env.insert('VERILATOR_ROOT', msys + '/mingw64/share/verilator')
+        env.insert('CC', msys + '/mingw64/bin/gcc.exe')
+        env.insert('CXX', msys + '/mingw64/bin/g++.exe')
+        env.insert('AR', msys + '/mingw64/bin/ar.exe')
+        env.insert('MAKE', msys + '/usr/bin/make.exe')
+        env.remove('MSYSTEM')
+        env.insert('MSYSTEM', 'MINGW64')
+        return env
+
+    def _run(self, cmd, cwd=None, timeout_ms=120000):
+        '''
+        Execute `cmd` in the bundled bash under the hermetic env. Every
+        NgVeri build step must go through here so PATH lookups cannot
+        resolve to a foreign toolchain.
+        '''
+        self.process = QtCore.QProcess(self)
+        self.process.setProcessEnvironment(self._build_env())
+        if cwd:
+            self.process.setWorkingDirectory(cwd)
+        self.process.readyReadStandardOutput.connect(self.readAllStandard)
+        self.process.readyReadStandardError.connect(self.readAllStandard)
+
+        if os.name == 'nt':
+            msys = self.parser.get('COMPILER', 'MSYS_HOME').replace('\\', '/')
+            shell = msys + '/usr/bin/bash.exe'
+        else:
+            shell = 'sh'
+        self.process.start(shell, ['-c', cmd])
+        self.termtext('$ ' + cmd)
+        self.process.waitForFinished(timeout_ms)
+        return self.process.exitCode()
+
     def verilogfile(self):
         '''
             Reading the file and performing operations and
@@ -115,45 +185,26 @@ class ModelGeneration(QtWidgets.QWidget):
         init_path = '../../'
         if os.name == 'nt':
             init_path = ''
-        # Text="Running Sandpiper............"
         print("Running Sandpiper-Saas for TLV to SV Conversion")
-        self.cmd = "cp " + init_path + "library/tlv/clk_gate.v " + \
-                   init_path + "library/tlv/pseudo_rand.sv " + \
-                   init_path + "library/tlv/sandpiper.vh " + \
-                   init_path + "library/tlv/sandpiper_gen.vh " + \
-                   init_path + "library/tlv/sp_default.vh " + \
-                   init_path + "library/tlv/pseudo_rand_gen.sv " + \
-                   init_path + "library/tlv/pseudo_rand.m4out.tlv " + \
-                   self.file + " " + self.modelpath
-
-        self.process = QtCore.QProcess(self)
-        self.args = ['-c', self.cmd]
-        self.process.start('sh', self.args)
-        self.termedit.append("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        cp_cmd = "cp " + init_path + "library/tlv/clk_gate.v " + \
+                 init_path + "library/tlv/pseudo_rand.sv " + \
+                 init_path + "library/tlv/sandpiper.vh " + \
+                 init_path + "library/tlv/sandpiper_gen.vh " + \
+                 init_path + "library/tlv/sp_default.vh " + \
+                 init_path + "library/tlv/pseudo_rand_gen.sv " + \
+                 init_path + "library/tlv/pseudo_rand.m4out.tlv " + \
+                 self.file + " " + self.modelpath
+        self._run(cp_cmd, timeout_ms=50000)
         print("Copied the files required for TLV successfully")
-        self.cur_dir = os.getcwd()
+
         print("Running Sandpiper............")
-        os.chdir(self.modelpath)
-        self.cmd = "sandpiper-saas -i " + \
-            self.fname.split('.')[0] + ".tlv -o "\
-            + self.fname.split('.')[0] + ".sv"
-        # self.args = ['-c', self.cmd]
-        # self.process.start('sh', self.args)
-        self.process.start(self.cmd)
+        sp_cmd = "sandpiper-saas -i " + \
+            self.fname.split('.')[0] + ".tlv -o " + \
+            self.fname.split('.')[0] + ".sv"
         self.termtitle("RUN SANDPIPER-SAAS")
         self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        # self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        self._run(sp_cmd, cwd=self.modelpath, timeout_ms=50000)
         print("Ran Sandpiper successfully")
-        os.chdir(self.cur_dir)
         self.fname = self.fname.split('.')[0] + ".sv"
 
     def verilogParse(self):
@@ -834,13 +885,14 @@ and set the load for input ports */
     def run_verilator(self):
         '''
             This function is used to run the Verilator
-            using the verilator commands.
+            using the verilator commands. VERILATOR_ROOT, PATH and
+            PERL5LIB are pinned by _build_env so the bundled toolchain
+            wins regardless of the host system's GCC/Perl installs.
         '''
         init_path = '../../'
         if os.name == 'nt':
             init_path = ''
 
-        self.cur_dir = os.getcwd()
         wno = " "
         with open(init_path + "library/tlv/lint_off.txt") as file:
             for item in file.readlines():
@@ -848,209 +900,110 @@ and set the load for input ports */
                     wno += " -Wno-" + item.strip("\n")
 
         print("Running Verilator.............")
-        os.chdir(self.modelpath)
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
-        # print(self.modelpath)
 
-        if os.name == 'nt':
-            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-            self.cmd = "export VERILATOR_ROOT=" + self.msys_home + "/mingw64; "
-        else:
-            self.cmd = ''
-
-        # self.cmd = self.cmd + "verilator -Wall " + wno + " \
-        # --cc --exe --no-MMD --Mdir . -CFLAGS -fPIC sim_main_" + \
-        #    self.fname.split('.')[0] + ".cpp " + self.fname
-        self.cmd = self.cmd + "verilator --stats -O3 -CFLAGS\
+        cmd = "verilator --stats -O3 -CFLAGS\
          -O3 -LDFLAGS \"-static\" --x-assign fast \
          --x-initial fast --noassert  --bbox-sys -Wall " + wno + "\
          --cc --exe --no-MMD --Mdir . -CFLAGS\
           -fPIC -output-split 0 sim_main_" + \
             self.fname.split('.')[0] + ".cpp --autoflush  \
             -DBSV_RESET_FIFO_HEAD -DBSV_RESET_FIFO_ARRAY  " + self.fname
-        self.process = QtCore.QProcess(self)
-        self.process.readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.start('sh', ['-c', self.cmd])
         self.termtitle("RUN VERILATOR")
         self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        # self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        self._run(cmd, cwd=self.modelpath, timeout_ms=120000)
         print("Verilator Executed")
-        os.chdir(self.cur_dir)
 
     def make_verilator(self):
         '''
-            Running make verilator using this function
+            Running make verilator using this function. The bundled
+            toolchain is selected by _build_env (CC/CXX/AR/MAKE pinned).
         '''
-        self.cur_dir = os.getcwd()
         print("Make Verilator.............")
-        os.chdir(self.modelpath)
 
         if os.path.exists(self.modelpath + "../verilated.o"):
             os.remove(self.modelpath + "../verilated.o")
 
-        if os.name == 'nt':
-            # path to msys home directory
-            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-            self.cmd = self.msys_home + "/mingw64/bin/mingw32-make.exe"
-        else:
-            self.cmd = "make"
-
-        self.cmd = self.cmd + " -f V" + self.fname.split('.')[0]\
-            + ".mk V" + self.fname.split(
-            '.')[0] + "__ALL.a sim_main_" \
+        cmd = "make -f V" + self.fname.split('.')[0] \
+            + ".mk V" + self.fname.split('.')[0] \
+            + "__ALL.a sim_main_" \
             + self.fname.split('.')[0] + ".o ../verilated.o"
-        self.process = QtCore.QProcess(self)
-        self.process.readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.start('sh', ['-c', self.cmd])
         self.termtitle("MAKE VERILATOR")
         self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
-
+        self._run(cmd, cwd=self.modelpath, timeout_ms=120000)
         print("Make Verilator Executed")
-        os.chdir(self.cur_dir)
 
     def copy_verilator(self):
         '''
-            This function copies the verilator files/object files from
-            "src/xspice/icm/Ngveri/ to release/src/xspice/icm/Ngveri/"
+            Copy verilator outputs into the release tree. `verilated.o`
+            is dropped into BOTH the per-module subdir and the Ngveri
+            root so the downstream xspice Makefile finds it whichever
+            path it references. Prior code placed it only at Ngveri
+            root with a missing path separator in the stale-cleanup
+            check, leading to "wrong path" linker errors.
         '''
-        self.cur_dir = os.getcwd()
         print("Copying the required files to Release Folder.............")
-        os.chdir(self.modelpath)
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
-        path_icm = self.release_home + "/src/xspice/icm/Ngveri/"
-        if not os.path.isdir(path_icm + self.fname.split('.')[0]):
-            os.mkdir(path_icm + self.fname.split('.')[0])
-        path_icm = path_icm + self.fname.split('.')[0]
-        if os.path.exists(
-            path_icm +
-            "sim_main_" +
-            self.fname.split('.')[0] +
-                ".o"):
-            os.remove(path_icm + "sim_main_" + self.fname.split('.')[0] + ".o")
-        if os.path.exists(
-            self.release_home +
-            "src/xspice/icm/Ngveri/" +
-                "verilated.o"):
-            os.remove(
-                self.release_home + "src/xspice/icm/Ngveri/" + "verilated.o"
-            )
-        if os.path.exists(
-            path_icm +
-            "V" +
-            self.fname.split('.')[0] +
-                "__ALL.o"):
-            os.remove(path_icm + "V" + self.fname.split('.')[0] + "__ALL.o")
-        # print(self.modelpath)
+        base = self.release_home + "/src/xspice/icm/Ngveri/"
+        mod = self.fname.split('.')[0]
+        path_icm = base + mod
+        if not os.path.isdir(path_icm):
+            os.mkdir(path_icm)
+
+        stale = [
+            path_icm + "/sim_main_" + mod + ".o",
+            path_icm + "/V" + mod + "__ALL.o",
+            path_icm + "/verilated.o",
+            base + "verilated.o",
+        ]
+        for p in stale:
+            if os.path.exists(p):
+                os.remove(p)
+
         try:
-            self.cmd = "cp sim_main_" + \
-                self.fname.split('.')[0] + ".o V" + \
-                self.fname.split('.')[0] + "__ALL.o " + path_icm
-            self.process = QtCore.QProcess(self)
-            self.args = ['-c', self.cmd]
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.start('sh', self.args)
+            cmd = (
+                "cp sim_main_" + mod + ".o V" + mod + "__ALL.o "
+                "../verilated.o " + path_icm + "/ && "
+                "cp ../verilated.o " + base
+            )
             self.termtitle("COPYING FILES")
             self.termtext("Current Directory: " + self.modelpath)
-            self.termtext("Command: " + self.cmd)
-            self.process.waitForFinished(50000)
-            self.cmd = "cp ../verilated.o " + self.release_home \
-                + "/src/xspice/icm/Ngveri/"
-            self.process.start('sh', ['-c', self.cmd])
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
+            self._run(cmd, cwd=self.modelpath, timeout_ms=60000)
             print("Copied the files")
-            os.chdir(self.cur_dir)
         except BaseException:
             print("There is error in Copying Files ")
 
     def runMake(self):
         '''
-            Running the make command for Ngspice
+            Running the make command for Ngspice. Toolchain is pinned
+            by _build_env so `make` resolves to the bundled binary on
+            Windows.
         '''
         print("run Make Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
 
         try:
-            if os.name == 'nt':
-                # path to msys home directory
-                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                self.cmd = self.msys_home + "/mingw64/bin/mingw32-make.exe"
-            else:
-                self.cmd = "make"
-
             print("Running Make command in " + path_icm)
-            self.process = QtCore.QProcess(self)
-            self.process.start('sh', ['-c', self.cmd])
-            print("make command process pid ---------- >", self.process.processId())
-
             self.termtitle("MAKE COMMAND")
             self.termtext("Current Directory: " + path_icm)
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            os.chdir(self.cur_dir)
+            self._run("make", cwd=path_icm, timeout_ms=300000)
         except BaseException:
             print("There is error in 'make' ")
 
     def runMakeInstall(self):
         '''
-            Running the make install command for Ngspice
+            Running the make install command for Ngspice.
         '''
-        self.cur_dir = os.getcwd()
         print("run Make Install Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
 
         try:
-            if os.name == 'nt':
-                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                self.cmd = self.msys_home + \
-                    "/mingw64/bin/mingw32-make.exe install"
-            else:
-                self.cmd = "make install"
             print("Running Make Install")
-            try:
-                self.process.close()
-            except BaseException:
-                pass
-
-            self.process = QtCore.QProcess(self)
-            self.process.start('sh', ['-c', self.cmd])
-            # text="<span style=\" font-size:8pt; font-weight:600;
-            # color:#000000;\" >"
             self.termtitle("MAKE INSTALL COMMAND")
             self.termtext("Current Directory: " + path_icm)
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            os.chdir(self.cur_dir)
-
+            self._run("make install", cwd=path_icm, timeout_ms=300000)
         except BaseException as e:
             print(e)
             print("There is error in 'make install' ")
@@ -1161,12 +1114,7 @@ and set the load for input ports */
         print("Adding the Folder:" + includefolder.split('/')[-1])
         self.termtitle("Adding the Folder:" + includefolder.split('/')[-1])
 
-        self.process = QtCore.QProcess(self)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtext("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        self._run(self.cmd, timeout_ms=50000)
         print("Added the folder")
         # os.chdir(self.cur_dir)
 
