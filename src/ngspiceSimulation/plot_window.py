@@ -8,26 +8,26 @@ with support for AC, DC, and Transient analysis visualization.
 
 from __future__ import division
 import os
+import re
 import sys
 import json
 import traceback
 import logging
 from pathlib import Path
-from decimal import Decimal, getcontext
 from typing import Dict, List, Optional, Tuple, Any
 
 from PyQt6 import QtGui, QtCore, QtWidgets
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout,
                              QHBoxLayout, QListWidget, QListWidgetItem, QPushButton,
-                             QCheckBox, QGroupBox,
+                             QCheckBox, QGroupBox, QRadioButton, QButtonGroup,
                              QLabel, QLineEdit, QSlider, QDoubleSpinBox, QMenu,
                              QFileDialog, QColorDialog, QInputDialog,
                              QMessageBox, QStatusBar,
                              QSplitter, QToolButton, QWidgetAction, QGridLayout,
                              QSizePolicy, QScrollArea)
 from PyQt6.QtGui import (QColor, QBrush, QPalette, QKeySequence, QShortcut,
-                         QPainter, QPixmap, QFont, QAction, QIcon)
+                         QPainter, QPixmap, QFont, QAction, QIcon, QPen)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,9 +37,10 @@ from matplotlib.backend_bases import NavigationToolbar2
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Text
+from matplotlib.ticker import FuncFormatter, ScalarFormatter
 
 from configuration.Appconfig import Appconfig
-from .plotting_widgets import CollapsibleBox, MultimeterWidgetClass
+from .plotting_widgets import CollapsibleBox
 from .data_extraction import DataExtraction
 
 # Set up logging
@@ -150,37 +151,133 @@ class CustomListWidget(QListWidget):
 
 
 def _safe_eval(expr: str, data_map: dict) -> "np.ndarray":
-    """Evaluate a math expression over trace arrays without using eval() on raw user input.
+    """Evaluate a sanitized expression over pre-resolved trace arrays.
 
-    Allowed: trace names, numeric literals, +  -  *  /  **  unary minus, numpy via 'np'.
-    Raises ValueError for anything else (attribute access, calls, etc.).
+    Caller must run _resolve_expr() first — trace names are replaced with
+    _trace_N_ identifiers before this function sees the expression, so the
+    AST parser never encounters NGSpice names like v(net1) or i(r1).
+
+    Allowed: trace identifiers (keys of data_map), numeric literals,
+    +  -  *  /  ** (unary - and +), abs sqrt log log10 exp sin cos tan.
+    Arrays of mismatched length are trimmed to the shorter one before ops.
+    Raises ValueError for unknown names, disallowed constructs, or syntax errors.
     """
-    import ast, operator as op
+    import ast
+    import operator as op
 
-    ALLOWED_OPS = {
+    _NUMPY_FNS: dict = {
+        'abs': np.abs, 'sqrt': np.sqrt,
+        'log': np.log, 'log10': np.log10, 'exp': np.exp,
+        'sin': np.sin, 'cos': np.cos, 'tan': np.tan,
+    }
+    _BINOPS: dict = {
         ast.Add: op.add, ast.Sub: op.sub,
         ast.Mult: op.mul, ast.Div: op.truediv,
-        ast.Pow: op.pow, ast.USub: op.neg,
+        ast.Pow: op.pow,
     }
+    _UNOPS: dict = {
+        ast.USub: op.neg,
+        ast.UAdd: lambda x: x,
+    }
+
+    def _align(a, b):
+        if hasattr(a, '__len__') and hasattr(b, '__len__') and len(a) != len(b):
+            n = min(len(a), len(b))
+            return a[:n], b[:n]
+        return a, b
 
     def _eval(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return node.value
+            return np.float64(node.value)
         if isinstance(node, ast.Name):
             if node.id in data_map:
                 return data_map[node.id]
-            raise ValueError(f"Unknown trace: '{node.id}'")
+            raise ValueError(f"Unknown identifier '{node.id}' — "
+                             "trace names are substituted before evaluation, "
+                             "so this indicates a typo or unsupported construct.")
         if isinstance(node, ast.BinOp):
-            op_fn = ALLOWED_OPS.get(type(node.op))
-            if op_fn is None:
+            fn = _BINOPS.get(type(node.op))
+            if fn is None:
                 raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-            return op_fn(_eval(node.left), _eval(node.right))
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            return op.neg(_eval(node.operand))
-        raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+            l, r = _align(_eval(node.left), _eval(node.right))
+            return fn(l, r)
+        if isinstance(node, ast.UnaryOp):
+            fn = _UNOPS.get(type(node.op))
+            if fn is None:
+                raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}")
+            return fn(_eval(node.operand))
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError(
+                    "Attribute calls (e.g. np.sin) are not allowed. "
+                    "Use the bare function name instead: sin(…)")
+            fn = _NUMPY_FNS.get(node.func.id)
+            if fn is None:
+                raise ValueError(
+                    f"Unknown function '{node.func.id}'. "
+                    f"Allowed: {', '.join(sorted(_NUMPY_FNS))}")
+            if node.keywords:
+                raise ValueError("Keyword arguments are not allowed in function calls.")
+            args = [_eval(a) for a in node.args]
+            return fn(*args)
+        raise ValueError(
+            f"Unsupported expression node '{type(node).__name__}'. "
+            "Only arithmetic operators and whitelisted functions are allowed.")
 
-    tree = ast.parse(expr, mode='eval')
-    return np.array(_eval(tree.body), dtype=float)
+    try:
+        tree = ast.parse(expr, mode='eval')
+    except SyntaxError as exc:
+        raise ValueError(f"Syntax error: {exc.msg}") from exc
+    return np.asarray(_eval(tree.body), dtype=float)
+
+
+def _canonical_expr(sanitized: str) -> str:
+    """Return canonical form of a sanitized expression for duplicate detection.
+
+    Commutative operators (+, *) flatten their operand chains and sort them,
+    so 'a+b+c' and 'c+a+b' produce the same string.  Non-commutative ops
+    (-, /, **) keep original order, so 'a-b' and 'b-a' remain distinct.
+    Falls back to whitespace-stripped input on parse error.
+    """
+    import ast
+
+    def _collect(node, op_type: type, results: list) -> None:
+        if isinstance(node, ast.BinOp) and isinstance(node.op, op_type):
+            _collect(node.left, op_type, results)
+            _collect(node.right, op_type, results)
+        else:
+            results.append(_norm(node))
+
+    def _norm(node) -> str:
+        if isinstance(node, ast.BinOp):
+            if isinstance(node.op, (ast.Add, ast.Mult)):
+                sym = '+' if isinstance(node.op, ast.Add) else '*'
+                parts: list = []
+                _collect(node, type(node.op), parts)
+                parts.sort()
+                result = parts[0]
+                for p in parts[1:]:
+                    result = f'({result}{sym}{p})'
+                return result
+            left, right = _norm(node.left), _norm(node.right)
+            sym = {ast.Sub: '-', ast.Div: '/', ast.Pow: '**'}.get(type(node.op), '?')
+            return f'({left}{sym}{right})'
+        if isinstance(node, ast.UnaryOp):
+            sym = '-' if isinstance(node.op, ast.USub) else '+'
+            return f'({sym}{_norm(node.operand)})'
+        if isinstance(node, ast.Call):
+            func = node.func.id if isinstance(node.func, ast.Name) else repr(node.func)
+            return f'{func}({",".join(_norm(a) for a in node.args)})'
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Constant):
+            return str(node.value)
+        return repr(node)
+
+    try:
+        return _norm(ast.parse(sanitized, mode='eval').body)
+    except Exception:
+        return sanitized.replace(' ', '')
 
 
 def _format_measurement(value: float, unit: str) -> str:
@@ -264,10 +361,25 @@ class plotWindow(QWidget):
         self._setup_matplotlib_style()
 
     def _initialize_data_structures(self) -> None:
+        self._em_cache: Optional[int] = None  # invalidated by changeEvent on FontChange
         self._resize_timer: QtCore.QTimer = QtCore.QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(120)
         self._resize_timer.timeout.connect(self._do_deferred_resize)
+        self._controls_timer: QtCore.QTimer = QtCore.QTimer(self)
+        self._controls_timer.setSingleShot(True)
+        self._controls_timer.setInterval(150)
+        self._controls_timer.timeout.connect(self.refresh_plot)
+        # Debounce waveform-visibility toggles. A burst of rapid on/off clicks
+        # restarts this timer, so the (potentially expensive) full plot rebuild
+        # runs ONCE after the burst settles instead of once per click. Stacked
+        # view rebuilds N panes + runs the constrained_layout solver per refresh,
+        # so coalescing here is what keeps rapid toggling responsive. The list
+        # item icon/text still update synchronously, so the UI feels instant.
+        self._refresh_timer: QtCore.QTimer = QtCore.QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(80)
+        self._refresh_timer.timeout.connect(self.refresh_plot)
         self.traces: Dict[int, Trace] = {}
         # cursor_lines[i] is the list of per-pane axvlines belonging to cursor i.
         # Length matches cursor_positions; inner length matches len(self.panes).
@@ -282,7 +394,6 @@ class plotWindow(QWidget):
         self.vertical_spacing = DEFAULT_VERTICAL_SPACING
         self._func_line: Optional[Line2D] = None
         self._drag_cursor_idx: Optional[int] = None
-        self._meters: List[Any] = []
         self._current_view_mode: str = 'normal'  # 'normal' | 'timing' | 'stacked'
         self.panes: List[Any] = []
         # Display-only X axis scaling. Line data and xlim stay in raw SI units
@@ -307,11 +418,20 @@ class plotWindow(QWidget):
         # actual ylim values are held in self._locked_ylims so unlocking is
         # an O(1) dict pop instead of a search.
         self._pane_lock_y: Dict[str, bool] = {}
-        # Per-pane stats overlay flags, keyed by anchor trace name.
-        self._pane_stats_visible: Dict[str, bool] = {}
+        self._global_stats_visible: bool = True
         # Synthetic function traces — each appears as an extra pane at the
         # bottom of the stacked layout. Tuple = (label, x_array, y_array, hex).
-        self._func_traces: List[Tuple[str, "np.ndarray", "np.ndarray", str]] = []
+        self._func_traces: List[Tuple[str, "np.ndarray", "np.ndarray", str, float, str]] = []
+        # Canonical form of each func trace expression, parallel to _func_traces.
+        # Stored at append time so dup-check in plot_function is O(1) per entry
+        # instead of re-calling _resolve_expr for every existing trace.
+        self._func_canonical: List[str] = []
+        # Parallel visibility list — True means the func trace is drawn.
+        # Toggled via the waveform list (negative UserRole items).
+        self._func_visible: List[bool] = []
+        # NBList sorted longest-first for _resolve_expr. Built once per data load
+        # (and on rename_trace) instead of re-sorting on every expression eval.
+        self._nb_sorted: List[Tuple[int, str]] = []
         # Deferred-restore staging for persisted layout. populate_waveform_list
         # has to run first (to set up NBList → trace.index), then we resolve
         # the name-keyed config into index-keyed live state.
@@ -329,6 +449,16 @@ class plotWindow(QWidget):
         self._last_coord_text: str = ''
         self._last_cursor_shape_was_resize: bool = False
         self._blit_background: Optional[Any] = None
+        # Per-cursor interp cache: list slot = cursor_num.
+        # Each entry: {'x_pos': float, 'visible_key': tuple,
+        #              'sim_y': dict[int, float], 'func_y': dict[int, float]}
+        # Avoids redundant np.interp calls when cursor hasn't moved (e.g. grid/
+        # legend refresh). Invalidated by load_simulation_data (new data) and
+        # naturally misses when x_pos or visible traces change.
+        self._cursor_interp_cache: List[Optional[Dict]] = []
+        # Cached .tran start time (seconds) parsed from the analysis file once
+        # in load_simulation_data. 0.0 means no offset / not a .tran sim.
+        self._tran_start_time: float = 0.0
 
     def _initialize_configuration(self) -> None:
         self.config_dir = Path.home() / '.pythonPlotting'
@@ -367,7 +497,7 @@ class plotWindow(QWidget):
             self.config['stacked_locked_ylims'] = {
                 name: list(lims) for name, lims in self._locked_ylims.items()
             }
-            self.config['stacked_stats_visible'] = dict(self._pane_stats_visible)
+            self.config['stacked_stats_visible'] = self.stats_check.isChecked()
             # Persist per-pane height ratios alongside their anchor name so a
             # schematic edit that drops a signal also drops its custom height.
             self.config['stacked_pane_heights'] = {
@@ -384,9 +514,11 @@ class plotWindow(QWidget):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.save_config()
-        for meter in self._meters:
-            meter.close()
-        self._meters.clear()
+        # Cancel deferred timers so no queued tick fires refresh_plot after the
+        # figure/canvas below are torn down (would touch a closed figure).
+        self._refresh_timer.stop()
+        self._controls_timer.stop()
+        self._resize_timer.stop()
         if hasattr(self, 'canvas'):
             self.canvas.close()
         if hasattr(self, 'fig'):
@@ -567,6 +699,7 @@ class plotWindow(QWidget):
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
         self.canvas.mpl_connect('scroll_event', self.on_scroll)
         self.canvas.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.canvas.installEventFilter(self)
         return center_widget
 
     def create_control_panel(self) -> QWidget:
@@ -579,6 +712,30 @@ class plotWindow(QWidget):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(4, 4, 4, 4)
         right_layout.setSpacing(0)
+
+        # View Mode
+        mode_box = CollapsibleBox("View Mode")
+        mode_group = QWidget()
+        mode_layout = QVBoxLayout(mode_group)
+        mode_layout.setContentsMargins(ih, iv, ih, iv)
+        mode_layout.setSpacing(sp)
+        self._view_mode_group = QButtonGroup(self)
+        self.radio_standard = QRadioButton("Standard")
+        self.radio_standard.setChecked(True)
+        self.radio_stacked = QRadioButton("Stacked")
+        self.radio_stacked.setToolTip(
+            "Each signal in its own pane with shared X axis. "
+            "Preserves real amplitude and per-signal Y autoscale.")
+        self.radio_timing = QRadioButton("Digital Timing (Simplified)")
+        self.radio_timing.setToolTip(
+            "Square-wave view for digital/logic signals. "
+            "Only available for transient analysis.")
+        for btn in (self.radio_standard, self.radio_stacked, self.radio_timing):
+            self._view_mode_group.addButton(btn)
+            mode_layout.addWidget(btn)
+        self._view_mode_group.buttonToggled.connect(self.on_view_mode_changed)
+        mode_box.addWidget(mode_group)
+        right_layout.addWidget(mode_box)
 
         # Display Options
         display_box = CollapsibleBox("Display Options")
@@ -598,16 +755,12 @@ class plotWindow(QWidget):
         self.autoscale_check.setChecked(True)
         self.autoscale_check.stateChanged.connect(self.refresh_plot)
         display_layout.addWidget(self.autoscale_check)
-        self.timing_check = QCheckBox("Digital Timing View")
-        self.timing_check.stateChanged.connect(self.on_timing_view_changed)
-        display_layout.addWidget(self.timing_check)
-        self.stacked_check = QCheckBox("Stacked View")
-        self.stacked_check.setToolTip(
-            "Show each visible signal in its own pane with shared X axis "
-            "(LTspice/GTKWave-style strip chart). Preserves real amplitude "
-            "and per-signal Y autoscale.")
-        self.stacked_check.stateChanged.connect(self.on_stacked_view_changed)
-        display_layout.addWidget(self.stacked_check)
+        self.stats_check = QCheckBox("Show Stats")
+        self.stats_check.setToolTip("Show min/max/RMS/frequency stats on each stacked pane")
+        self.stats_check.setChecked(True)
+        self.stats_check.setVisible(False)
+        self.stats_check.stateChanged.connect(self.refresh_plot)
+        display_layout.addWidget(self.stats_check)
         display_box.addWidget(display_group)
         right_layout.addWidget(display_box)
 
@@ -626,6 +779,8 @@ class plotWindow(QWidget):
         self.threshold_spinbox.setSuffix("")
         self.threshold_spinbox.setSpecialValueText("Auto")
         self.threshold_spinbox.setValue(self.threshold_spinbox.minimum())
+        self.threshold_spinbox.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.threshold_spinbox.valueChanged.connect(self.on_threshold_changed)
         threshold_layout.addWidget(self.threshold_spinbox)
         timing_layout.addLayout(threshold_layout)
@@ -651,13 +806,26 @@ class plotWindow(QWidget):
         cursor_layout.setContentsMargins(ih, iv, ih, iv)
         cursor_layout.setSpacing(sp)
 
-        self.cursor1_label = QLabel("Cursor 1: Not set")
+        self.cursor1_label = QLabel('<b style="color:#e53935">C1</b>  <span style="color:#aaa">not set</span>')
         self.cursor1_label.setWordWrap(True)
-        self.cursor2_label = QLabel("Cursor 2: Not set")
+        self.cursor1_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+        self.cursor2_label = QLabel('<b style="color:#1976d2">C2</b>  <span style="color:#aaa">not set</span>')
         self.cursor2_label.setWordWrap(True)
-        self.delta_label = QLabel("ΔX: --")
+        self.cursor2_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+        self.delta_label = QLabel('<b style="color:#e65100">ΔX</b>  <span style="color:#aaa">—</span>')
+        self.delta_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+
+        def _cursor_sep() -> QLabel:
+            s = QLabel()
+            s.setFixedHeight(1)
+            s.setStyleSheet("background-color: #d0d0d0; margin: 2px 0;")
+            return s
+
+        cursor_layout.setSpacing(8)
         cursor_layout.addWidget(self.cursor1_label)
+        cursor_layout.addWidget(_cursor_sep())
         cursor_layout.addWidget(self.cursor2_label)
+        cursor_layout.addWidget(_cursor_sep())
         cursor_layout.addWidget(self.delta_label)
         cursor_help = QLabel(
             "L-click = Cursor 1   ·   Middle / R-click = Cursor 2\n"
@@ -681,14 +849,12 @@ class plotWindow(QWidget):
         self.export_btn.clicked.connect(self.export_image)
         export_layout.addWidget(self.export_btn)
         self.func_input = QLineEdit()
-        self.func_input.setPlaceholderText("e.g., v(in) + v(out)")
+        self.func_input.setPlaceholderText("e.g., v(net1) + v(net2)  or  abs(v(net1))")
+        self.func_input.returnPressed.connect(self.plot_function)
         export_layout.addWidget(self.func_input)
         self.plot_func_btn = QPushButton("Plot Function")
         self.plot_func_btn.clicked.connect(self.plot_function)
         export_layout.addWidget(self.plot_func_btn)
-        self.multimeter_btn = QPushButton("Multimeter")
-        self.multimeter_btn.clicked.connect(self.multi_meter)
-        export_layout.addWidget(self.multimeter_btn)
         export_box.addWidget(export_group)
         right_layout.addWidget(export_box)
 
@@ -714,10 +880,30 @@ class plotWindow(QWidget):
         reset_view_action.triggered.connect(self.reset_view)
         view_menu.addAction(reset_view_action)
 
+    def _rebuild_nb_sorted(self) -> None:
+        """Cache NBList sorted longest-first for use in _resolve_expr."""
+        self._nb_sorted = sorted(
+            enumerate(self.obj_dataext.NBList),
+            key=lambda t: len(t[1]), reverse=True
+        )
+
+    def _parse_tran_start_time(self) -> float:
+        try:
+            with open(os.path.join(self.file_path, "analysis"), 'r') as f:
+                parts = f.read().strip().split()
+            if len(parts) >= 4 and parts[0] == '.tran':
+                return float(parts[3])
+        except Exception:
+            pass
+        return 0.0
+
     def load_simulation_data(self) -> None:
+        self._cursor_interp_cache.clear()
+        self._tran_start_time = self._parse_tran_start_time()
         self.obj_dataext = DataExtraction()
         self.plot_type = self.obj_dataext.openFile(self.file_path)
         self.obj_dataext.computeAxes()
+        self._rebuild_nb_sorted()
         self.data_info = self.obj_dataext.numVals()
         self.volts_length = self.data_info[1]
         if self.plot_type[0] == DataExtraction.AC_ANALYSIS:
@@ -731,12 +917,15 @@ class plotWindow(QWidget):
         # stacked-view layout (name-keyed in the config) into live state.
         self._apply_persisted_layout()
         is_transient = self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS
-        self.timing_check.setEnabled(is_transient)
+        self.radio_timing.setEnabled(is_transient)
         if not is_transient:
-            self.timing_check.setChecked(False)
-            self.timing_check.setToolTip("Digital timing view is only available for transient analysis")
+            if self.radio_timing.isChecked():
+                self.radio_standard.setChecked(True)
+            self.radio_timing.setToolTip("Only available for transient analysis")
         else:
-            self.timing_check.setToolTip("")
+            self.radio_timing.setToolTip(
+                "Square-wave view for digital/logic signals. "
+                "Only available for transient analysis.")
 
     def create_colored_icon(self, color: QColor, is_selected: bool) -> QtGui.QIcon:
         pixmap = QPixmap(18, 18)
@@ -774,18 +963,29 @@ class plotWindow(QWidget):
             self.update_list_item_appearance(item, i)
 
     def filter_waveforms(self, text: str) -> None:
+        needle = text.lower()
         for i in range(self.waveform_list.count()):
             item = self.waveform_list.item(i)
             if item:
-                item.setHidden(text.lower() not in item.text().lower())
+                item.setHidden(needle not in item.text().lower())
 
     def on_waveform_toggle(self, item: QListWidgetItem) -> None:
         index = item.data(Qt.ItemDataRole.UserRole)
+        # Negative UserRole = function trace item; positive = simulation trace.
+        if isinstance(index, int) and index < 0:
+            f_idx = -index - 1
+            if f_idx < len(self._func_visible):
+                self._func_visible[f_idx] = not self._func_visible[f_idx]
+                label, _fx, _fy, color, *_ = self._func_traces[f_idx]
+                self._update_func_item_appearance(
+                    item, label, color, self._func_visible[f_idx])
+            self._schedule_refresh()
+            return
         # item.isSelected() is unreliable when setItemWidget is used — clicks land
         # on the child widget and never update Qt's selection model. Toggle instead.
         self.traces[index].visible = not self.traces[index].visible
         self.update_list_item_appearance(item, index)
-        self.refresh_plot()
+        self._schedule_refresh()
 
     def update_list_item_appearance(self, item: QListWidgetItem, index: int) -> None:
         t = self.traces[index]
@@ -814,23 +1014,102 @@ class plotWindow(QWidget):
         self.waveform_list.setItemWidget(item, widget)
         item.setText(t.name)
 
+    def _update_func_item_appearance(self, item: QListWidgetItem,
+                                      label: str, color: str,
+                                      visible: bool) -> None:
+        """Set visual appearance of a function-trace waveform list item.
+
+        Mirrors update_list_item_appearance but for func traces.  The 'ƒ'
+        prefix and italic style distinguish them from simulation signals.
+        """
+        transparent = Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        widget = QWidget()
+        widget.setAttribute(transparent, True)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(10)
+        icon_label = QLabel()
+        icon_label.setAttribute(transparent, True)
+        icon_color = QColor(color) if visible else QColor("#9E9E9E")
+        icon = self.create_colored_icon(icon_color, visible)
+        icon_label.setPixmap(icon.pixmap(18, 18))
+        display = f"ƒ  {label}"
+        text_label = QLabel(display)
+        text_label.setAttribute(transparent, True)
+        text_label.setStyleSheet(
+            f"color: {color}; font-weight: 500; font-style: italic;" if visible
+            else "color: #757575; font-weight: normal; font-style: italic;")
+        layout.addWidget(icon_label)
+        layout.addWidget(text_label)
+        layout.addStretch()
+        self.waveform_list.setItemWidget(item, widget)
+        item.setText(display)
+
+    def _sync_func_trace_list(self) -> None:
+        """Remove all func-trace list items and re-add from current _func_traces.
+
+        Called after any mutation of _func_traces so the waveform list stays
+        in sync (correct count, correct negative UserRole indices, correct
+        labels/colours after a middle-of-list removal re-numbers everything).
+        """
+        # Remove all existing func trace items (negative UserRole)
+        for i in range(self.waveform_list.count() - 1, -1, -1):
+            it = self.waveform_list.item(i)
+            if it is not None:
+                val = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(val, int) and val < 0:
+                    self.waveform_list.takeItem(i)
+        # Re-add from current _func_traces
+        for f_idx, (label, _fx, _fy, color, *_) in enumerate(self._func_traces):
+            visible = (self._func_visible[f_idx]
+                       if f_idx < len(self._func_visible) else True)
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, -(f_idx + 1))
+            item.setToolTip(f"Function trace: {label}")
+            self.waveform_list.addItem(item)
+            self._update_func_item_appearance(item, label, color, visible)
+
     def select_all_waveforms(self) -> None:
-        for i in range(self.waveform_list.count()):
-            item = self.waveform_list.item(i)
-            if item and not item.isHidden():
-                index = item.data(Qt.ItemDataRole.UserRole)
-                self.traces[index].visible = True
-                self.update_list_item_appearance(item, index)
-        self.refresh_plot()
+        self.waveform_list.setUpdatesEnabled(False)
+        try:
+            for i in range(self.waveform_list.count()):
+                item = self.waveform_list.item(i)
+                if item and not item.isHidden():
+                    index = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(index, int) and index < 0:
+                        f_idx = -index - 1
+                        if f_idx < len(self._func_visible):
+                            self._func_visible[f_idx] = True
+                            label, _fx, _fy, color, *_ = self._func_traces[f_idx]
+                            self._update_func_item_appearance(item, label, color, True)
+                    else:
+                        self.traces[index].visible = True
+                        self.update_list_item_appearance(item, index)
+        finally:
+            self.waveform_list.setUpdatesEnabled(True)
+        self._schedule_refresh()
 
     def deselect_all_waveforms(self) -> None:
         for t in self.traces.values():
             t.visible = False
-        for i in range(self.waveform_list.count()):
-            item = self.waveform_list.item(i)
-            if item:
-                self.update_list_item_appearance(item, item.data(Qt.ItemDataRole.UserRole))
-        self.refresh_plot()
+        for f_idx in range(len(self._func_visible)):
+            self._func_visible[f_idx] = False
+        self.waveform_list.setUpdatesEnabled(False)
+        try:
+            for i in range(self.waveform_list.count()):
+                item = self.waveform_list.item(i)
+                if item:
+                    index = item.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(index, int) and index < 0:
+                        f_idx = -index - 1
+                        if f_idx < len(self._func_traces):
+                            label, _fx, _fy, color, *_ = self._func_traces[f_idx]
+                            self._update_func_item_appearance(item, label, color, False)
+                    else:
+                        self.update_list_item_appearance(item, index)
+        finally:
+            self.waveform_list.setUpdatesEnabled(True)
+        self._schedule_refresh()
 
     def show_list_context_menu(self, position: QtCore.QPoint) -> None:
         item = self.waveform_list.itemAt(position)
@@ -843,34 +1122,58 @@ class plotWindow(QWidget):
         deselect_action.triggered.connect(self.deselect_all_waveforms)
 
         if item:
-            menu.addSeparator()
-            color_menu = menu.addMenu("Change colour ▶")
-            self.populate_color_menu(color_menu, [item])
-
-            thickness_menu = menu.addMenu("Thickness ▶")
-            for thickness, label in THICKNESS_OPTIONS:
-                action = thickness_menu.addAction(label)
-                action.triggered.connect(lambda checked, t=thickness: self.change_thickness([item], t))
-
-            style_menu = menu.addMenu("Style ▶")
-            for style, label in LINE_STYLES:
-                action = style_menu.addAction(label)
-                action.triggered.connect(lambda checked, s=style: self.change_style([item], s))
-
-            menu.addSeparator()
-
-            rename_action = menu.addAction("Rename...")
-            rename_action.triggered.connect(lambda: self.rename_trace(item))
-
             index = item.data(Qt.ItemDataRole.UserRole)
-            t = self.traces[index]
-            hide_show_action = menu.addAction("Hide" if t.visible else "Show")
-            hide_show_action.triggered.connect(lambda: self.toggle_trace_visibility([item]))
-
             menu.addSeparator()
 
-            properties_action = menu.addAction("Figure Options...")
-            properties_action.triggered.connect(self.open_figure_options)
+            if isinstance(index, int) and index < 0:
+                f_idx = -index - 1
+                color_menu = menu.addMenu("Change colour ▶")
+                self._populate_func_color_menu(color_menu, f_idx)
+                thickness_menu = menu.addMenu("Thickness ▶")
+                for _thickness, _tlabel in THICKNESS_OPTIONS:
+                    _act = thickness_menu.addAction(_tlabel)
+                    _act.triggered.connect(
+                        lambda checked=False, t=_thickness, fi=f_idx: self._change_func_thickness(fi, t))
+                style_menu = menu.addMenu("Style ▶")
+                for _style, _slabel in LINE_STYLES:
+                    _act = style_menu.addAction(_slabel)
+                    _act.triggered.connect(
+                        lambda checked=False, s=_style, fi=f_idx: self._change_func_style(fi, s))
+                menu.addSeparator()
+                is_vis = (f_idx < len(self._func_visible) and self._func_visible[f_idx])
+                hide_show_action = menu.addAction("Hide" if is_vis else "Show")
+                hide_show_action.triggered.connect(
+                    lambda checked=False, fi=f_idx: self._toggle_func_trace_visibility(fi))
+                remove_action = menu.addAction("Remove")
+                remove_action.triggered.connect(
+                    lambda checked=False, fi=f_idx: self._remove_function_pane(fi))
+            else:
+                color_menu = menu.addMenu("Change colour ▶")
+                self.populate_color_menu(color_menu, [item])
+
+                thickness_menu = menu.addMenu("Thickness ▶")
+                for thickness, label in THICKNESS_OPTIONS:
+                    action = thickness_menu.addAction(label)
+                    action.triggered.connect(lambda checked, t=thickness: self.change_thickness([item], t))
+
+                style_menu = menu.addMenu("Style ▶")
+                for style, label in LINE_STYLES:
+                    action = style_menu.addAction(label)
+                    action.triggered.connect(lambda checked, s=style: self.change_style([item], s))
+
+                menu.addSeparator()
+
+                rename_action = menu.addAction("Rename...")
+                rename_action.triggered.connect(lambda: self.rename_trace(item))
+
+                t = self.traces[index]
+                hide_show_action = menu.addAction("Hide" if t.visible else "Show")
+                hide_show_action.triggered.connect(lambda: self.toggle_trace_visibility([item]))
+
+                menu.addSeparator()
+
+                properties_action = menu.addAction("Figure Options...")
+                properties_action.triggered.connect(self.open_figure_options)
 
         menu.exec(self.waveform_list.mapToGlobal(position))
 
@@ -956,6 +1259,7 @@ class plotWindow(QWidget):
         if ok and new_name and new_name != t.name:
             t.name = new_name
             self.obj_dataext.NBList[index] = new_name
+            self._rebuild_nb_sorted()
             self.update_list_item_appearance(item, index)
             if self.legend_check.isChecked():
                 self.refresh_plot()
@@ -969,7 +1273,7 @@ class plotWindow(QWidget):
             index = item.data(Qt.ItemDataRole.UserRole)
             self.traces[index].visible = not any_visible
             self.update_list_item_appearance(item, index)
-        self.refresh_plot()
+        self._schedule_refresh()
 
     def open_figure_options(self) -> None:
         try:
@@ -1014,33 +1318,20 @@ class plotWindow(QWidget):
             logger.error(f"Error opening figure options: {e}")
             QMessageBox.information(self, "Figure Options", "Basic figure editing is available through the toolbar.")
 
-    def on_timing_view_changed(self, state: int) -> None:
-        timing_enabled = state == Qt.CheckState.Checked.value
-        # Mutex with stacked: only one alt view active at a time. blockSignals
-        # prevents the partner handler's refresh_plot from running before ours.
-        if timing_enabled and self.stacked_check.isChecked():
-            self.stacked_check.blockSignals(True)
-            self.stacked_check.setChecked(False)
-            self.stacked_check.blockSignals(False)
-        self.timing_box.setVisible(timing_enabled)
-        self.timing_box.content_area.setEnabled(timing_enabled)
-        self.autoscale_check.setEnabled(not timing_enabled
-                                        and not self.stacked_check.isChecked())
-        self.refresh_plot()
+    def _update_mode_controls(self) -> None:
+        stacked = self.radio_stacked.isChecked()
+        normal  = self.radio_standard.isChecked()
+        self.autoscale_check.setVisible(normal)
+        self.stats_check.setVisible(stacked)
+        self.legend_check.setVisible(not stacked)
 
-    def on_stacked_view_changed(self, state: int) -> None:
-        stacked_enabled = state == Qt.CheckState.Checked.value
-        if stacked_enabled and self.timing_check.isChecked():
-            self.timing_check.blockSignals(True)
-            self.timing_check.setChecked(False)
-            self.timing_check.blockSignals(False)
-            self.timing_box.setVisible(False)
-            self.timing_box.content_area.setEnabled(False)
-        # Per-pane autoscale is intrinsic to stacked view; disable global flag.
-        self.autoscale_check.setEnabled(not stacked_enabled
-                                        and not self.timing_check.isChecked())
-        # Legend is meaningless in stacked — each pane title is the legend.
-        self.legend_check.setEnabled(not stacked_enabled)
+    def on_view_mode_changed(self, button, checked: bool) -> None:
+        if not checked:
+            return
+        timing = self.radio_timing.isChecked()
+        self.timing_box.setVisible(timing)
+        self.timing_box.content_area.setEnabled(timing)
+        self._update_mode_controls()
         self.refresh_plot()
 
     @staticmethod
@@ -1049,7 +1340,6 @@ class plotWindow(QWidget):
         px.fill(Qt.GlobalColor.transparent)
         p = QPainter(px)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        from PyQt6.QtGui import QPen
         p.setPen(QPen(QColor('#444444'), max(1, size // 12), Qt.PenStyle.SolidLine,
                       Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         m = max(2, size // 6)
@@ -1166,14 +1456,31 @@ class plotWindow(QWidget):
                 return t.name
         return None
 
+    def _build_pane_anchor_map(self) -> Dict[int, str]:
+        """Return {id(ax): anchor_name} covering all current panes, in O(traces).
+
+        Callers that loop over all panes should build this once and do O(1)
+        dict lookups per pane, rather than calling _pane_anchor_name() per pane
+        which is O(traces) each and makes capture/restore O(N²) in stacked view.
+        """
+        result: Dict[int, str] = {}
+        for t in self.traces.values():
+            lo = t.line_object
+            if lo is not None:
+                ax_id = id(lo.axes)
+                if ax_id not in result:
+                    result[ax_id] = t.name
+        return result
+
     def _capture_view_state(self) -> None:
         """Snapshot xlim and per-pane ylim before a refresh that rebuilds axes."""
         if not self.panes:
             return
         self._saved_xlim = self.axes.get_xlim()
         self._saved_pane_ylims = {}
+        anchor_map = self._build_pane_anchor_map()
         for ax in self.panes:
-            anchor = self._pane_anchor_name(ax)
+            anchor = anchor_map.get(id(ax))
             if anchor is not None:
                 self._saved_pane_ylims[anchor] = ax.get_ylim()
 
@@ -1196,9 +1503,10 @@ class plotWindow(QWidget):
         """
         if not self.panes:
             return
+        anchor_map = self._build_pane_anchor_map()
         # Apply persistent locks first
         for ax in self.panes:
-            anchor = self._pane_anchor_name(ax)
+            anchor = anchor_map.get(id(ax))
             if anchor is None:
                 continue
             if self._pane_lock_y.get(anchor) and anchor in self._locked_ylims:
@@ -1207,7 +1515,7 @@ class plotWindow(QWidget):
         if self._saved_xlim is not None:
             self.axes.set_xlim(self._saved_xlim)
         for ax in self.panes:
-            anchor = self._pane_anchor_name(ax)
+            anchor = anchor_map.get(id(ax))
             if anchor is None or self._pane_lock_y.get(anchor):
                 continue
             if anchor in self._saved_pane_ylims:
@@ -1224,8 +1532,9 @@ class plotWindow(QWidget):
         """
         if not anchor or not self.panes:
             return
+        anchor_map = self._build_pane_anchor_map()
         for ax in self.panes:
-            if self._pane_anchor_name(ax) == anchor:
+            if anchor_map.get(id(ax)) == anchor:
                 self._locked_ylims[anchor] = ax.get_ylim()
                 return
 
@@ -1259,13 +1568,7 @@ class plotWindow(QWidget):
         return None
 
     def _start_divider_drag(self, upper_idx: int, event) -> None:
-        """Capture initial heights + cached pixel geometry for the drag.
-
-        bbox.height is cached at press time so the per-pixel-to-fraction
-        conversion stays stable while the user is dragging — otherwise the
-        live-mutating gridspec would feed back into the math and produce
-        accelerating/decelerating motion.
-        """
+        """Capture initial heights + cached pixel geometry for the drag."""
         if upper_idx + 1 >= len(self._pane_heights):
             return
         upper_bb = self.panes[upper_idx].bbox.height
@@ -1278,6 +1581,24 @@ class plotWindow(QWidget):
             'combined_px': max(1.0, upper_bb + lower_bb),
             'moved': False,
         }
+        # Capture axis positions in figure coords BEFORE disabling the
+        # constrained_layout solver. During drag we reposition axes via
+        # ax.set_position() so the solver never runs per mouse-move.
+        self._drag_ax_positions = [ax.get_position() for ax in self.panes]
+        self.fig.set_constrained_layout(False)
+        # Decimate line data so each draw_idle renders far fewer segments.
+        # Full data is restored in _finish_divider_drag (or by refresh_plot).
+        _MAX_DRAG_PTS = 800
+        self._saved_line_data: Dict[int, Any] = {}
+        for t in self.traces.values():
+            if t.line_object is not None:
+                xd = t.line_object.get_xdata()
+                yd = t.line_object.get_ydata()
+                n = len(xd)
+                if n > _MAX_DRAG_PTS:
+                    step = max(1, n // _MAX_DRAG_PTS)
+                    self._saved_line_data[t.index] = (xd, yd)
+                    t.line_object.set_data(xd[::step], yd[::step])
         self.canvas.setCursor(Qt.CursorShape.SizeVerCursor)
 
     def _update_divider_drag(self, event) -> None:
@@ -1307,38 +1628,74 @@ class plotWindow(QWidget):
         self._apply_height_ratios_live()
 
     def _apply_height_ratios_live(self) -> None:
-        """Push current _pane_heights onto the live GridSpec, draw_idle."""
+        """Reposition panes during drag without running the constraint solver."""
         if not self.panes or len(self.panes) < 2:
             return
-        try:
-            gs = self.panes[0].get_subplotspec().get_gridspec()
-        except Exception:
-            return
-        heights = list(self._pane_heights)
-        while len(heights) < gs.nrows:
-            heights.append(1.0)
-        try:
-            gs.set_height_ratios(heights[:gs.nrows])
-        except Exception:
-            return
+        self._reposition_panes_from_heights()
         self.canvas.draw_idle()
 
-    def _finish_divider_drag(self) -> None:
-        """End the drag, settle layout, restore cursor.
+    def _reposition_panes_from_heights(self) -> None:
+        """Distribute pane Bboxes in figure coords from _pane_heights ratios.
 
-        Skips refresh entirely when no motion happened (user just clicked
-        the divider without dragging) — saves a ~50ms rebuild.
+        Uses positions captured at drag-start as the outer envelope so the
+        figure margins stay exactly as constrained_layout left them. Only
+        vertical redistribution changes; horizontal extents are preserved
+        per-pane (important when Y-axis labels have different widths).
         """
+        positions = getattr(self, '_drag_ax_positions', None)
+        if not positions or len(positions) != len(self.panes):
+            return
+        n = len(self.panes)
+        n_heights = min(n, len(self._pane_heights))
+
+        top    = positions[0].y1
+        bottom = positions[-1].y0
+        # Average gap between adjacent panes (hspace in figure coords)
+        if n > 1:
+            total_gap = sum(
+                max(0.0, positions[i].y0 - positions[i + 1].y1)
+                for i in range(n - 1)
+            )
+            avg_gap = total_gap / (n - 1)
+        else:
+            avg_gap = 0.0
+
+        usable = max(0.01, (top - bottom) - avg_gap * (n - 1))
+        ratios  = [self._pane_heights[i] if i < n_heights else 1.0 for i in range(n)]
+        ratio_sum = max(0.01, sum(ratios))
+
+        current_top = top
+        for i, ax in enumerate(self.panes):
+            h = max(0.005, usable * (ratios[i] / ratio_sum))
+            ax.set_position([
+                positions[i].x0,
+                current_top - h,
+                positions[i].x1 - positions[i].x0,
+                h,
+            ])
+            current_top -= h + avg_gap
+
+    def _finish_divider_drag(self) -> None:
+        """End drag: restore CL + data, settle layout with one full refresh."""
         if self._divider_drag is None:
             return
         moved = self._divider_drag.get('moved', False)
         self._divider_drag = None
+        self._drag_ax_positions = []
+        # Restore full line data.  If moved=True, refresh_plot rebuilds
+        # everything via fig.clear() anyway; still restore so the
+        # no-move path (moved=False) shows correct data after cleanup.
+        saved = getattr(self, '_saved_line_data', {})
+        for idx, (xd, yd) in saved.items():
+            if idx in self.traces and self.traces[idx].line_object is not None:
+                self.traces[idx].line_object.set_data(xd, yd)
+        self._saved_line_data = {}
+        self.fig.set_constrained_layout(True)
         self.canvas.unsetCursor()
         if moved:
-            # constrained_layout sometimes leaves margin artifacts after a
-            # live gridspec mutation — one full rebuild on release cleans
-            # everything up.
             self.refresh_plot()
+        else:
+            self.canvas.draw_idle()
 
     # ── Pane reorder (Alt + left-drag) ───────────────────────────────────
 
@@ -1410,9 +1767,8 @@ class plotWindow(QWidget):
                     self._locked_ylims[n] = (float(lims[0]), float(lims[1]))
 
         stats = self.config.get('stacked_stats_visible')
-        if isinstance(stats, dict):
-            self._pane_stats_visible = {n: bool(v) for n, v in stats.items()
-                                        if n in name_to_idx}
+        if isinstance(stats, bool):
+            self.stats_check.setChecked(stats)
 
         # Pane heights — name-keyed in config, projected back onto the
         # restored _pane_groups order. Missing anchors fall back to 1.0
@@ -1507,11 +1863,6 @@ class plotWindow(QWidget):
             reset_act = menu.addAction("Reset Y autoscale")
             reset_act.triggered.connect(
                 lambda checked=False, a=anchor: self._reset_pane_y(a))
-            stats_act = menu.addAction("Show stats")
-            stats_act.setCheckable(True)
-            stats_act.setChecked(self._pane_stats_visible.get(anchor, False))
-            stats_act.triggered.connect(
-                lambda checked=False, a=anchor: self._toggle_pane_stats(a))
 
         menu.addSeparator()
 
@@ -1549,7 +1900,7 @@ class plotWindow(QWidget):
                 if item and item.data(Qt.ItemDataRole.UserRole) == trace_idx:
                     self.update_list_item_appearance(item, trace_idx)
                     break
-            self.refresh_plot()
+            self._schedule_refresh()
 
     # ── Pane menu action handlers ────────────────────────────────────────
 
@@ -1593,11 +1944,6 @@ class plotWindow(QWidget):
         self._saved_pane_ylims.pop(anchor, None)
         self.refresh_plot()
 
-    def _toggle_pane_stats(self, anchor: str) -> None:
-        self._pane_stats_visible[anchor] = not self._pane_stats_visible.get(
-            anchor, False)
-        self.refresh_plot()
-
     def _dialog_plot_function(self) -> None:
         text, ok = QInputDialog.getText(
             self, "Plot function in new pane",
@@ -1612,14 +1958,89 @@ class plotWindow(QWidget):
                 # expression isn't clobbered by the menu-driven dialog.
                 self.func_input.setText(prev)
 
+    def _toggle_func_trace_visibility(self, f_idx: int) -> None:
+        if not (0 <= f_idx < len(self._func_visible)):
+            return
+        self._func_visible[f_idx] = not self._func_visible[f_idx]
+        label, _fx, _fy, color, *_ = self._func_traces[f_idx]
+        for i in range(self.waveform_list.count()):
+            it = self.waveform_list.item(i)
+            if it and it.data(Qt.ItemDataRole.UserRole) == -(f_idx + 1):
+                self._update_func_item_appearance(it, label, color, self._func_visible[f_idx])
+                break
+        self._schedule_refresh()
+
+    def _populate_func_color_menu(self, menu: QMenu, f_idx: int) -> None:
+        color_widget = QWidget()
+        color_widget.setStyleSheet("background-color: #FFFFFF;")
+        grid_layout = QGridLayout(color_widget)
+        grid_layout.setSpacing(2)
+        for i, c in enumerate(self.color_palette):
+            btn = QPushButton()
+            btn.setFixedSize(24, 24)
+            btn.setStyleSheet(
+                f"QPushButton{{background-color:{c};border:1px solid #E0E0E0;border-radius:2px;}}"
+                f"QPushButton:hover{{border:2px solid #212121;}}")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(
+                lambda checked=False, col=c, fi=f_idx, m=menu: (
+                    self._change_func_color(fi, col), m.close()))
+            grid_layout.addWidget(btn, i // 4, i % 4)
+        wa = QWidgetAction(menu)
+        wa.setDefaultWidget(color_widget)
+        menu.addAction(wa)
+        menu.addSeparator()
+        more = menu.addAction("More...")
+        more.triggered.connect(lambda: self._change_func_color_dialog(f_idx))
+
+    def _change_func_color(self, f_idx: int, color: str) -> None:
+        if not (0 <= f_idx < len(self._func_traces)):
+            return
+        label, fx, fy, _, thickness, style = self._func_traces[f_idx]
+        self._func_traces[f_idx] = (label, fx, fy, color, thickness, style)
+        for i in range(self.waveform_list.count()):
+            it = self.waveform_list.item(i)
+            if it and it.data(Qt.ItemDataRole.UserRole) == -(f_idx + 1):
+                vis = f_idx < len(self._func_visible) and self._func_visible[f_idx]
+                self._update_func_item_appearance(it, label, color, vis)
+                break
+        self.refresh_plot()
+
+    def _change_func_color_dialog(self, f_idx: int) -> None:
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self._change_func_color(f_idx, color.name())
+
+    def _change_func_thickness(self, f_idx: int, thickness: float) -> None:
+        if not (0 <= f_idx < len(self._func_traces)):
+            return
+        label, fx, fy, color, _, style = self._func_traces[f_idx]
+        self._func_traces[f_idx] = (label, fx, fy, color, thickness, style)
+        self.refresh_plot()
+
+    def _change_func_style(self, f_idx: int, style: str) -> None:
+        if not (0 <= f_idx < len(self._func_traces)):
+            return
+        label, fx, fy, color, thickness, _ = self._func_traces[f_idx]
+        self._func_traces[f_idx] = (label, fx, fy, color, thickness, style)
+        self.refresh_plot()
+
     def _clear_function_panes(self) -> None:
         if self._func_traces:
             self._func_traces.clear()
+            self._func_canonical.clear()
+            self._func_visible.clear()
+            self._sync_func_trace_list()
             self.refresh_plot()
 
     def _remove_function_pane(self, f_idx: int) -> None:
         if 0 <= f_idx < len(self._func_traces):
             del self._func_traces[f_idx]
+            if f_idx < len(self._func_canonical):
+                del self._func_canonical[f_idx]
+            if f_idx < len(self._func_visible):
+                del self._func_visible[f_idx]
+            self._sync_func_trace_list()
             self.refresh_plot()
 
     def _show_function_pane_menu(self, event, f_idx: int) -> None:
@@ -1643,13 +2064,27 @@ class plotWindow(QWidget):
         else:
             menu.exec(self.canvas.mapToGlobal(QtCore.QPoint(0, 0)))
 
+    def _schedule_refresh(self) -> None:
+        """Coalesce rapid visibility toggles into a single deferred refresh.
+
+        Restarting the single-shot timer on each call means a burst of clicks
+        collapses to one refresh_plot once the user stops (80ms idle). Used by
+        every waveform/func-trace visibility toggle; direct refresh_plot calls
+        (view-mode change, autoscale, etc.) cancel any pending tick via the
+        stop() at the top of refresh_plot so they never double-rebuild.
+        """
+        self._refresh_timer.start()
+
     def refresh_plot(self) -> None:
+        # Cancel any pending debounced refresh — this call supersedes it, so a
+        # queued timer tick must not fire a second redundant rebuild afterwards.
+        self._refresh_timer.stop()
         # Preserve zoom when autoscale is off.
         # Capture only when staying in the SAME ylim-meaningful mode: timing
         # uses [0..N] normalized space, stacked uses per-trace SI units —
         # restoring one across modes would clip signals or scramble panes.
-        next_mode = ('timing' if self.timing_check.isChecked()
-                     else 'stacked' if self.stacked_check.isChecked()
+        next_mode = ('timing' if self.radio_timing.isChecked()
+                     else 'stacked' if self.radio_stacked.isChecked()
                      else 'normal')
         capture_state = (not self.autoscale_check.isChecked()
                          and self._current_view_mode == next_mode
@@ -1660,6 +2095,11 @@ class plotWindow(QWidget):
 
         self._func_line = None  # fig.clear() below wipes all artists
         self.timing_annotations.clear()
+        # Any in-progress cursor drag and the blit snapshot become invalid
+        # once fig.clear() tears down the figure.  Reset them here so the
+        # restore path that follows starts from a clean state.
+        self._drag_cursor_idx = None
+        self._blit_background = None
         self.fig.clear()
         # Hover-cache held references to the old Axes; invalidate before
         # _build_panes hands out fresh ones.
@@ -1696,7 +2136,7 @@ class plotWindow(QWidget):
             if self.legend_check.isChecked():
                 self.position_legend()
         self._restore_cursors()
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
     def position_legend(self) -> None:
         if not (self.panes and self.legend_check.isChecked()):
@@ -1732,15 +2172,8 @@ class plotWindow(QWidget):
 
     def _get_transient_start_idx(self, time_data: "np.ndarray") -> int:
         """Return the index into time_data where the .tran start time begins, or 0."""
-        try:
-            with open(os.path.join(self.file_path, "analysis"), 'r') as f:
-                parts = f.read().strip().split()
-            if len(parts) >= 4 and parts[0] == '.tran':
-                start_time = float(parts[3])
-                if start_time > 0:
-                    return int(np.searchsorted(time_data, start_time))
-        except Exception:
-            pass
+        if self._tran_start_time > 0:
+            return int(np.searchsorted(time_data, self._tran_start_time))
         return 0
 
     def plot_timing_diagram(self) -> None:
@@ -1854,8 +2287,53 @@ class plotWindow(QWidget):
                         color=t.color, alpha=0.75, clip_on=False))
             self.timing_annotations[idx] = ann
 
-        # Y-axis bounds: normalized traces sit in [0,1] per rank, evenly spaced.
-        total_height = (len(visible_indices) - 1) * spacing + 1.0
+        # Func traces as additional timing channels — normalized same as sim signals.
+        n_sim = len(visible_indices)
+        vis_func = [
+            (f_idx, self._func_traces[f_idx])
+            for f_idx in range(len(self._func_traces))
+            if f_idx < len(self._func_visible) and self._func_visible[f_idx]
+        ]
+        xform = self.axes.get_yaxis_transform()
+        for func_slot, (f_idx, (flabel, fx, fy, fcolor, fthickness, _fs)) in enumerate(vis_func):
+            rank = n_sim + func_slot
+            n_pts = min(len(fx), len(fy))
+            if n_pts < 2:
+                continue
+            fy_arr = np.asarray(fy[:n_pts], dtype=float)
+            fx_arr = np.asarray(fx[:n_pts], dtype=float)
+            fmin, fmax = float(np.min(fy_arr)), float(np.max(fy_arr))
+            y_center = rank * spacing + 0.5
+            if fmax - fmin < 1e-10:
+                logic = np.full(n_pts, 0.5)
+                self.axes.text(1.01, y_center, f"DC: {fmax:.4g}",
+                               transform=xform, va='center', ha='left',
+                               color=fcolor, clip_on=False,
+                               fontsize=max(7, LEGEND_FONT_SIZE - 1))
+            else:
+                logic = np.where(fy_arr > (fmin + fmax) / 2.0, 1.0, 0.0)
+                self.axes.text(1.01, rank * spacing + 0.82, f"H: {fmax:.4g}",
+                               transform=xform, va='center', ha='left',
+                               color=fcolor, clip_on=False,
+                               fontsize=max(7, LEGEND_FONT_SIZE - 1))
+                self.axes.text(1.01, rank * spacing + 0.18, f"L: {fmin:.4g}",
+                               transform=xform, va='center', ha='left',
+                               color=fcolor, clip_on=False,
+                               fontsize=max(7, LEGEND_FONT_SIZE - 1))
+                freq = _detect_frequency(fx_arr, logic)
+                if freq is not None:
+                    self.axes.text(1.01, y_center, _format_frequency(freq),
+                                   transform=xform, va='center', ha='left',
+                                   color=fcolor, alpha=0.75, clip_on=False,
+                                   fontsize=max(7, LEGEND_FONT_SIZE - 1))
+            self.axes.step(fx_arr, logic + rank * spacing, where='post',
+                           color=fcolor, linewidth=fthickness, label=flabel)
+            yticks.append(y_center)
+            ylabels.append(f'ƒ {flabel}')
+
+        # Y-axis bounds: total count includes func trace slots.
+        total_count = n_sim + len(vis_func)
+        total_height = max(total_count - 1, 0) * spacing + 1.0
         margin = 0.15 * spacing
         self.axes.set_ylim(-margin, total_height + margin)
         self.axes.set_yticks(yticks)
@@ -1864,15 +2342,11 @@ class plotWindow(QWidget):
         self.update_timing_tick_colors()
         self.set_time_axis_label(time_data)
 
-        # Threshold lines: logic_thresholds stores normalized [0,1] position,
-        # so axhline y = threshold_norm + rank * spacing sits correctly within the trace.
+        # Threshold lines for sim signals only.
         for rank, idx in enumerate(visible_indices[::-1]):
             if idx in self.logic_thresholds:
                 self.axes.axhline(y=self.logic_thresholds[idx] + rank * spacing,
                                   color='red', linestyle=':', alpha=THRESHOLD_ALPHA, linewidth=0.8)
-
-        if not self.legend_check.isChecked():
-            self.axes.set_title('Digital Timing Diagram', pad=10)
 
     def _render_pane_stats(self, ax, group: List[int],
                            x_arr: "np.ndarray") -> None:
@@ -1928,6 +2402,38 @@ class plotWindow(QWidget):
                      fontsize=max(7, LEGEND_FONT_SIZE - 1),
                      color='#444444', pad=4)
 
+    def _render_func_pane_stats(self, ax, fx: "np.ndarray", fy: "np.ndarray") -> None:
+        x = np.asarray(fx, dtype=float)
+        y = np.asarray(fy, dtype=float)
+        n = min(len(x), len(y))
+        if n < 2:
+            return
+        x, y = x[:n], y[:n]
+        ymin, ymax = float(np.min(y)), float(np.max(y))
+        pp = ymax - ymin
+        T = float(x[-1] - x[0])
+        if T <= 0:
+            return
+        dc = float(_trapz(y, x) / T)
+        rms_ac = float(np.sqrt(max(0.0, float(_trapz(y * y, x) / T) - dc * dc)))
+
+        def _fmt(v: float) -> str:
+            a = abs(v)
+            if a >= 1:      return f"{v:.3g}"
+            if a >= 1e-3:   return f"{v * 1e3:.3g}m"
+            if a >= 1e-6:   return f"{v * 1e6:.3g}µ"
+            if a >= 1e-9:   return f"{v * 1e9:.3g}n"
+            return f"{v:.3g}"
+
+        parts = [f"p-p={_fmt(pp)}", f"DC={_fmt(dc)}", f"RMS={_fmt(rms_ac)}"]
+        if self._current_analysis_type == 'transient' and pp > 1e-12:
+            freq = _detect_frequency(x, np.where(y > (ymin + ymax) / 2.0, 1.0, 0.0))
+            if freq is not None:
+                parts.append(f"f={_format_frequency(freq)}")
+        ax.set_title("  ".join(parts), loc='right',
+                     fontsize=max(7, LEGEND_FONT_SIZE - 1),
+                     color='#444444', pad=4)
+
     def plot_stacked_diagram(self) -> None:
         """Stacked-pane view: one pane per visible trace + one per func trace.
 
@@ -1939,8 +2445,6 @@ class plotWindow(QWidget):
         Function traces (set by plot_function while stacked is active) tail
         at the bottom as one extra pane each.
         """
-        from matplotlib.ticker import FuncFormatter
-
         # Bring _pane_groups in line with the current visibility set
         self._sync_pane_groups_to_visible()
 
@@ -1965,7 +2469,10 @@ class plotWindow(QWidget):
                 x_data = x_data[start_idx:]
 
         n_groups = len(self._pane_groups)
-        n_funcs = len(self._func_traces)
+        # Only visible func traces get their own pane.
+        _vis_func = [i for i in range(len(self._func_traces))
+                     if i < len(self._func_visible) and self._func_visible[i]]
+        n_funcs = len(_vis_func)
         n = n_groups + n_funcs
         self._build_panes(n)
 
@@ -2025,18 +2532,23 @@ class plotWindow(QWidget):
                 ax.spines['bottom'].set_color('#BDBDBD')
                 ax.spines['bottom'].set_linewidth(1.0)
 
-            if self._pane_stats_visible.get(t.name):
+            if self.stats_check.isChecked():
                 self._render_pane_stats(ax, group, x_data)
 
-        # Trailing function-trace panes. Each gets its own pane below the
-        # group panes. Function X data is in raw SI like everything else,
-        # so the bottom-pane formatter applied at the end covers it too.
-        for f_idx, (label, fx, fy, color) in enumerate(self._func_traces):
-            pane_offset = n_groups + f_idx
+        # Trailing function-trace panes. Only visible func traces get a pane.
+        # _vis_func holds the original indices into _func_traces so labels
+        # and colours stay correct after partial hide/show.
+        for pane_slot, f_idx in enumerate(_vis_func):
+            pane_offset = n_groups + pane_slot
             if pane_offset >= len(self.panes):
                 break
+            label, fx, fy, color, thickness, style = self._func_traces[f_idx]
             ax = self.panes[pane_offset]
-            ax.plot(fx, fy, color=color, linewidth=DEFAULT_LINE_THICKNESS)
+            plot_style = '-' if style == 'steps-post' else style
+            if style == 'steps-post':
+                ax.step(fx, fy, where='post', color=color, linewidth=thickness)
+            else:
+                ax.plot(fx, fy, color=color, linewidth=thickness, linestyle=plot_style)
             ax.set_title(label, loc='left', color=color,
                          fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
             if len(fy):
@@ -2052,6 +2564,9 @@ class plotWindow(QWidget):
                 ax.tick_params(labelbottom=False)
                 ax.spines['bottom'].set_color('#BDBDBD')
                 ax.spines['bottom'].set_linewidth(1.0)
+
+            if self.stats_check.isChecked():
+                self._render_func_pane_stats(ax, fx, fy)
 
         # Bottom-pane X label / formatter. Existing helpers already target
         # self.panes[-1], so the multi-pane case is free.
@@ -2070,7 +2585,6 @@ class plotWindow(QWidget):
         Used when the X axis no longer represents time/frequency — e.g. the
         Lissajous case in plot_function where X becomes a voltage trace.
         """
-        from matplotlib.ticker import ScalarFormatter
         self._x_scale = 1.0
         self._x_unit = ''
         for ax in self.panes:
@@ -2086,7 +2600,6 @@ class plotWindow(QWidget):
         is only attached to the bottom-most pane so stacked panes share one
         unified X axis caption.
         """
-        from matplotlib.ticker import FuncFormatter
         self._x_scale = scale
         self._x_unit = unit
         fmt = FuncFormatter(lambda v, _pos, _s=scale: f"{v * _s:g}")
@@ -2110,14 +2623,14 @@ class plotWindow(QWidget):
         self.axes.set_xlim(float(time_data[0]), float(time_data[-1]))
 
     def on_threshold_changed(self, value: float) -> None:
-        if self.timing_check.isChecked():
-            self.refresh_plot()
+        if self.radio_timing.isChecked():
+            self._controls_timer.start()
 
     def on_spacing_changed(self, value: int) -> None:
         self.vertical_spacing = value / 100.0
         self.spacing_label.setText(f"{self.vertical_spacing:.1f}x")
-        if self.timing_check.isChecked():
-            self.refresh_plot()
+        if self.radio_timing.isChecked():
+            self._controls_timer.start()
 
     def _find_nearest_cursor(self, event) -> Optional[int]:
         """Return cursor index if the click is within 8px of an existing cursor.
@@ -2163,12 +2676,20 @@ class plotWindow(QWidget):
         # is deferred to on_canvas_release to keep drag smooth.
         unit_str = (self._x_unit or '').strip()
         label = self.cursor1_label if cursor_num == 0 else self.cursor2_label
-        label.setText(f"Cursor {cursor_num + 1} @ {x_pos * scale:.4g} {unit_str}")
+        _c_color = '#e53935' if cursor_num == 0 else '#1976d2'
+        label.setText(
+            f'<span style="font-weight:700;color:{_c_color}">C{cursor_num + 1}</span>'
+            f'<span style="color:#999"> @ </span>'
+            f'<span style="font-weight:600;color:#333">{x_pos * scale:.4g} {unit_str}</span>'
+        )
         two_cursors = (len(self.cursor_positions) >= 2
                        and all(p is not None for p in self.cursor_positions[:2]))
         if two_cursors:
             delta_raw = abs(self.cursor_positions[1] - self.cursor_positions[0])
-            self.delta_label.setText(f"ΔX: {delta_raw * scale:.4g} {unit_str}")
+            self.delta_label.setText(
+                f'<span style="font-weight:700;color:#e65100">ΔX</span>'
+                f' <span style="font-family:monospace;font-weight:600;color:#333">{delta_raw * scale:.4g} {unit_str}</span>'
+            )
             self._update_measure_label(delta_raw, scale)
         # Blit path: restore static background, draw only cursor lines, blit.
         # Falls back to draw_idle() if snapshot is stale/missing.
@@ -2216,6 +2737,32 @@ class plotWindow(QWidget):
             if delta_original > 0:
                 self.measure_label.setText(f"Freq: {1.0 / delta_original:.6g} Hz")
 
+    def _cursor_visible_key(self) -> tuple:
+        sim_key = tuple(t.index for t in self.visible_traces)
+        func_key = tuple(i for i, v in enumerate(self._func_visible) if v)
+        return (sim_key, func_key)
+
+    def _get_cursor_interp(self, x_pos: float, cursor_num: int) -> Optional[Dict]:
+        if cursor_num >= len(self._cursor_interp_cache):
+            return None
+        entry = self._cursor_interp_cache[cursor_num]
+        if entry is None:
+            return None
+        if entry['x_pos'] == x_pos and entry['visible_key'] == self._cursor_visible_key():
+            return entry
+        return None
+
+    def _set_cursor_interp(self, x_pos: float, cursor_num: int,
+                           sim_y: Dict, func_y: Dict) -> None:
+        while len(self._cursor_interp_cache) <= cursor_num:
+            self._cursor_interp_cache.append(None)
+        self._cursor_interp_cache[cursor_num] = {
+            'x_pos': x_pos,
+            'visible_key': self._cursor_visible_key(),
+            'sim_y': sim_y,
+            'func_y': func_y,
+        }
+
     def _update_cursor_panel(self, cursor_num: int, x_pos: Optional[float]) -> None:
         """Rebuild the sidebar cursor label with X position + per-signal Y values.
 
@@ -2224,10 +2771,14 @@ class plotWindow(QWidget):
         view where each pane has its own Y scale.
         """
         label_widget = self.cursor1_label if cursor_num == 0 else self.cursor2_label
-        c_name = f"Cursor {cursor_num + 1}"
+        color = '#e53935' if cursor_num == 0 else '#1976d2'
+        c_label = f'C{cursor_num + 1}'
 
         if x_pos is None or not hasattr(self.obj_dataext, 'x'):
-            label_widget.setText(f"{c_name}: Not set")
+            label_widget.setText(
+                f'<b style="color:{color}">{c_label}</b>'
+                f'  <span style="color:#aaa">not set</span>'
+            )
             return
 
         x_full = np.asarray(self.obj_dataext.x, dtype=float)
@@ -2237,22 +2788,70 @@ class plotWindow(QWidget):
         if unit_label:
             x_display += f" {unit_label}"
 
-        lines = [f"{c_name} @ {x_display}"]
+        html = (f'<span style="font-weight:700;color:{color}">{c_label}</span>'
+                f'<span style="color:#999"> @ </span>'
+                f'<span style="font-weight:600;color:#333">{x_display}</span>')
+
         visible = self.visible_traces
-        if visible and len(x_full) >= 2:
-            for t in visible:
-                try:
-                    y_arr = np.asarray(self.obj_dataext.y[t.index], dtype=float)
-                except (IndexError, TypeError):
+        rows = ''
+
+        cached = self._get_cursor_interp(x_pos, cursor_num)
+        if cached:
+            sim_y = cached['sim_y']
+            func_y = cached['func_y']
+        else:
+            sim_y: Dict[int, float] = {}
+            if visible and len(x_full) >= 2:
+                for t in visible:
+                    try:
+                        y_arr = np.asarray(self.obj_dataext.y[t.index], dtype=float)
+                    except (IndexError, TypeError):
+                        continue
+                    n_pts = min(len(y_arr), len(x_full))
+                    if n_pts < 2:
+                        continue
+                    sim_y[t.index] = float(np.interp(x_pos, x_full[:n_pts], y_arr[:n_pts]))
+            func_y: Dict[int, float] = {}
+            for f_idx, (_, fx, fy, _fcolor, *_) in enumerate(self._func_traces):
+                if not (f_idx < len(self._func_visible) and self._func_visible[f_idx]):
                     continue
-                n_pts = min(len(y_arr), len(x_full))
+                n_pts = min(len(fx), len(fy))
                 if n_pts < 2:
                     continue
-                y_val = float(np.interp(x_pos, x_full[:n_pts], y_arr[:n_pts]))
-                unit = 'V' if t.index < self.obj_dataext.volts_length else 'A'
-                lines.append(f"  {t.name}: {_format_measurement(y_val, unit)}")
+                try:
+                    func_y[f_idx] = float(np.interp(x_pos, fx[:n_pts], fy[:n_pts]))
+                except Exception:
+                    continue
+            self._set_cursor_interp(x_pos, cursor_num, sim_y, func_y)
 
-        label_widget.setText("\n".join(lines))
+        for t in visible:
+            y_val = sim_y.get(t.index)
+            if y_val is None:
+                continue
+            unit = 'V' if t.index < self.obj_dataext.volts_length else 'A'
+            value = _format_measurement(y_val, unit)
+            rows += (f'<tr>'
+                     f'<td style="color:#555;padding-right:8px">{t.name}</td>'
+                     f'<td style="font-family:monospace;font-weight:600;color:#333">{value}</td>'
+                     f'</tr>')
+
+        for f_idx, (flabel, _fx, _fy, fcolor, *_) in enumerate(self._func_traces):
+            if not (f_idx < len(self._func_visible) and self._func_visible[f_idx]):
+                continue
+            y_val = func_y.get(f_idx)
+            if y_val is None:
+                continue
+            short = flabel if len(flabel) <= 20 else flabel[:18] + '…'
+            rows += (f'<tr>'
+                     f'<td style="color:{fcolor};padding-right:8px">'
+                     f'ƒ {short}</td>'
+                     f'<td style="font-family:monospace;font-weight:600;color:#333">{y_val:.4g}</td>'
+                     f'</tr>')
+
+        if rows:
+            html += f'<table style="margin-top:4px;margin-bottom:4px">{rows}</table>'
+        label_widget.setText(html)
+        label_widget.updateGeometry()
 
     def _format_cursor_readout(self, x_pos: float) -> str:
         """Single-line "X | sig1=Y1 | sig2=Y2 …" readout at the cursor X.
@@ -2270,21 +2869,56 @@ class plotWindow(QWidget):
         scale = self._x_scale or 1.0
         unit_label = self._x_unit or ''
         parts = [f"X={x_pos * scale:.4g} {unit_label}".rstrip()]
+
+        # Cursor readout is always for cursor 0 (single-cursor mode).
+        cached = self._get_cursor_interp(x_pos, 0)
+        if cached:
+            sim_y = cached['sim_y']
+            func_y = cached['func_y']
+        else:
+            sim_y = {}
+            for t in visible:
+                try:
+                    y_arr = np.asarray(self.obj_dataext.y[t.index], dtype=float)
+                except (IndexError, TypeError):
+                    continue
+                n_pts = min(len(y_arr), len(x_full))
+                if n_pts < 2:
+                    continue
+                try:
+                    sim_y[t.index] = float(np.interp(x_pos, x_full[:n_pts], y_arr[:n_pts]))
+                except Exception:
+                    continue
+            func_y = {}
+            for f_idx, (_, fx, fy, _color, *_) in enumerate(self._func_traces):
+                if not (f_idx < len(self._func_visible) and self._func_visible[f_idx]):
+                    continue
+                n_pts = min(len(fx), len(fy))
+                if n_pts < 2:
+                    continue
+                try:
+                    func_y[f_idx] = float(np.interp(x_pos, fx[:n_pts], fy[:n_pts]))
+                except Exception:
+                    continue
+            self._set_cursor_interp(x_pos, 0, sim_y, func_y)
+
         for t in visible:
-            try:
-                y_arr = np.asarray(self.obj_dataext.y[t.index], dtype=float)
-            except (IndexError, TypeError):
-                continue
-            n_pts = min(len(y_arr), len(x_full))
-            if n_pts < 2:
-                continue
-            try:
-                y_val = float(np.interp(x_pos, x_full[:n_pts], y_arr[:n_pts]))
-            except Exception:
+            y_val = sim_y.get(t.index)
+            if y_val is None:
                 continue
             is_voltage = t.index < self.obj_dataext.volts_length
             unit = 'V' if is_voltage else 'A'
             parts.append(f"{t.name}={_format_measurement(y_val, unit)}")
+
+        for f_idx, (flabel, _fx, _fy, _color, *_) in enumerate(self._func_traces):
+            if not (f_idx < len(self._func_visible) and self._func_visible[f_idx]):
+                continue
+            y_val = func_y.get(f_idx)
+            if y_val is None:
+                continue
+            short = flabel if len(flabel) <= 14 else flabel[:12] + '…'
+            parts.append(f"ƒ({short})={y_val:.4g}")
+
         # Limit total length so it never wraps the status bar
         readout = " | ".join(parts)
         return readout if len(readout) < 220 else readout[:217] + '…'
@@ -2458,7 +3092,10 @@ class plotWindow(QWidget):
                        and all(p is not None for p in self.cursor_positions[:2]))
         if two_cursors:
             delta_raw = abs(self.cursor_positions[1] - self.cursor_positions[0])
-            self.delta_label.setText(f"ΔX: {delta_raw * scale:.4g} {(self._x_unit or '').strip()}")
+            self.delta_label.setText(
+                f'<span style="font-weight:700;color:#e65100">ΔX</span>'
+                f' <span style="font-family:monospace;font-weight:600;color:#333">{delta_raw * scale:.4g} {(self._x_unit or "").strip()}</span>'
+            )
             self._update_measure_label(delta_raw, scale)
         else:
             self.measure_label.setText(self._format_cursor_readout(x_pos))
@@ -2475,9 +3112,9 @@ class plotWindow(QWidget):
                     pass  # already removed by fig.clear()
         self.cursor_lines.clear()
         self.cursor_positions.clear()
-        self.cursor1_label.setText("Cursor 1: Not set")
-        self.cursor2_label.setText("Cursor 2: Not set")
-        self.delta_label.setText("ΔX: --")
+        self.cursor1_label.setText('<b style="color:#e53935">C1</b>  <span style="color:#aaa">not set</span>')
+        self.cursor2_label.setText('<b style="color:#1976d2">C2</b>  <span style="color:#aaa">not set</span>')
+        self.delta_label.setText('<b style="color:#e65100">ΔX</b>  <span style="color:#aaa">—</span>')
         self.measure_label.setText("")
         self.canvas.draw()
 
@@ -2506,6 +3143,28 @@ class plotWindow(QWidget):
         self.cursor_lines = rebuilt
         if rebuilt:
             logger.debug("Restored %d cursor(s) after plot refresh", len(rebuilt))
+
+        # Refresh the sidebar readouts so they reflect the current set of
+        # visible traces.  _update_cursor_panel does interpolated Y lookups
+        # so it must run AFTER panes and _x_scale/_x_unit are fully set up
+        # (which is true: _restore_cursors is the last step of refresh_plot).
+        scale = self._current_axis_scale()
+        for i, x_pos in enumerate(self.cursor_positions):
+            if x_pos is not None:
+                self._update_cursor_panel(i, x_pos)
+        two_cursors = (len(self.cursor_positions) >= 2
+                       and all(p is not None for p in self.cursor_positions[:2]))
+        if two_cursors:
+            delta_raw = abs(self.cursor_positions[1] - self.cursor_positions[0])
+            self.delta_label.setText(
+                f'<span style="font-weight:700;color:#e65100">ΔX</span>'
+                f' <span style="font-family:monospace;font-weight:600;color:#333">'
+                f'{delta_raw * scale:.4g} {(self._x_unit or "").strip()}</span>'
+            )
+            self._update_measure_label(delta_raw, scale)
+        elif self.cursor_positions and self.cursor_positions[0] is not None:
+            self.measure_label.setText(
+                self._format_cursor_readout(self.cursor_positions[0]))
 
     def on_mouse_move(self, event) -> None:
         # Active drags get priority — fast path, no allocations.
@@ -2579,6 +3238,19 @@ class plotWindow(QWidget):
             event.inaxes.set_xlim(xlim[0] + pan_distance, xlim[1] + pan_distance)
         self.canvas.draw()
 
+    def eventFilter(self, obj, event) -> bool:
+        if (obj is self.canvas and
+                event.type() == QtCore.QEvent.Type.Wheel and
+                self._current_view_mode == 'stacked'):
+            mods = event.modifiers()
+            ctrl = Qt.KeyboardModifier.ControlModifier
+            shift = Qt.KeyboardModifier.ShiftModifier
+            if not (mods & ctrl) and not (mods & shift):
+                QtWidgets.QApplication.sendEvent(
+                    self.canvas_scroll.verticalScrollBar(), event)
+                return True
+        return super().eventFilter(obj, event)
+
     def export_image(self) -> None:
         file_name, file_filter = QFileDialog.getSaveFileName(self, "Export Image", "", "PNG Files (*.png);;SVG Files (*.svg);;All Files (*)")
         if file_name:
@@ -2634,101 +3306,158 @@ class plotWindow(QWidget):
     def toggle_legend(self) -> None:
         self.refresh_plot()
 
+    def _resolve_expr(self, expr: str) -> "Tuple[str, Dict[str, np.ndarray]]":
+        """Substitute NGSpice trace names in expr with safe Python identifiers.
+
+        NGSpice names like v(net1), i(r1), v-minus contain characters that
+        are invalid Python identifiers and would cause SyntaxError or wrong
+        AST parses.  This method finds every known trace name in `expr`
+        (longest first to prevent partial-match corruption, e.g. v(n1) inside
+        v(n10)), replaces each with _trace_N_, and builds the corresponding
+        data_map for _safe_eval.
+
+        Pure-identifier names (no special characters) use regex word boundaries
+        so that trace 'v' does not silently replace 'v' inside 'vout'.
+
+        Returns (sanitized_expr, {identifier: array}).
+        """
+        indexed = self._nb_sorted
+        x_len = len(self.obj_dataext.x)
+        data_map: Dict[str, np.ndarray] = {}
+        sanitized = expr
+        for idx, name in indexed:
+            if not name:
+                continue
+            placeholder = f'_trace_{idx}_'
+            escaped = re.escape(name)
+            has_special = bool(re.search(r'[^A-Za-z0-9_]', name))
+            pattern = escaped if has_special else (
+                r'(?<![A-Za-z0-9_])' + escaped + r'(?![A-Za-z0-9_])')
+            if not re.search(pattern, sanitized):
+                continue
+            sanitized = re.sub(pattern, placeholder, sanitized)
+            raw = np.asarray(self.obj_dataext.y[idx], dtype=float)
+            data_map[placeholder] = raw[:x_len]
+        return sanitized, data_map
+
     def plot_function(self) -> None:
-        function_text = self.func_input.text()
+        function_text = self.func_input.text().strip()
         if not function_text:
-            QMessageBox.warning(self, "Input Error", "Function input cannot be empty.")
+            QMessageBox.warning(self, "Input Error", "Function expression cannot be empty.")
+            return
+        if not hasattr(self.obj_dataext, 'NBList') or not self.obj_dataext.NBList:
+            QMessageBox.warning(self, "No Data", "No simulation data loaded.")
             return
 
-        # Remove previous function trace before adding new one
+        if ' vs ' in function_text:
+            self._plot_lissajous(function_text)
+            return
+
+        # Resolve NGSpice trace names → safe identifiers, then evaluate.
+        try:
+            sanitized, data_map = self._resolve_expr(function_text)
+            canonical = _canonical_expr(sanitized)
+            for i, (existing_text, *_) in enumerate(self._func_traces):
+                ex_canonical = (self._func_canonical[i]
+                                if i < len(self._func_canonical) else None)
+                if ex_canonical is None:
+                    try:
+                        ex_san, _ = self._resolve_expr(existing_text)
+                        ex_canonical = _canonical_expr(ex_san)
+                    except Exception:
+                        ex_canonical = existing_text.replace(' ', '')
+                match = ex_canonical == canonical
+                if match:
+                    QMessageBox.information(
+                        self, "Already Plotted",
+                        f"'{existing_text}' is already on the plot.\n"
+                        "(Note: a+b and b+a are treated as equal.)")
+                    return
+            y_data = _safe_eval(sanitized, data_map)
+            x_data = np.asarray(self.obj_dataext.x, dtype=float)
+            n = min(len(x_data), len(y_data))
+            x_data, y_data = x_data[:n], y_data[:n]
+        except ValueError as exc:
+            names = self.obj_dataext.NBList
+            preview = ', '.join(names[:8])
+            if len(names) > 8:
+                preview += f'  … ({len(names)} total)'
+            QMessageBox.warning(
+                self, "Evaluation Error",
+                f"{exc}\n\nAvailable traces:\n{preview}\n\n"
+                "Allowed functions: abs sqrt log log10 exp sin cos tan\n"
+                "Allowed operators: + - * / **")
+            return
+        except Exception as exc:
+            QMessageBox.warning(self, "Evaluation Error", f"Unexpected error: {exc}")
+            return
+
+        func_palette = ['#9C27B0', '#FF6D00', '#00897B', '#5E35B1', '#F4511E']
+        color = func_palette[len(self._func_traces) % len(func_palette)]
+        self._func_traces.append((function_text, x_data, y_data, color, DEFAULT_LINE_THICKNESS, '-'))
+        self._func_canonical.append(canonical)
+        self._func_visible.append(True)
+        self._sync_func_trace_list()
+        self.refresh_plot()
+        self.func_input.clear()
+
+    def _plot_lissajous(self, function_text: str) -> None:
+        """Plot 'signal_y vs signal_x' as an X-Y (Lissajous) curve.
+
+        Lissajous plots repurpose the X axis to a signal rather than time/freq,
+        so they can't coexist with stacked view (shared-X constraint).  The
+        result is drawn directly on self.axes and is NOT stored in _func_traces
+        — it does not survive refresh_plot.  Users who need persistence should
+        disable Stacked View before plotting.
+        """
+        if self._current_view_mode == 'stacked':
+            QMessageBox.information(
+                self, "Lissajous Plot",
+                "X-Y (Lissajous) plotting requires a single time/frequency axis.\n"
+                "Disable Stacked View first.")
+            return
+        parts = function_text.split(' vs ', 1)
+        y_name, x_name = parts[0].strip(), parts[1].strip()
+        if not y_name or not x_name:
+            QMessageBox.warning(self, "Syntax Error",
+                                "Lissajous format: 'signal_y vs signal_x'")
+            return
+        names = self.obj_dataext.NBList
+        missing = [n for n in (y_name, x_name) if n not in names]
+        if missing:
+            preview = ', '.join(names[:8])
+            if len(names) > 8:
+                preview += f'  … ({len(names)} total)'
+            QMessageBox.warning(
+                self, "Trace Not Found",
+                f"Not found: {', '.join(missing)}\n\nAvailable traces:\n{preview}")
+            return
+        x_idx = names.index(x_name)
+        y_idx = names.index(y_name)
+        x_data = np.asarray(self.obj_dataext.y[x_idx], dtype=float)
+        y_data = np.asarray(self.obj_dataext.y[y_idx], dtype=float)
+        n = min(len(x_data), len(y_data))
+        if n == 0:
+            QMessageBox.warning(self, "No Data", "Selected traces contain no data.")
+            return
+        # Remove any previous lissajous line before drawing the new one.
         if self._func_line is not None:
             try:
                 self._func_line.remove()
             except ValueError:
-                pass  # already cleared by a refresh_plot
+                pass
             self._func_line = None
-
-        if ' vs ' in function_text:
-            # Lissajous repurposes the X axis as a voltage/current trace.
-            # In stacked view every pane shares one X under sharex, so this
-            # would obliterate the time alignment of all stacked signals.
-            if self._current_view_mode == 'stacked':
-                QMessageBox.information(
-                    self, "Lissajous Plot",
-                    "X-Y (Lissajous) plotting requires a shared time/frequency "
-                    "axis. Disable Stacked View first.")
-                return
-            parts = function_text.split(' vs ', 1)
-            y_name, x_name = parts[0].strip(), parts[1].strip()
-            if not y_name or not x_name:
-                QMessageBox.warning(self, "Syntax Error", "Use format 'trace1 vs trace2'.")
-                return
-            try:
-                x_idx = self.obj_dataext.NBList.index(x_name)
-                y_idx = self.obj_dataext.NBList.index(y_name)
-                x_data = np.array(self.obj_dataext.y[x_idx], dtype=float)
-                y_data = np.array(self.obj_dataext.y[y_idx], dtype=float)
-                # X-axis no longer time/freq — drop SI-prefix tick formatter.
-                self._reset_x_axis_scaling()
-                is_voltage_x = x_idx < self.volts_length
-                is_voltage_y = y_idx < self.volts_length
-                line, = self.axes.plot(x_data, y_data, label=function_text)
-                self._func_line = line
-                self.axes.set_xlabel(f"{x_name} ({'V' if is_voltage_x else 'A'})")
-                self.axes.set_ylabel(f"{y_name} ({'V' if is_voltage_y else 'A'})")
-            except ValueError:
-                QMessageBox.warning(self, "Trace Not Found", f"Could not find one of the traces: {x_name}, {y_name}")
-                return
-        else:
-            try:
-                data_map = {
-                    name: np.array(self.obj_dataext.y[i], dtype=float)
-                    for i, name in enumerate(self.obj_dataext.NBList)
-                }
-                y_data = _safe_eval(function_text, data_map)
-                x_data = np.array(self.obj_dataext.x, dtype=float)
-            except Exception as e:
-                QMessageBox.warning(self, "Evaluation Error", f"Could not plot function: {e}")
-                return
-
-            if self._current_view_mode == 'stacked':
-                # Stacked: keep the analog traces untouched and append a
-                # dedicated function pane at the bottom. Distinct color
-                # palette so multiple func traces don't collide with each
-                # other or with circuit signals.
-                func_palette = ['#9C27B0', '#FF6D00', '#00897B',
-                                '#5E35B1', '#F4511E']
-                color = func_palette[len(self._func_traces) % len(func_palette)]
-                self._func_traces.append(
-                    (function_text, x_data, y_data, color))
-                self.refresh_plot()
-                return
-            line, = self.axes.plot(x_data, y_data, label=function_text)
-            self._func_line = line
-
+        self._reset_x_axis_scaling()
+        is_voltage_x = x_idx < self.volts_length
+        is_voltage_y = y_idx < self.volts_length
+        line, = self.axes.plot(x_data[:n], y_data[:n], label=function_text)
+        self._func_line = line
+        self.axes.set_xlabel(f"{x_name} ({'V' if is_voltage_x else 'A'})")
+        self.axes.set_ylabel(f"{y_name} ({'V' if is_voltage_y else 'A'})")
         if self.legend_check.isChecked():
             self.position_legend()
         self.canvas.draw()
 
-
-    def multi_meter(self) -> None:
-        visible = [(t.index, t) for t in self.visible_traces]
-        if not visible:
-            QMessageBox.warning(self, "Warning", "Please select at least one waveform")
-            return
-        location_x, location_y = 300, 300
-        for idx, t in visible:
-            rms_value = self.get_rms_value(self.obj_dataext.y[idx])
-            meter = MultimeterWidgetClass(t.name, rms_value, location_x, location_y, idx < self.obj_dataext.volts_length)
-            self._meters.append(meter)  # keep strong ref — no parent, otherwise GC'd
-            if hasattr(self.obj_appconfig, 'dock_dict') and self.obj_appconfig.current_project['ProjectName'] in self.obj_appconfig.dock_dict:
-                self.obj_appconfig.dock_dict[self.obj_appconfig.current_project['ProjectName']].append(meter)
-            location_x += 50
-            location_y += 50
-
-    def get_rms_value(self, data_points: List) -> Decimal:
-        getcontext().prec = 5
-        return Decimal(str(np.sqrt(np.mean(np.square([float(x) for x in data_points])))))
 
     def _plot_analysis_data(self, analysis_type: str) -> None:
         self._current_analysis_type = analysis_type
@@ -2772,6 +3501,22 @@ class plotWindow(QWidget):
         if analysis_type == 'transient':
             self.set_time_axis_label()
 
+        # Overlay visible function traces on the shared axes.
+        # Stacked mode renders these as separate panes in plot_stacked_diagram,
+        # so this block is normal-mode-only (single axes).
+        for _f_idx, (_label, _fx, _fy, _color, _thickness, _style) in enumerate(self._func_traces):
+            if not (_f_idx < len(self._func_visible) and self._func_visible[_f_idx]):
+                continue
+            _n = min(len(_fx), len(_fy))
+            if _n > 0:
+                _plot_style = '-' if _style == 'steps-post' else _style
+                if _style == 'steps-post':
+                    self.axes.step(_fx[:_n], _fy[:_n], where='post',
+                                   color=_color, label=_label, linewidth=_thickness)
+                else:
+                    self.axes.plot(_fx[:_n], _fy[:_n], color=_color,
+                                   label=_label, linewidth=_thickness, linestyle=_plot_style)
+
 
     def on_push_decade(self) -> None:
         self._plot_analysis_data('ac_log')
@@ -2808,7 +3553,9 @@ class plotWindow(QWidget):
     @property
     def _em(self) -> int:
         """Font height in pixels — base unit for all adaptive sizing."""
-        return max(12, QtGui.QFontMetrics(self.font()).height())
+        if self._em_cache is None:
+            self._em_cache = max(12, QtGui.QFontMetrics(self.font()).height())
+        return self._em_cache
 
     @property
     def visible_traces(self) -> List[Trace]:
@@ -2846,8 +3593,11 @@ class plotWindow(QWidget):
         super().resizeEvent(event)
         if self.parent():
             self.parent().updateGeometry()
-        if hasattr(self, 'canvas') and self.canvas:
-            self.canvas.draw_idle()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.FontChange:
+            self._em_cache = None
 
     def sizeHint(self) -> QtCore.QSize:
         em = self._em
