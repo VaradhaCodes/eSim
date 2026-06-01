@@ -1,4 +1,3 @@
-# ngspiceSimulation/data_extraction.py
 """
 Data extraction module for NGSpice simulation results.
 
@@ -120,10 +119,6 @@ class DataExtraction:
         self.analysisType: int = self.TRANSIENT_ANALYSIS
         self.dec: int = 0
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _parse_plot_file(
         self, filepath: str, is_ac: bool = False
     ) -> Tuple[np.ndarray, str, List[str], List[np.ndarray]]:
@@ -175,13 +170,11 @@ class DataExtraction:
         try:
             with open(filepath, 'r') as f:
                 for line in f:
-                    # ---- Fast path: data rows always start with a digit ----
                     if line and line[0].isdigit():
                         if current is not None:
                             current['rows'].append(line)
                         continue
 
-                    # ---- Non-data lines ----
                     stripped = line.strip()
                     if not stripped:
                         continue
@@ -219,7 +212,6 @@ class DataExtraction:
             logger.error(f"Cannot open {filepath}: {e}")
             raise
 
-        # ---- Pass 2: bulk-convert each group with one numpy reader ----
         n_channels = len(all_names)
         arrays: List[Optional[np.ndarray]] = [None] * n_channels
         x_arr = np.array([], dtype=np.float64)
@@ -286,10 +278,6 @@ class DataExtraction:
 
         return self.DC_ANALYSIS, dec
 
-    # ------------------------------------------------------------------
-    # Public interface (matches what plot_window.py expects)
-    # ------------------------------------------------------------------
-
     def openFile(self, file_path: str) -> List[int]:
         """
         Open and process both simulation data files.
@@ -298,28 +286,18 @@ class DataExtraction:
             [analysis_type, dec_flag]
             where analysis_type is AC_ANALYSIS=0, TRANSIENT_ANALYSIS=1, DC_ANALYSIS=2
             and dec_flag=1 for log-scale AC sweep, 0 otherwise.
-
-        Populates:
-            self.x          - 1-D numpy array of x-axis values (time/freq/sweep)
-            self.y          - list of 1-D numpy arrays, one per node/branch
-            self.NBList     - list of all node+branch names (voltage first, then current)
-            self.NBIList    - list of current branch names only
-            self.volts_length - number of voltage nodes
         """
         try:
             v_path = os.path.join(file_path, "plot_data_v.txt")
             i_path = os.path.join(file_path, "plot_data_i.txt")
 
-            # ---- Detect analysis type ----
             analysis_type, dec = self._detect_analysis_type(file_path)
             self.analysisType = analysis_type
             self.dec = dec
             is_ac = (analysis_type == self.AC_ANALYSIS)
 
-            # ---- Parse voltage file ----
             x_arr, x_name, v_names, v_arrays = self._parse_plot_file(v_path, is_ac=is_ac)
 
-            # ---- Parse current file (graceful if missing or empty) ----
             i_names: List[str] = []
             i_arrays: List[np.ndarray] = []
             try:
@@ -329,7 +307,6 @@ class DataExtraction:
             except Exception as e:
                 logger.warning(f"Could not parse current file: {e}")
 
-            # ---- Populate public attributes ----
             self.x = x_arr
             self.volts_length = len(v_names)
             self.NBIList = i_names
@@ -374,9 +351,6 @@ class DataExtraction:
         No-op: x and y are already numpy arrays populated by openFile().
         Kept for backward compatibility with plot_window.py call sequence.
         """
-        # plot_window.py calls: openFile() -> computeAxes() -> numVals()
-        # In the old implementation computeAxes() built self.x and self.y
-        # from self.data. Now openFile() does it all directly.
         pass
 
     def numVals(self) -> List[int]:

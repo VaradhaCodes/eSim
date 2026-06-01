@@ -1,32 +1,3 @@
-# =========================================================================
-#             FILE: Maker.py
-#
-#            USAGE: ---
-#
-#      DESCRIPTION: This define all components of the Makerchip Tab.
-#
-#          OPTIONS: ---
-#     REQUIREMENTS: ---
-#             BUGS: ---
-#            NOTES: ---
-#           AUTHOR: Sumanto Kar, sumantokar@iitb.ac.in, FOSSEE, IIT Bombay
-# ACKNOWLEDGEMENTS: Rahul Paknikar, rahulp@iitb.ac.in, FOSSEE, IIT Bombay
-#                Digvijay Singh, digvijay.singh@iitb.ac.in, FOSSEE, IIT Bombay
-#                Prof. Maheswari R. and Team, VIT Chennai
-#     GUIDED BY: Steve Hoover, Founder Redwood EDA
-#                Kunal Ghosh, VLSI System Design Corp.Pvt.Ltd
-#                Anagha Ghosh, VLSI System Design Corp.Pvt.Ltd
-# OTHER CONTRIBUTERS:
-#                Prof. Madhuri Kadam, Shree L. R. Tiwari College of Engineering
-#                Rohinth Ram, Madras Institue of Technology
-#                Charaan S., Madras Institue of Technology
-#                Nalinkumar S., Madras Institue of Technology
-#  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
-#       CREATED: Monday 29, November 2021
-#      REVISION: Tuesday 25, January 2022
-# =========================================================================
-
-# importing the files and libraries
 import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -36,16 +7,10 @@ import watchdog.events
 import watchdog.observers
 from os.path import expanduser
 home = expanduser("~")
-# import inotify.adapters
-
-# declaring the global variables
-# verilogfile stores the name of the file
-# toggle flag stores the object of the toggling button
 verilogFile = []
 toggle_flag = []
 
 
-# This function is called to accept TOS of makerchip
 def makerchipTOSAccepted(display=True):
     if not os.path.isfile(home + "/.makerchip_accepted"):
         if display:

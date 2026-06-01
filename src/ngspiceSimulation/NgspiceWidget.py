@@ -1,10 +1,3 @@
-"""
-NGSpice Widget Module
-
-This module provides the NgspiceWidget class for running NGSpice simulations
-within a PyQt6 application interface.
-"""
-
 import os
 import shlex
 import logging
@@ -15,25 +8,16 @@ from configuration.Appconfig import Appconfig
 from frontEnd import TerminalUi
 from configparser import ConfigParser
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 
 class NgspiceWidget(QtWidgets.QWidget):
-    """
-    Widget for running NGSpice simulations with terminal interface.
-    
-    This class creates a widget that runs NGSpice processes and displays
-    their output in a terminal interface. It handles simulation execution,
-    logging, and provides status feedback through signals.
-    """
-    
-    # Process error types
+    """Runs an NGSpice simulation and displays output in a terminal widget."""
+
     ERROR_FAILED_TO_START = 0
     ERROR_CRASHED = 1
     ERROR_TIMED_OUT = 2
-    
-    # Message formatting templates
+
     SUCCESS_FORMAT = ('<span style="color:#00ff00; font-size:26px;">'
                      '{}'
                      '</span>')
@@ -42,75 +26,42 @@ class NgspiceWidget(QtWidgets.QWidget):
                      '</span>')
 
     def __init__(self, netlist: str, sim_end_signal: pyqtSignal, plotFlag: Optional[bool] = None) -> None:
-        """
-        Initialize the NgspiceWidget.
-        
-        Creates NGSpice simulation window and runs the simulation process.
-        Handles logging of the NGSpice process, returns simulation status,
-        and calls the plotter. Also checks if running on Linux and starts GAW.
-        
-        Args:
-            netlist: Path to the .cir.out file containing simulation instructions
-            sim_end_signal: Signal emitted to Application class for enabling
-                          simulation interaction and plotting data if successful
-            plotFlag: Whether to show NGSpice plots (True/False)
-        """
         super().__init__()
 
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
                           QtWidgets.QSizePolicy.Policy.Expanding)
-
-        # Set minimum size
         self.setMinimumSize(300, 200)
-        
+
         self.obj_appconfig = Appconfig()
         self.project_dir = self.obj_appconfig.current_project["ProjectName"]
         self.netlist_path = netlist
         self.sim_end_signal = sim_end_signal
-        
         self.plotFlag = plotFlag
         self.command = netlist
         logger.info(f"Value of plotFlag: {self.plotFlag}")
-        
-        # Prepare NGSpice arguments
+
         self.ngspice_args = self._prepare_ngspice_arguments(netlist)
         logger.info(f"NGSpice arguments: {self.ngspice_args}")
 
-        # Set up the main process
         self.process = QtCore.QProcess(self)
         self.terminal_ui = TerminalUi.TerminalUi(self.process, self.ngspice_args)
-        
-        # Set up layout
+
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.addWidget(self.terminal_ui)
 
-        # Configure and start the NGSpice process
         self._configure_process()
         self._start_process()
-        
-        # Start GAW on Linux systems (first instance)
+
         if self._is_linux():
             self._start_gaw_process(netlist)
 
     def _prepare_ngspice_arguments(self, netlist: str) -> List[str]:
-        """
-        Prepare command line arguments for NGSpice.
-        
-        Args:
-            netlist: Path to the netlist file
-            
-        Returns:
-            List of command line arguments for NGSpice
-        """
         raw_file = netlist.replace(".cir.out", ".raw")
         return ['-b', '-r', raw_file, netlist]
 
     def _configure_process(self) -> None:
-        """Configure the NGSpice process with working directory and signals."""
         self.process.setWorkingDirectory(self.project_dir)
         self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.SeparateChannels)
-
-        # Connect process signals
         self.process.readyReadStandardOutput.connect(self._handle_stdout)
         self.process.readyReadStandardError.connect(self._handle_stderr)
         self.process.finished.connect(
@@ -123,29 +74,20 @@ class NgspiceWidget(QtWidgets.QWidget):
         )
 
     def _register_process(self, process: QtCore.QProcess) -> None:
-        """Register a process with the application config tracker."""
         self.obj_appconfig.process_obj.append(process)
         current_project_name = self.obj_appconfig.current_project['ProjectName']
         if current_project_name in self.obj_appconfig.proc_dict:
             self.obj_appconfig.proc_dict[current_project_name].append(process.processId())
 
     def _start_process(self) -> None:
-        """Start the NGSpice process and register it with the application."""
         self.process.start('ngspice', self.ngspice_args)
         logger.debug(f"Process dictionary: {self.obj_appconfig.proc_dict}")
         self._register_process(self.process)
 
     def _is_linux(self) -> bool:
-        """Check if the current operating system is Linux."""
         return os.name != "nt"
 
     def _start_gaw_process(self, netlist: str) -> None:
-        """
-        Start GAW (GTK Analog Waveform viewer) process on Linux.
-        
-        Args:
-            netlist: Path to the netlist file
-        """
         try:
             self.gaw_process = QtCore.QProcess(self)
             raw_file = netlist.replace(".cir.out", ".raw")
@@ -157,7 +99,6 @@ class NgspiceWidget(QtWidgets.QWidget):
 
     @pyqtSlot()
     def _handle_stdout(self) -> None:
-        """Read stdout from the NGSpice process and display in terminal."""
         try:
             data = self.process.readAllStandardOutput().data()
             if data:
@@ -184,23 +125,10 @@ class NgspiceWidget(QtWidgets.QWidget):
         except Exception as e:
             logger.error(f"Error reading stderr: {e}")
 
-    def finish_simulation(self, exit_code: Optional[int], 
+    def finish_simulation(self, exit_code: Optional[int],
                          exit_status: Optional[QtCore.QProcess.ExitStatus],
-                         sim_end_signal: pyqtSignal, 
+                         sim_end_signal: pyqtSignal,
                          has_error_occurred: bool) -> None:
-        """
-        Handle simulation completion and update UI accordingly.
-        
-        This method is called when the NGSpice simulation finishes. It updates
-        the UI state, displays appropriate status messages, and emits signals
-        for plot generation if the simulation was successful.
-        
-        Args:
-            exit_code: Process exit code
-            exit_status: Process exit status
-            sim_end_signal: Signal to emit when simulation ends
-            has_error_occurred: Whether an error occurred during simulation
-        """
         # Skip finished signal if cancellation triggered both finished and error signals
         if not has_error_occurred and self.terminal_ui.simulationCancelled:
             return
@@ -217,10 +145,8 @@ class NgspiceWidget(QtWidgets.QWidget):
             exit_status = self.process.exitStatus()
 
         try:
-            # Update UI state after simulation completion
             self._update_ui_after_simulation()
 
-            # Handle different simulation outcomes
             if self.terminal_ui.simulationCancelled:
                 self._show_cancellation_message()
             elif self._is_simulation_successful(exit_status, exit_code, error_type):
@@ -237,7 +163,6 @@ class NgspiceWidget(QtWidgets.QWidget):
             else:
                 self._show_failure_message(error_type)
 
-            # Scroll terminal to bottom
             self._scroll_terminal_to_bottom()
         except Exception as e:
             logger.error(f"finish_simulation UI error: {e}", exc_info=True)
@@ -246,13 +171,9 @@ class NgspiceWidget(QtWidgets.QWidget):
             sim_end_signal.emit(exit_status, exit_code)
 
     def open_ngspice_plots(self) -> None:
-        """
-        Open NGSpice plotting windows (native NGSpice plots).
-        This function handles both Windows and Linux platforms.
-        """
         logger.info("Opening NGSpice native plots")
-        
-        if os.name == 'nt':  # Windows
+
+        if os.name == 'nt':
             try:
                 parser_nghdl = ConfigParser()
                 config_path = os.path.join('library', 'config', '.nghdl', 'config.ini')
@@ -292,31 +213,18 @@ class NgspiceWidget(QtWidgets.QWidget):
                 logger.error(f"Failed to start Linux NGSpice plots: {e}")
 
     def _update_ui_after_simulation(self) -> None:
-        """Update UI elements after simulation completion."""
         self.terminal_ui.progressBar.setMaximum(100)
         self.terminal_ui.progressBar.setProperty("value", 100)
         self.terminal_ui.cancelSimulationButton.setEnabled(False)
         self.terminal_ui.redoSimulationButton.setEnabled(True)
 
     def _is_simulation_successful(self, exit_status: QtCore.QProcess.ExitStatus,
-                                exit_code: int, 
+                                exit_code: int,
                                 error_type: QtCore.QProcess.ProcessError) -> bool:
-        """
-        Determine if the simulation completed successfully.
-        
-        Args:
-            exit_status: Process exit status
-            exit_code: Process exit code
-            error_type: Process error type
-            
-        Returns:
-            True if simulation was successful, False otherwise
-        """
         return (exit_status == QtCore.QProcess.ExitStatus.NormalExit and
                 exit_code == 0)
 
     def _show_cancellation_message(self) -> None:
-        """Display simulation cancellation message."""
         message_dialog = QtWidgets.QMessageBox()
         message_dialog.setModal(True)
         message_dialog.setIcon(QtWidgets.QMessageBox.Icon.Warning)
@@ -326,25 +234,14 @@ class NgspiceWidget(QtWidgets.QWidget):
         message_dialog.exec()
 
     def _show_success_message(self) -> None:
-        """Display simulation success message in the terminal."""
         success_message = self.SUCCESS_FORMAT.format("Simulation Completed Successfully!")
         self.terminal_ui.simulationConsole.append(success_message)
 
     def _show_failure_message(self, error_type: QtCore.QProcess.ProcessError) -> None:
-        """
-        Display simulation failure message.
-        
-        Args:
-            error_type: Type of process error that occurred
-        """
-        # Display failure message in terminal
         failure_message = self.FAILURE_FORMAT.format("Simulation Failed!")
         self.terminal_ui.simulationConsole.append(failure_message)
 
-        # Determine specific error message
         error_message = self._get_error_message(error_type)
-        
-        # Show error dialog
         error_dialog = QtWidgets.QErrorMessage()
         error_dialog.setModal(True)
         error_dialog.setWindowTitle("Error Message")
@@ -352,15 +249,6 @@ class NgspiceWidget(QtWidgets.QWidget):
         error_dialog.exec()
 
     def _get_error_message(self, error_type: QtCore.QProcess.ProcessError) -> str:
-        """
-        Get appropriate error message based on error type.
-        
-        Args:
-            error_type: Type of process error
-            
-        Returns:
-            Human-readable error message
-        """
         error_messages = {
             QtCore.QProcess.ProcessError.FailedToStart: (
                 'Simulation failed to start. '
@@ -381,10 +269,8 @@ class NgspiceWidget(QtWidgets.QWidget):
         )
 
     def _scroll_terminal_to_bottom(self) -> None:
-        """Scroll the terminal console to the bottom."""
         scrollbar = self.terminal_ui.simulationConsole.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def sizeHint(self) -> QtCore.QSize:
-        """Provide proper size hint."""
         return QtCore.QSize(800, 600)

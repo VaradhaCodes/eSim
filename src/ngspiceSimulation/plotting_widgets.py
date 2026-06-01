@@ -1,17 +1,9 @@
-"""
-Plotting Widgets Module
-
-This module provides custom widgets for the plotting interface including
-collapsible boxes.
-"""
-
 import logging
 from typing import Optional
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QToolButton)
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 

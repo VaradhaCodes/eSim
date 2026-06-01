@@ -43,51 +43,43 @@ from configuration.Appconfig import Appconfig
 from .plotting_widgets import CollapsibleBox
 from .data_extraction import DataExtraction
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
-# Constants
 DEFAULT_WINDOW_WIDTH = 1400
 DEFAULT_WINDOW_HEIGHT = 800
 DEFAULT_DPI = 100
 DEFAULT_FIGURE_SIZE = (10, 8)
 DEFAULT_LINE_THICKNESS = 1.5
-DEFAULT_VERTICAL_SPACING = 1.2 # <-- UI Change: Reverted to original value
+DEFAULT_VERTICAL_SPACING = 1.2
 DEFAULT_ZOOM_FACTOR = 0.9
 CURSOR_ALPHA = 0.7
 THRESHOLD_ALPHA = 0.5
 LEGEND_FONT_SIZE = 9
 DEFAULT_EXPORT_DPI = 300
 
-# Stacked-view sizing. Pane scrolls vertically once N panes need more
-# height than the viewport can comfortably show.
+# pane scrolls vertically once MIN_STACKED_PANE_HEIGHT_PX * N exceeds viewport
 MIN_STACKED_PANE_HEIGHT_PX = 120
 DIVIDER_HIT_TOLERANCE_PX = 6
 
-# Visibility-toggle debounce (ms). Normal view takes the cheap incremental
-# refresh, so it stays at the snappy default. Stacked view fully rebuilds the
-# pane stack per refresh, so it uses a wider window to coalesce a rapid click
-# burst into one rebuild when the user pauses. See _schedule_refresh.
+# stacked view uses a wider debounce to coalesce a rapid-toggle burst into one rebuild
 REFRESH_DEBOUNCE_MS = 80
 STACKED_REFRESH_DEBOUNCE_MS = 160
 
-# Color Constants
 VIBRANT_COLOR_PALETTE = [
-    '#E53935',  # Vivid Red
-    '#1E88E5',  # Strong Blue
-    '#43A047',  # Rich Green
-    '#FB8C00',  # Bright Orange
-    '#8E24AA',  # Deep Purple
-    '#00ACC1',  # Vibrant Teal
-    '#D81B60',  # Strong Pink
-    '#6D4C41',  # Earthy Brown
-    '#FDD835',  # Visible Amber
-    '#039BE5',  # Sky Blue
-    '#C0CA33',  # Lime Green
-    '#37474F'   # Dark Grey
+    '#E53935',
+    '#1E88E5',
+    '#43A047',
+    '#FB8C00',
+    '#8E24AA',
+    '#00ACC1',
+    '#D81B60',
+    '#6D4C41',
+    '#FDD835',
+    '#039BE5',
+    '#C0CA33',
+    '#37474F'
 ]
 
-# Time unit conversion thresholds (more precise)
 TIME_UNIT_THRESHOLD_PS = 1e-9
 TIME_UNIT_THRESHOLD_NS = 1e-6
 TIME_UNIT_THRESHOLD_US = 1e-3
@@ -97,7 +89,6 @@ FREQ_UNIT_THRESHOLD_KHZ = 1e3
 FREQ_UNIT_THRESHOLD_MHZ = 1e6
 FREQ_UNIT_THRESHOLD_GHZ = 1e9
 
-# Line style options
 LINE_STYLES = [
     ('-', "Solid"),
     ('--', "Dashed"),
@@ -105,7 +96,6 @@ LINE_STYLES = [
     ('steps-post', "Step (Post)")
 ]
 
-# Thickness options
 THICKNESS_OPTIONS = [
     (1.0, "1 px"),
     (1.5, "1.5 px"),
@@ -377,21 +367,13 @@ class plotWindow(QWidget):
         self._controls_timer.setSingleShot(True)
         self._controls_timer.setInterval(150)
         self._controls_timer.timeout.connect(self.refresh_plot)
-        # Debounce waveform-visibility toggles. A burst of rapid on/off clicks
-        # restarts this timer, so the (potentially expensive) full plot rebuild
-        # runs ONCE after the burst settles instead of once per click. Stacked
-        # view rebuilds N panes + runs the constrained_layout solver per refresh,
-        # so coalescing here is what keeps rapid toggling responsive. The list
-        # item icon/text still update synchronously, so the UI feels instant.
+        # debounce: coalesces rapid toggles so stacked rebuild runs once after burst settles
         self._refresh_timer: QtCore.QTimer = QtCore.QTimer(self)
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(REFRESH_DEBOUNCE_MS)
         self._refresh_timer.timeout.connect(self.refresh_plot)
         self.traces: Dict[int, Trace] = {}
-        # cursor_lines[i] is the list of per-pane axvlines belonging to cursor i.
-        # Length matches cursor_positions; inner length matches len(self.panes).
-        # An empty inner list means the cursor exists logically but has no rendered
-        # lines yet (e.g. position is None or panes were torn down).
+        # cursor_lines[i]: axvlines per pane; empty inner list = cursor not yet rendered
         self.cursor_lines: List[List[Optional[Line2D]]] = []
         self.cursor_positions: List[Optional[float]] = []
         self._current_analysis_type: str = ''
@@ -403,67 +385,36 @@ class plotWindow(QWidget):
         self._drag_cursor_idx: Optional[int] = None
         self._current_view_mode: str = 'normal'  # 'normal' | 'timing' | 'stacked'
         self.panes: List[Any] = []
-        # Incremental-refresh gate. _drawn_signature is the composition
-        # fingerprint (see _composition_signature) of what is currently
-        # rendered; refresh_plot skips the full fig.clear() teardown when the
-        # next signature matches. _force_full_refresh lets a caller demand a
-        # full rebuild for a change the signature cannot observe (pane reorder,
-        # lock toggle, divider resize, rename). Both reset on data reload.
+        # incremental-refresh: skip full rebuild when composition unchanged; _force_full_refresh overrides
         self._drawn_signature: Optional[tuple] = None
         self._force_full_refresh: bool = False
-        # Layout-freeze handshake (TARGET 2). A stacked rebuild re-enables the
-        # constrained_layout solver, sets this flag, and lets the normal draw
-        # run it ONCE; the draw_event handler then snapshots the solved geometry
-        # and drops the engine so later draws (zoom/pan/cursor) skip the solver.
-        # Freezing in the draw callback is free — it piggybacks on a draw that
-        # was happening anyway, instead of forcing an extra synchronous layout
-        # pass on every toggle (which made rapid stacked toggling lag).
+        # layout freeze: stacked rebuild sets _pending_freeze; draw callback snapshots geometry and drops solver
         self._pending_freeze: bool = False
-        # Display-only X axis scaling. Line data and xlim stay in raw SI units
-        # (seconds / Hz); ticks are formatted as raw * _x_scale at draw time.
+        # display-only scale: line data stays in raw SI; ticks formatted as raw * _x_scale
         self._x_scale: float = 1.0
         self._x_unit: str = 's'
-        # View-state preservation across refresh_plot. Two distinct buckets:
-        # one-shot snapshots (cleared each refresh) and persistent locks.
-        # Both are keyed by anchor trace name so they survive pane reorder
-        # within the same view mode.
+        # view state: one-shot ylim snapshots + persistent locks, both keyed by anchor trace name
         self._saved_xlim: Optional[Tuple[float, float]] = None
         self._saved_pane_ylims: Dict[str, Tuple[float, float]] = {}   # one-shot
         self._locked_ylims: Dict[str, Tuple[float, float]] = {}        # persistent
-        # Stacked-view pane composition. Outer list = pane order (top→bottom);
-        # inner list = trace.index entries plotted on that pane. Empty list
-        # means plot_stacked_diagram falls back to v1 behaviour (one visible
-        # trace per pane). _sync_pane_groups_to_visible keeps this consistent
-        # with the current visibility set on every refresh.
+        # pane groups: outer = pane order, inner = trace indices; empty = one trace per pane
         self._pane_groups: List[List[int]] = []
-        # Lock-Y per pane, keyed by anchor trace name. When True, the pane's
-        # ylim survives refresh regardless of the Autoscale checkbox; the
-        # actual ylim values are held in self._locked_ylims so unlocking is
-        # an O(1) dict pop instead of a search.
+        # pane_lock_y keyed by anchor trace name; actual ylim in _locked_ylims
         self._pane_lock_y: Dict[str, bool] = {}
         self._global_stats_visible: bool = True
-        # Synthetic function traces — each appears as an extra pane at the
-        # bottom of the stacked layout. Tuple = (label, x_array, y_array, hex).
+        # func traces: (label, x, y, color, thickness, style)
         self._func_traces: List[Tuple[str, "np.ndarray", "np.ndarray", str, float, str]] = []
-        # Canonical form of each func trace expression, parallel to _func_traces.
-        # Stored at append time so dup-check in plot_function is O(1) per entry
-        # instead of re-calling _resolve_expr for every existing trace.
+        # canonical expr per func trace for O(1) dup-check
         self._func_canonical: List[str] = []
-        # Parallel visibility list — True means the func trace is drawn.
-        # Toggled via the waveform list (negative UserRole items).
+        # visibility parallel to _func_traces
         self._func_visible: List[bool] = []
-        # NBList sorted longest-first for _resolve_expr. Built once per data load
-        # (and on rename_trace) instead of re-sorting on every expression eval.
+        # sorted longest-first so longer names match before their substrings
         self._nb_sorted: List[Tuple[int, str]] = []
-        # Deferred-restore staging for persisted layout. populate_waveform_list
-        # has to run first (to set up NBList → trace.index), then we resolve
-        # the name-keyed config into index-keyed live state.
+        # pending layout from config, resolved after populate_waveform_list sets up NBList
         self._pending_layout: Optional[Dict[str, Any]] = None
-        # Per-pane height ratios for stacked view. Empty = equal heights.
-        # _sync_pane_groups_to_visible keeps this in lockstep with _pane_groups.
+        # pane height ratios; empty = equal heights
         self._pane_heights: List[float] = []
-        # Transient drag state for divider resize and Alt-drag pane reorder.
-        # Set on mouse press, mutated on motion, cleared on release.
+        # transient drag state for divider resize and pane reorder
         self._divider_drag: Optional[Dict[str, Any]] = None
         self._pane_drag: Optional[Dict[str, Any]] = None
         # Mouse-move dedup: skip setText/anchor lookup when state unchanged.
@@ -472,15 +423,9 @@ class plotWindow(QWidget):
         self._last_coord_text: str = ''
         self._last_cursor_shape_was_resize: bool = False
         self._blit_background: Optional[Any] = None
-        # Per-cursor interp cache: list slot = cursor_num.
-        # Each entry: {'x_pos': float, 'visible_key': tuple,
-        #              'sim_y': dict[int, float], 'func_y': dict[int, float]}
-        # Avoids redundant np.interp calls when cursor hasn't moved (e.g. grid/
-        # legend refresh). Invalidated by load_simulation_data (new data) and
-        # naturally misses when x_pos or visible traces change.
+        # interp cache per cursor; invalidated by new data or x_pos/visible change
         self._cursor_interp_cache: List[Optional[Dict]] = []
-        # Cached .tran start time (seconds) parsed from the analysis file once
-        # in load_simulation_data. 0.0 means no offset / not a .tran sim.
+        # .tran start offset parsed once; 0.0 if not a tran sim
         self._tran_start_time: float = 0.0
 
     def _initialize_configuration(self) -> None:
@@ -925,8 +870,7 @@ class plotWindow(QWidget):
 
     def load_simulation_data(self) -> None:
         self._cursor_interp_cache.clear()
-        # New data invalidates the incremental-refresh fingerprint: the next
-        # refresh must full-rebuild rather than trust stale axes.
+        # new data → force full rebuild on next refresh
         self._drawn_signature = None
         self._tran_start_time = self._parse_tran_start_time()
         self.obj_dataext = DataExtraction()
@@ -942,8 +886,7 @@ class plotWindow(QWidget):
         else:
             self.analysis_label.setText("DC Analysis")
         self.populate_waveform_list()
-        # NBList → trace.index mapping now exists; resolve any persisted
-        # stacked-view layout (name-keyed in the config) into live state.
+        # NBList ready; resolve persisted stacked-view layout
         self._apply_persisted_layout()
         is_transient = self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS
         self.radio_timing.setEnabled(is_transient)
@@ -1081,14 +1024,12 @@ class plotWindow(QWidget):
         in sync (correct count, correct negative UserRole indices, correct
         labels/colours after a middle-of-list removal re-numbers everything).
         """
-        # Remove all existing func trace items (negative UserRole)
         for i in range(self.waveform_list.count() - 1, -1, -1):
             it = self.waveform_list.item(i)
             if it is not None:
                 val = it.data(Qt.ItemDataRole.UserRole)
                 if isinstance(val, int) and val < 0:
                     self.waveform_list.takeItem(i)
-        # Re-add from current _func_traces
         for f_idx, (label, _fx, _fy, color, *_) in enumerate(self._func_traces):
             visible = (self._func_visible[f_idx]
                        if f_idx < len(self._func_visible) else True)
