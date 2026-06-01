@@ -64,6 +64,13 @@ DEFAULT_EXPORT_DPI = 300
 MIN_STACKED_PANE_HEIGHT_PX = 120
 DIVIDER_HIT_TOLERANCE_PX = 6
 
+# Visibility-toggle debounce (ms). Normal view takes the cheap incremental
+# refresh, so it stays at the snappy default. Stacked view fully rebuilds the
+# pane stack per refresh, so it uses a wider window to coalesce a rapid click
+# burst into one rebuild when the user pauses. See _schedule_refresh.
+REFRESH_DEBOUNCE_MS = 80
+STACKED_REFRESH_DEBOUNCE_MS = 160
+
 # Color Constants
 VIBRANT_COLOR_PALETTE = [
     '#E53935',  # Vivid Red
@@ -378,7 +385,7 @@ class plotWindow(QWidget):
         # item icon/text still update synchronously, so the UI feels instant.
         self._refresh_timer: QtCore.QTimer = QtCore.QTimer(self)
         self._refresh_timer.setSingleShot(True)
-        self._refresh_timer.setInterval(80)
+        self._refresh_timer.setInterval(REFRESH_DEBOUNCE_MS)
         self._refresh_timer.timeout.connect(self.refresh_plot)
         self.traces: Dict[int, Trace] = {}
         # cursor_lines[i] is the list of per-pane axvlines belonging to cursor i.
@@ -396,6 +403,22 @@ class plotWindow(QWidget):
         self._drag_cursor_idx: Optional[int] = None
         self._current_view_mode: str = 'normal'  # 'normal' | 'timing' | 'stacked'
         self.panes: List[Any] = []
+        # Incremental-refresh gate. _drawn_signature is the composition
+        # fingerprint (see _composition_signature) of what is currently
+        # rendered; refresh_plot skips the full fig.clear() teardown when the
+        # next signature matches. _force_full_refresh lets a caller demand a
+        # full rebuild for a change the signature cannot observe (pane reorder,
+        # lock toggle, divider resize, rename). Both reset on data reload.
+        self._drawn_signature: Optional[tuple] = None
+        self._force_full_refresh: bool = False
+        # Layout-freeze handshake (TARGET 2). A stacked rebuild re-enables the
+        # constrained_layout solver, sets this flag, and lets the normal draw
+        # run it ONCE; the draw_event handler then snapshots the solved geometry
+        # and drops the engine so later draws (zoom/pan/cursor) skip the solver.
+        # Freezing in the draw callback is free — it piggybacks on a draw that
+        # was happening anyway, instead of forcing an extra synchronous layout
+        # pass on every toggle (which made rapid stacked toggling lag).
+        self._pending_freeze: bool = False
         # Display-only X axis scaling. Line data and xlim stay in raw SI units
         # (seconds / Hz); ticks are formatted as raw * _x_scale at draw time.
         self._x_scale: float = 1.0
@@ -698,6 +721,9 @@ class plotWindow(QWidget):
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
         self.canvas.mpl_connect('scroll_event', self.on_scroll)
+        # Freeze the constrained_layout solver right after a stacked rebuild's
+        # draw has solved it — see _pending_freeze / _on_draw_event.
+        self.canvas.mpl_connect('draw_event', self._on_draw_event)
         self.canvas.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.canvas.installEventFilter(self)
         return center_widget
@@ -899,6 +925,9 @@ class plotWindow(QWidget):
 
     def load_simulation_data(self) -> None:
         self._cursor_interp_cache.clear()
+        # New data invalidates the incremental-refresh fingerprint: the next
+        # refresh must full-rebuild rather than trust stale axes.
+        self._drawn_signature = None
         self._tran_start_time = self._parse_tran_start_time()
         self.obj_dataext = DataExtraction()
         self.plot_type = self.obj_dataext.openFile(self.file_path)
@@ -1212,6 +1241,13 @@ class plotWindow(QWidget):
                 self.update_timing_tick_colors()
                 for ann_text in self.timing_annotations.get(index, []):
                     ann_text.set_color(color)
+            elif self._current_view_mode == 'stacked' and self.panes:
+                for pane_idx, group in enumerate(self._pane_groups):
+                    if group and group[0] == index and pane_idx < len(self.panes):
+                        self.panes[pane_idx].set_title(
+                            self.traces[index].name, loc='left', color=color,
+                            fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
+                        break
         self.save_config()
         self.canvas.draw()
 
@@ -1262,6 +1298,8 @@ class plotWindow(QWidget):
             self._rebuild_nb_sorted()
             self.update_list_item_appearance(item, index)
             if self.legend_check.isChecked():
+                # Name change must re-label the legend; signature can't see it.
+                self._force_full_refresh = True
                 self.refresh_plot()
 
     def toggle_trace_visibility(self, items: List[QListWidgetItem]) -> None:
@@ -1452,7 +1490,7 @@ class plotWindow(QWidget):
         stable even if Y autoscaling slightly changes line ordering.
         """
         for t in self.traces.values():
-            if t.line_object is not None and t.line_object.axes is ax:
+            if t.visible and t.line_object is not None and t.line_object.axes is ax:
                 return t.name
         return None
 
@@ -1466,7 +1504,7 @@ class plotWindow(QWidget):
         result: Dict[int, str] = {}
         for t in self.traces.values():
             lo = t.line_object
-            if lo is not None:
+            if t.visible and lo is not None:
                 ax_id = id(lo.axes)
                 if ax_id not in result:
                     result[ax_id] = t.name
@@ -1585,7 +1623,7 @@ class plotWindow(QWidget):
         # constrained_layout solver. During drag we reposition axes via
         # ax.set_position() so the solver never runs per mouse-move.
         self._drag_ax_positions = [ax.get_position() for ax in self.panes]
-        self.fig.set_constrained_layout(False)
+        self.fig.set_layout_engine('none')
         # Decimate line data so each draw_idle renders far fewer segments.
         # Full data is restored in _finish_divider_drag (or by refresh_plot).
         _MAX_DRAG_PTS = 800
@@ -1690,9 +1728,11 @@ class plotWindow(QWidget):
             if idx in self.traces and self.traces[idx].line_object is not None:
                 self.traces[idx].line_object.set_data(xd, yd)
         self._saved_line_data = {}
-        self.fig.set_constrained_layout(True)
+        self.fig.set_layout_engine('constrained')
         self.canvas.unsetCursor()
         if moved:
+            # Heights changed; pane geometry must be rebuilt + CL re-settled.
+            self._force_full_refresh = True
             self.refresh_plot()
         else:
             self.canvas.draw_idle()
@@ -1729,6 +1769,8 @@ class plotWindow(QWidget):
                 self._pane_heights.insert(to_idx, h)
             else:
                 self._pane_heights.append(h)
+        # Reorder keeps the visible set (signature) the same — force the rebuild.
+        self._force_full_refresh = True
         self.refresh_plot()
 
     def _apply_persisted_layout(self) -> None:
@@ -1928,6 +1970,9 @@ class plotWindow(QWidget):
                 self._pane_heights[pane_idx], self._pane_heights[new_idx] = (
                     self._pane_heights[new_idx], self._pane_heights[pane_idx])
             self._ensure_heights_match_groups()
+            # Pane reorder leaves the visible set (and thus the signature)
+            # unchanged, so force the rebuild that re-lays-out the panes.
+            self._force_full_refresh = True
             self.refresh_plot()
 
     def _toggle_pane_lock(self, anchor: str) -> None:
@@ -1936,12 +1981,17 @@ class plotWindow(QWidget):
         else:
             self._snapshot_pane_for_lock(anchor)
             self._pane_lock_y[anchor] = True
+        # Lock/unlock changes ylim handling, which the fast path skips —
+        # force the full rebuild so _restore_view_state runs.
+        self._force_full_refresh = True
         self.refresh_plot()
 
     def _reset_pane_y(self, anchor: str) -> None:
         self._clear_pane_lock(anchor)
         # Drop one-shot snapshot too so the upcoming refresh gets a fresh fit
         self._saved_pane_ylims.pop(anchor, None)
+        # Need a real re-autoscale of this pane, which only the full path does.
+        self._force_full_refresh = True
         self.refresh_plot()
 
     def _dialog_plot_function(self) -> None:
@@ -2068,30 +2118,121 @@ class plotWindow(QWidget):
         """Coalesce rapid visibility toggles into a single deferred refresh.
 
         Restarting the single-shot timer on each call means a burst of clicks
-        collapses to one refresh_plot once the user stops (80ms idle). Used by
-        every waveform/func-trace visibility toggle; direct refresh_plot calls
+        collapses to one refresh_plot once the user stops. Used by every
+        waveform/func-trace visibility toggle; direct refresh_plot calls
         (view-mode change, autoscale, etc.) cancel any pending tick via the
         stop() at the top of refresh_plot so they never double-rebuild.
+
+        The window is mode-aware: a stacked toggle is a full pane rebuild
+        (tens of ms, growing with pane count), so a wider window is needed to
+        actually collapse a human-paced click burst — otherwise each click
+        (>80ms apart) fires its own rebuild and the view stutters. Normal view
+        toggles take the cheap incremental path, so they stay snappy at 80ms.
+        The list item icon/text update synchronously either way, so clicks
+        always feel instant; only the plot redraw is deferred.
         """
+        self._refresh_timer.setInterval(
+            STACKED_REFRESH_DEBOUNCE_MS if self.radio_stacked.isChecked()
+            else REFRESH_DEBOUNCE_MS)
         self._refresh_timer.start()
+
+    def _composition_signature(self, mode: str) -> tuple:
+        """Fingerprint of everything that determines the pane/artist structure.
+
+        When this is unchanged between two refreshes, the existing axes and
+        Line2D objects are already correct (trace data is static after load),
+        so refresh_plot can skip the full fig.clear() teardown.
+
+        Per mode it captures only what is *structural* for that mode:
+
+        - normal: one shared Axes regardless of how many traces are visible,
+          so the visible set is deliberately EXCLUDED — visibility toggles are
+          handled incrementally via set_visible. What IS structural: the
+          analysis path (plot vs semilogx vs step), which traces use steps
+          (changes the artist type), the visible function-overlay set, and
+          whether the legend is shown.
+        - stacked: one pane per visible trace, so the visible set + per-trace
+          steps flag + visible func panes + stats overlay are all structural.
+        - timing: rows are laid out by the visible set; threshold and spacing
+          change every row's geometry.
+
+        Changes the signature cannot see (pane reorder, divider resize, lock
+        toggle, rename) set self._force_full_refresh instead.
+        """
+        vis_func = tuple(i for i in range(len(self._func_traces))
+                         if i < len(self._func_visible) and self._func_visible[i])
+        if mode == 'normal':
+            steps = tuple(sorted(i for i, t in self.traces.items()
+                                 if t.style == 'steps-post'))
+            return ('normal', self._current_analysis_type, steps, vis_func,
+                    self.legend_check.isChecked())
+        if mode == 'stacked':
+            vis = self.visible_traces
+            return ('stacked',
+                    tuple(t.index for t in vis),
+                    tuple(t.style == 'steps-post' for t in vis),
+                    vis_func,
+                    self.stats_check.isChecked())
+        # timing
+        return ('timing',
+                tuple(t.index for t in self.visible_traces),
+                vis_func,
+                self.threshold_spinbox.value(),
+                self.vertical_spacing)
 
     def refresh_plot(self) -> None:
         # Cancel any pending debounced refresh — this call supersedes it, so a
         # queued timer tick must not fire a second redundant rebuild afterwards.
         self._refresh_timer.stop()
+        force_full = self._force_full_refresh
+        self._force_full_refresh = False
+
+        next_mode = ('timing' if self.radio_timing.isChecked()
+                     else 'stacked' if self.radio_stacked.isChecked()
+                     else 'normal')
+        new_sig = self._composition_signature(next_mode)
+
+        # ── Incremental fast path ────────────────────────────────────────
+        # Taken only when the pane composition is provably unchanged from what
+        # is currently drawn: same mode, matching signature, live panes, and no
+        # caller-forced full rebuild. Then the axes + lines already exist and
+        # are correct, so we avoid fig.clear() entirely.
+        if (not force_full and self.panes
+                and self._drawn_signature is not None
+                and new_sig == self._drawn_signature
+                and self._current_view_mode == next_mode):
+            if next_mode == 'normal':
+                # Normal view keeps ALL prior limits/cursors; only line
+                # visibility may differ. 0-visible needs the placeholder text,
+                # so fall through to the full rebuild for that case.
+                if self.visible_traces:
+                    self._incremental_refresh_normal()
+                    return
+            else:
+                # Stacked/timing: identical composition + static data means the
+                # rendered figure is already correct. Just redraw.
+                for ax in self.panes:
+                    ax.grid(self.grid_check.isChecked())
+                self.canvas.draw_idle()
+                return
+
+        # ── Full rebuild ─────────────────────────────────────────────────
         # Preserve zoom when autoscale is off.
         # Capture only when staying in the SAME ylim-meaningful mode: timing
         # uses [0..N] normalized space, stacked uses per-trace SI units —
         # restoring one across modes would clip signals or scramble panes.
-        next_mode = ('timing' if self.radio_timing.isChecked()
-                     else 'stacked' if self.radio_stacked.isChecked()
-                     else 'normal')
         capture_state = (not self.autoscale_check.isChecked()
                          and self._current_view_mode == next_mode
                          and next_mode in ('normal', 'stacked')
                          and bool(self.panes))
         if capture_state:
             self._capture_view_state()
+
+        # Re-enable constrained_layout before rebuilding: a previous stacked
+        # refresh may have frozen it (engine off + pinned positions). The new
+        # panes must be solved once by CL; _freeze_layout re-freezes at the end
+        # for multi-pane stacked. Cheap single-pane modes stay CL-managed.
+        self.fig.set_layout_engine('constrained')
 
         self._func_line = None  # fig.clear() below wipes all artists
         self.timing_annotations.clear()
@@ -2136,7 +2277,83 @@ class plotWindow(QWidget):
             if self.legend_check.isChecked():
                 self.position_legend()
         self._restore_cursors()
+        # Record what we just drew so the next refresh can skip the rebuild if
+        # nothing structural changed.
+        self._drawn_signature = new_sig
+        # Arm the free post-draw freeze for multi-pane stacked: the draw below
+        # solves CL once, then _on_draw_event pins the result and drops the
+        # engine so later draws skip the solver. Doing this inline (an extra
+        # synchronous layout pass) is what made rapid toggling lag, so we let
+        # the draw we already need do the work. Single-pane modes keep CL on —
+        # cheap there, and it keeps tick-label margins adaptive.
+        self._pending_freeze = (self._current_view_mode == 'stacked'
+                                and len(self.panes) > 1)
         self.canvas.draw_idle()
+
+    def _incremental_refresh_normal(self) -> None:
+        """Update the shared-axes normal view in place — no fig.clear().
+
+        Used when the composition signature is unchanged but trace visibility
+        may have toggled. Reconciles each trace's Line2D (lazily creating one
+        for a newly-visible trace, hiding rather than destroying one that was
+        switched off), then re-fits/legends/cursors exactly as a full rebuild
+        would, all without tearing the figure down.
+        """
+        for idx, t in self.traces.items():
+            if t.visible:
+                if t.line_object is None:
+                    self._draw_normal_trace_line(t)
+                else:
+                    t.line_object.set_visible(True)
+            elif t.line_object is not None:
+                # Keep the artist for cheap re-show; just hide it.
+                t.line_object.set_visible(False)
+
+        # Re-fit only when autoscale is on; otherwise leave the user's zoom.
+        # visible_only=True excludes the hidden (kept) lines from the bounds.
+        if self.autoscale_check.isChecked():
+            self.axes.relim(visible_only=True)
+            self.axes.autoscale_view()
+
+        first_visible = next((i for i in sorted(self.traces)
+                              if self.traces[i].visible), None)
+        if first_visible is not None:
+            self.axes.set_ylabel('Voltage (V)' if first_visible < self.volts_length
+                                 else 'Current (A)')
+
+        if self.legend_check.isChecked():
+            # legend() replaces any existing legend; ≥1 visible is guaranteed
+            # by the caller, so position_legend always has a handle to draw.
+            self.position_legend()
+
+        # Cursor axvlines persist on the live axes (no fig.clear), so they need
+        # no re-creation — but the sidebar readouts depend on the visible set,
+        # which just changed, so refresh those.
+        if any(p is not None for p in self.cursor_positions):
+            self._refresh_cursor_readouts()
+
+        self.canvas.draw_idle()
+
+    def _on_draw_event(self, event) -> None:
+        """Freeze the layout for FREE, right after a stacked rebuild's draw.
+
+        The CL solver (~60% of a stacked draw's Python time) re-runs on every
+        draw — even when pane geometry is unchanged. We can't avoid the one
+        solve that the rebuild's own draw performs, but we CAN stop it repeating
+        on subsequent zoom/pan/cursor draws: this fires after that draw has
+        already solved CL, so we snapshot the EXACT solved positions (margins
+        match CL by construction — rotated y-labels, stats titles included) and
+        drop the engine. No extra layout pass, so rapid toggling stays cheap.
+        """
+        if not (self._pending_freeze and self.panes
+                and self._current_view_mode == 'stacked'
+                and len(self.panes) > 1):
+            return
+        self._pending_freeze = False
+        positions = [ax.get_position().frozen() for ax in self.panes]
+        self.fig.set_layout_engine('none')       # stop the solver
+        for ax, pos in zip(self.panes, positions):
+            ax.set_position(pos)                 # pin the CL-solved geometry
 
     def position_legend(self) -> None:
         if not (self.panes and self.legend_check.isChecked()):
@@ -3143,11 +3360,17 @@ class plotWindow(QWidget):
         self.cursor_lines = rebuilt
         if rebuilt:
             logger.debug("Restored %d cursor(s) after plot refresh", len(rebuilt))
+        self._refresh_cursor_readouts()
 
-        # Refresh the sidebar readouts so they reflect the current set of
-        # visible traces.  _update_cursor_panel does interpolated Y lookups
-        # so it must run AFTER panes and _x_scale/_x_unit are fully set up
-        # (which is true: _restore_cursors is the last step of refresh_plot).
+    def _refresh_cursor_readouts(self) -> None:
+        """Recompute the sidebar cursor labels (C1/C2/ΔX/measure) in place.
+
+        Does interpolated Y lookups against the current visible-trace set, so
+        it must run after panes and _x_scale/_x_unit are set up. Split out of
+        _restore_cursors so the incremental refresh — where the axvlines
+        already exist and must NOT be re-created — can refresh just the
+        readouts when the visible set changes.
+        """
         scale = self._current_axis_scale()
         for i, x_pos in enumerate(self.cursor_positions):
             if x_pos is not None:
@@ -3459,6 +3682,35 @@ class plotWindow(QWidget):
         self.canvas.draw()
 
 
+    def _draw_normal_trace_line(self, t: "Trace",
+                                x_data: "Optional[np.ndarray]" = None) -> "Line2D":
+        """Plot one trace on the shared normal-view axes and store its line.
+
+        Shared by the full rebuild (_plot_analysis_data) and the incremental
+        refresh (_incremental_refresh_normal) so the artist type — step vs
+        semilogx vs plot — is chosen identically on both paths. Branches on
+        self._current_analysis_type, which the full rebuild sets first.
+        """
+        if x_data is None:
+            x_data = np.asarray(self.obj_dataext.x, dtype=float)
+        y_data = np.asarray(self.obj_dataext.y[t.index], dtype=float)
+        n_pts = min(len(x_data), len(y_data))
+        x_plot, y_plot = x_data[:n_pts], y_data[:n_pts]
+        analysis_type = self._current_analysis_type
+        plot_style = '-' if t.style == 'steps-post' else t.style
+        plot_kwargs: dict = {}
+        if t.style == 'steps-post' and analysis_type in ['transient', 'dc']:
+            plot_func = self.axes.step
+            plot_kwargs['where'] = 'post'
+        elif analysis_type == 'ac_log':
+            plot_func = self.axes.semilogx
+        else:
+            plot_func = self.axes.plot
+        line, = plot_func(x_plot, y_plot, color=t.color, label=t.name,
+                          linewidth=t.thickness, linestyle=plot_style, **plot_kwargs)
+        t.line_object = line
+        return line
+
     def _plot_analysis_data(self, analysis_type: str) -> None:
         self._current_analysis_type = analysis_type
         self._build_panes(1)
@@ -3471,21 +3723,7 @@ class plotWindow(QWidget):
             traces_plotted += 1
             if first_visible is None:
                 first_visible = idx
-            y_data = np.asarray(self.obj_dataext.y[idx], dtype=float)
-            n_pts = min(len(x_data), len(y_data))
-            x_plot, y_plot = x_data[:n_pts], y_data[:n_pts]
-            plot_style = '-' if t.style == 'steps-post' else t.style
-            plot_kwargs: dict = {}
-            if t.style == 'steps-post' and analysis_type in ['transient', 'dc']:
-                plot_func = self.axes.step
-                plot_kwargs['where'] = 'post'
-            elif analysis_type == 'ac_log':
-                plot_func = self.axes.semilogx
-            else:
-                plot_func = self.axes.plot
-            line, = plot_func(x_plot, y_plot, color=t.color, label=t.name,
-                              linewidth=t.thickness, linestyle=plot_style, **plot_kwargs)
-            t.line_object = line
+            self._draw_normal_trace_line(t, x_data)
 
         if analysis_type in ['ac_linear', 'ac_log']:
             self.set_freq_axis_label()

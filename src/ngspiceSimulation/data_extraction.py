@@ -41,8 +41,18 @@ AC format (differs from Transient/DC):
   Example: 0\t1.0e+03\t9.96e+00,\t-4.50e+00\t
   Only the real part is stored; the imaginary part is discarded,
   matching the original implementation behaviour.
+
+Performance note (vectorized rewrite):
+  The structural scan (group/page-break detection) stays a cheap per-line
+  branch walk that never converts a number.  All numeric conversion is
+  deferred and done ONCE PER COLUMN GROUP with a single numpy reader
+  (np.loadtxt over the group's data rows), instead of the previous
+  per-cell float() + list.append() loop.  For large transient files
+  (1e5-1e6 rows x N nodes) this turns millions of interpreted float()
+  calls into a handful of C-level parses.
 """
 
+import io
 import os
 import logging
 import numpy as np
@@ -51,6 +61,45 @@ from PyQt6 import QtWidgets
 from configuration.Appconfig import Appconfig
 
 logger = logging.getLogger(__name__)
+
+
+def _block_to_array(rows: List[str], usecols: Tuple[int, ...],
+                    is_ac: bool) -> np.ndarray:
+    """Convert a group's raw data-row strings to a 2-D float64 array.
+
+    `rows` are verbatim file lines (each still ending in '\\n') that start
+    with a digit.  `usecols` selects the x column and the wanted node
+    columns (real parts only, for AC).  Returns shape (n_rows, len(usecols)).
+
+    Fast path: one np.loadtxt over the joined block.  The trailing tab on
+    every ngspice row produces an extra empty field that `usecols` simply
+    never selects, so it needs no special handling.
+
+    Defensive path: if a row is malformed (too few fields), loadtxt raises;
+    we then drop the ragged rows — mirroring the original parser, which
+    skipped any row shorter than the expected width — and retry.  Clean
+    files (the overwhelming common case) never hit this branch.
+    """
+    if not rows:
+        return np.empty((0, len(usecols)), dtype=np.float64)
+
+    text = "".join(rows)
+    if is_ac:
+        # Drop the real-part trailing comma so every field is a bare float.
+        text = text.replace(",", "")
+    try:
+        return np.loadtxt(io.StringIO(text), delimiter="\t",
+                          usecols=usecols, ndmin=2, comments=None)
+    except Exception:
+        max_field = usecols[-1]  # usecols is ascending
+        good = [ln for ln in rows if ln.count("\t") >= max_field]
+        if not good:
+            return np.empty((0, len(usecols)), dtype=np.float64)
+        text = "".join(good)
+        if is_ac:
+            text = text.replace(",", "")
+        return np.loadtxt(io.StringIO(text), delimiter="\t",
+                          usecols=usecols, ndmin=2, comments=None)
 
 
 class DataExtraction:
@@ -79,59 +128,57 @@ class DataExtraction:
         self, filepath: str, is_ac: bool = False
     ) -> Tuple[np.ndarray, str, List[str], List[np.ndarray]]:
         """
-        Parse one ngspice plot file.
+        Parse one ngspice plot file (vectorized).
 
         Returns (x_array, x_name, names, arrays) where names and arrays are
         parallel lists — one entry per output column in file order.
 
         Duplicate column names (ngspice truncates long node names so two
         distinct nodes can share the same string) are preserved as separate
-        entries; each gets its own data list keyed by position, not by name.
+        entries; each gets its own data array keyed by position, not by name.
 
         is_ac=True: each node occupies 2 tab columns ("real,  imag"); only
         the real part is kept (comma stripped), imaginary discarded.
 
-        Line dispatch:
-        - starts with digit      -> data row (fast path)
+        Pass 1 (this method): a cheap per-line scan classifies lines and
+        buckets the raw data-row strings into column groups, exactly like the
+        original state machine — but it never parses a number here:
+        - starts with digit      -> data row (appended verbatim to current group)
         - stripped starts with * -> new column group incoming
         - stripped starts with - -> separator, skip
         - stripped starts 'Index'-> column header (new group or page-break)
         - everything else        -> analysis-type banner, skip
-        """
-        x_list: List[float] = []
-        all_names: List[str] = []           # output channel names (duplicates kept)
-        all_data: List[List[float]] = []    # parallel data lists, one per channel
 
-        x_name: str = 'time'
-        # Indices into all_data for the columns of the current group.
-        # On a page-break (same group, same header) we reuse the same indices.
-        current_indices: Optional[List[int]] = None
+        Pass 2 (_block_to_array): each group's rows are bulk-parsed with one
+        numpy reader.  The x axis is taken from the first group only (all
+        groups share the same time/frequency axis, as ngspice emits them).
+        """
+        cols_per_node = 2 if is_ac else 1
+        x_name = 'time'
+        all_names: List[str] = []          # output channel names (duplicates kept)
+        groups: List[dict] = []            # each: {'indices': [...], 'rows': [str]}
+
+        # Indices into all_names for the columns of the current group.
+        current: Optional[dict] = None
         new_group_incoming: bool = True
-        collecting_x: bool = True
-        cols_per_node: int = 2 if is_ac else 1
+        collecting_x: bool = True          # True only for the first group
+
+        def _open_group(col_names: List[str]) -> dict:
+            indices: List[int] = []
+            for nm in col_names:
+                all_names.append(nm)
+                indices.append(len(all_names) - 1)
+            g = {'indices': indices, 'rows': [], 'collect_x': collecting_x}
+            groups.append(g)
+            return g
 
         try:
             with open(filepath, 'r') as f:
                 for line in f:
                     # ---- Fast path: data rows always start with a digit ----
                     if line and line[0].isdigit():
-                        if current_indices is None:
-                            continue
-                        parts = line.split('\t')
-                        if len(parts) < 2 + cols_per_node * len(current_indices):
-                            continue
-                        try:
-                            x_val = float(parts[1])
-                            if collecting_x:
-                                x_list.append(x_val)
-                            for i, idx in enumerate(current_indices):
-                                if is_ac:
-                                    raw = parts[2 + 2 * i].rstrip(',')
-                                else:
-                                    raw = parts[2 + i]
-                                all_data[idx].append(float(raw))
-                        except (ValueError, IndexError):
-                            continue
+                        if current is not None:
+                            current['rows'].append(line)
                         continue
 
                     # ---- Non-data lines ----
@@ -139,13 +186,14 @@ class DataExtraction:
                     if not stripped:
                         continue
 
-                    if stripped[0] == '*':
+                    first = stripped[0]
+                    if first == '*':
                         new_group_incoming = True
-                        if current_indices is not None:
+                        if current is not None:
                             collecting_x = False
                         continue
 
-                    if stripped[0] == '-':
+                    if first == '-':
                         continue
 
                     if stripped.startswith('Index'):
@@ -153,38 +201,61 @@ class DataExtraction:
                         col_names = parts[2:]
                         if new_group_incoming:
                             x_name = parts[1]
-                            current_indices = []
-                            for name in col_names:
-                                all_names.append(name)
-                                all_data.append([])
-                                current_indices.append(len(all_data) - 1)
+                            current = _open_group(col_names)
                             new_group_incoming = False
-                        elif (current_indices is not None
-                              and col_names != [all_names[i] for i in current_indices]):
-                            # New column group without a * marker (newer ngspice format).
-                            # Distinct column names signal a new signal group, not a
-                            # page-break. Time axis is shared → stop collecting x.
+                        elif (current is not None
+                              and col_names != [all_names[i]
+                                                for i in current['indices']]):
+                            # New column group without a * marker (newer ngspice
+                            # format). Distinct column names signal a new signal
+                            # group, not a page-break. Time axis is shared ->
+                            # stop collecting x.
                             collecting_x = False
-                            current_indices = []
-                            for name in col_names:
-                                all_names.append(name)
-                                all_data.append([])
-                                current_indices.append(len(all_data) - 1)
-                        # else: page-break — same group, same columns, same indices
+                            current = _open_group(col_names)
+                        # else: page-break — same group, same columns, reuse it
                         continue
 
         except OSError as e:
             logger.error(f"Cannot open {filepath}: {e}")
             raise
 
-        x_arr = np.array(x_list, dtype=np.float64)
-        arrays = [np.array(d, dtype=np.float64) for d in all_data]
+        # ---- Pass 2: bulk-convert each group with one numpy reader ----
+        n_channels = len(all_names)
+        arrays: List[Optional[np.ndarray]] = [None] * n_channels
+        x_arr = np.array([], dtype=np.float64)
+
+        for g in groups:
+            indices = g['indices']
+            n_nodes = len(indices)
+            if n_nodes == 0:
+                continue
+            if not g['rows']:
+                for ch_idx in indices:
+                    arrays[ch_idx] = np.array([], dtype=np.float64)
+                continue
+
+            if is_ac:
+                node_cols = tuple(range(2, 2 + 2 * n_nodes, 2))   # reals only
+            else:
+                node_cols = tuple(range(2, 2 + n_nodes))
+            usecols = (1,) + node_cols
+
+            block = _block_to_array(g['rows'], usecols, is_ac)
+            # block columns: [x, node0, node1, ...]
+            if g['collect_x'] and x_arr.size == 0 and block.shape[0] > 0:
+                x_arr = np.ascontiguousarray(block[:, 0], dtype=np.float64)
+            for k, ch_idx in enumerate(indices):
+                arrays[ch_idx] = np.ascontiguousarray(
+                    block[:, 1 + k], dtype=np.float64)
+
+        out_arrays = [a if a is not None else np.array([], dtype=np.float64)
+                      for a in arrays]
 
         logger.debug(
             f"Parsed {filepath}: {len(x_arr)} x-pts, "
-            f"{len(arrays)} channels, x_name='{x_name}'"
+            f"{len(out_arrays)} channels, x_name='{x_name}'"
         )
-        return x_arr, x_name, all_names, arrays
+        return x_arr, x_name, all_names, out_arrays
 
     def _detect_analysis_type(self, file_path: str) -> Tuple[int, int]:
         """
