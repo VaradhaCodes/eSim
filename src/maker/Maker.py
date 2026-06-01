@@ -1,3 +1,32 @@
+# =========================================================================
+#             FILE: Maker.py
+#
+#            USAGE: ---
+#
+#      DESCRIPTION: This define all components of the Makerchip Tab.
+#
+#          OPTIONS: ---
+#     REQUIREMENTS: ---
+#             BUGS: ---
+#            NOTES: ---
+#           AUTHOR: Sumanto Kar, sumantokar@iitb.ac.in, FOSSEE, IIT Bombay
+# ACKNOWLEDGEMENTS: Rahul Paknikar, rahulp@iitb.ac.in, FOSSEE, IIT Bombay
+#                Digvijay Singh, digvijay.singh@iitb.ac.in, FOSSEE, IIT Bombay
+#                Prof. Maheswari R. and Team, VIT Chennai
+#     GUIDED BY: Steve Hoover, Founder Redwood EDA
+#                Kunal Ghosh, VLSI System Design Corp.Pvt.Ltd
+#                Anagha Ghosh, VLSI System Design Corp.Pvt.Ltd
+# OTHER CONTRIBUTERS:
+#                Prof. Madhuri Kadam, Shree L. R. Tiwari College of Engineering
+#                Rohinth Ram, Madras Institue of Technology
+#                Charaan S., Madras Institue of Technology
+#                Nalinkumar S., Madras Institue of Technology
+#  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
+#       CREATED: Monday 29, November 2021
+#      REVISION: Tuesday 25, January 2022
+# =========================================================================
+
+# importing the files and libraries
 import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -7,10 +36,16 @@ import watchdog.events
 import watchdog.observers
 from os.path import expanduser
 home = expanduser("~")
+# import inotify.adapters
+
+# declaring the global variables
+# verilogfile stores the name of the file
+# toggle flag stores the object of the toggling button
 verilogFile = []
 toggle_flag = []
 
 
+# This function is called to accept TOS of makerchip
 def makerchipTOSAccepted(display=True):
     if not os.path.isfile(home + "/.makerchip_accepted"):
         if display:
@@ -431,7 +466,9 @@ class _FileModifiedNotifier(QtCore.QObject):
 
 # The Handler class is used to create a watch on the files using WatchDog
 class Handler(watchdog.events.PatternMatchingEventHandler):
+    # this function initialisses the variable and the objects of watchdog
     def __init__(self, verilogfile, refreshoption, observer):
+        # Set the patterns for PatternMatchingEventHandler
         watchdog.events.PatternMatchingEventHandler.__init__(
             self, ignore_directories=True, case_sensitive=False)
         self.verilogfile = verilogfile
@@ -449,6 +486,7 @@ class Handler(watchdog.events.PatternMatchingEventHandler):
             "NgVeri File: " + verilogfile + " modified. Please click on Refresh")
         msg.exec()
 
+    # if a file is modified, toggle starts to toggle the refresh button
     def on_modified(self, event):
         print("Watchdog received modified event - % s." % event.src_path)
         print("NgVeri File: " + self.verilogfile +
@@ -507,11 +545,13 @@ class Handler(watchdog.events.PatternMatchingEventHandler):
 class toggle(QThread):
     changeStyle = pyqtSignal(str)
 
+    # initialising the threads
     def __init__(self, option):
         QThread.__init__(self)
         self.option = option
         self.changeStyle.connect(option.setStyleSheet)
 
+    # running the thread to toggle
     def run(self):
         while not self.isInterruptionRequested():
             self.changeStyle.emit("background-color: red")
