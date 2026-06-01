@@ -20,7 +20,7 @@ class AutoSchematic(QtWidgets.QWidget):
                 inst_dir + '/KiCad/share/kicad/symbols/eSim_Nghdl.kicad_sym'
         else:
             self.kicad_nghdl_sym = \
-                '/Users/thethtarshwesin/Documents/KiCad/6.0/symbols/eSim_Nghdl.kicad_sym'
+                '/usr/share/kicad/symbols/eSim_Nghdl.kicad_sym'
         self.parser = Appconfig.parser_nghdl
 
     def createKicadSymbol(self):
