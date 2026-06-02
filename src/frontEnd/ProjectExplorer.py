@@ -476,4 +476,3 @@ class ProjectExplorer(QtWidgets.QWidget):
             self.time_explorer.add_snapshot(file_name, formatted_time)
         else:
             print(f"Snapshot taken: {snapshot_path}")
-                    msg.exec()
