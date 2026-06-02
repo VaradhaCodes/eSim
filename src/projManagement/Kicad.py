@@ -207,9 +207,23 @@ class Kicad:
             pass
         # Validating if current project is available or not
         if self.obj_validation.validateKicad(self.projDir):
+            projName = os.path.basename(self.projDir)
+
+            # KiCad >= 7/8 spice export drops connectivity for eSim symbols
+            # (no simulation model), degrading every component to "<ref> __<REF>".
+            # Rebuild <proj>.cir from the schematic via the orcadpcb2 netlist,
+            # which always preserves ref/value/pin->net.
+            try:
+                from kicadtoNgspice import KicadNetlister
+                ok, msg = KicadNetlister.generate_netlist(self.projDir, projName)
+                self.obj_appconfig.print_info('KiCad netlist: ' + msg)
+            except Exception as e:
+                self.obj_appconfig.print_warning(
+                    'Netlist auto-generation skipped: ' + str(e))
+
             # Checking if project has .cir file or not
             if self.obj_validation.validateCir(self.projDir):
-                self.projName = os.path.basename(self.projDir)
+                self.projName = projName
                 self.project = os.path.join(self.projDir, self.projName)
 
                 # Creating a command to run
