@@ -307,10 +307,31 @@ class ModelGeneration(QtWidgets.QWidget):
         self.termtext("Model: " + model + "   Source: " + src)
         self.termtext("Compiler: " + iverilog)
         try:
-            proc = subprocess.run(
-                [iverilog, "-g2012", "-o", out, src],
-                cwd=os.path.abspath(self.modelpath),
-                capture_output=True, text=True, timeout=300)
+            # d_cosim/ivlng needs a timescale to advance VVP ticks; without
+            # one the tick length defaults to 1 second and cbValueChange
+            # never fires for combinational logic.  Inject one transparently
+            # if the user's .v doesn't have `timescale already.
+            compile_src = src
+            tmp_src = None
+            with open(src, 'r') as _f:
+                verilog_text = _f.read()
+            if '`timescale' not in verilog_text:
+                import tempfile
+                tmp_fd, tmp_src = tempfile.mkstemp(
+                    suffix='.v', dir=os.path.abspath(self.modelpath))
+                os.write(tmp_fd,
+                         ('`timescale 1ns/1ps\n' + verilog_text).encode())
+                os.close(tmp_fd)
+                compile_src = tmp_src
+                self.termtext("Note: injected `timescale 1ns/1ps (not present in source)")
+            try:
+                proc = subprocess.run(
+                    [iverilog, "-g2012", "-o", out, compile_src],
+                    cwd=os.path.abspath(self.modelpath),
+                    capture_output=True, text=True, timeout=300)
+            finally:
+                if tmp_src and os.path.isfile(tmp_src):
+                    os.remove(tmp_src)
             if proc.stdout:
                 self.termtext(proc.stdout)
             if proc.returncode != 0 or not os.path.isfile(out):
