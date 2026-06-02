@@ -156,11 +156,15 @@ class ModelGeneration(QtWidgets.QWidget):
         os.chdir(self.cur_dir)
         self.fname = self.fname.split('.')[0] + ".sv"
 
-    def verilogParse(self):
+    def verilogParse(self, make_symbol=True):
         '''
             This function parses the module name and
             input/output ports of verilog code using HDL parse
             and writes to the "connection_info.txt".
+
+            make_symbol=False skips creation of the legacy "Ngveri" KiCad
+            symbol, so the d_cosim flow can reuse the port parsing and then
+            create its own "NgVeriCosim" symbol instead.
         '''
         with open(self.modelpath + self.fname, 'rt') as fh:
             code = fh.read()
@@ -219,12 +223,13 @@ class ModelGeneration(QtWidgets.QWidget):
                 'NgVeri stopped due to file \
                 name and module name not matching error')
             return "Error"
-        modelname = str(m.name)
-        schematicLib = createkicad.AutoSchematic()
-        schematicLib.init(modelname, self.modelpath)
-        error = schematicLib.createKicadSymbol()
-        if error == "Error":
-            return "Error"
+        if make_symbol:
+            modelname = str(m.name)
+            schematicLib = createkicad.AutoSchematic()
+            schematicLib.init(modelname, self.modelpath)
+            error = schematicLib.createKicadSymbol()
+            if error == "Error":
+                return "Error"
         return "No Error"
 
     def getPortInfo(self):
@@ -264,6 +269,59 @@ class ModelGeneration(QtWidgets.QWidget):
             self.input_port.append(input[0] + ":" + input[2])
         for output in self.output_list:
             self.output_port.append(output[0] + ":" + output[2])
+
+    def build_cosim(self, engine="icarus"):
+        '''
+            Build a d_cosim digital artifact for this Verilog model and return
+            its absolute path (or "Error").
+
+            Uses ngspice's d_cosim code model (ngspice >= 44): the Verilog
+            block is loaded at simulation time, so ngspice is never rebuilt
+            (unlike the legacy static Ngveri.cm flow that runs "make install").
+
+            Icarus engine (default): iverilog compiles <model>.v to a vvp-format
+            file named <model> -- NO C/C++ compiler is needed on the user's
+            machine. At simulation time ngspice's ivlng adapter + libvvp run it.
+            Requires self.modelpath populated by verilogfile() with the copied
+            .v present there, and an iverilog built --enable-libvvp.
+        '''
+        import subprocess
+        import shutil
+        model = self.fname.split('.')[0]
+        src = os.path.abspath(os.path.join(self.modelpath, self.fname))
+        out = os.path.abspath(os.path.join(self.modelpath, model))
+
+        if engine != "icarus":
+            self.termtext(
+                "d_cosim engine '" + str(engine) + "' not supported. "
+                "Only the Icarus Verilog engine is available.")
+            return "Error"
+
+        # Prefer the libvvp-enabled iverilog eSim ships; fall back to PATH.
+        iverilog = os.environ.get("ESIM_IVERILOG") or os.path.expanduser(
+            os.path.join("~", "iverilog", "bin", "iverilog"))
+        if not os.path.isfile(iverilog):
+            iverilog = shutil.which("iverilog") or "iverilog"
+
+        self.termtitle("BUILD d_cosim MODEL (icarus)")
+        self.termtext("Model: " + model + "   Source: " + src)
+        self.termtext("Compiler: " + iverilog)
+        try:
+            proc = subprocess.run(
+                [iverilog, "-g2012", "-o", out, src],
+                cwd=os.path.abspath(self.modelpath),
+                capture_output=True, text=True, timeout=300)
+            if proc.stdout:
+                self.termtext(proc.stdout)
+            if proc.returncode != 0 or not os.path.isfile(out):
+                self.termtext(proc.stderr)
+                self.termtext("d_cosim model build FAILED.")
+                return "Error"
+            self.termtext("Built d_cosim model (Icarus vvp): " + out)
+            return out
+        except Exception as e:
+            self.termtext("d_cosim build error: " + str(e))
+            return "Error"
 
     def cfuncmod(self):
         '''

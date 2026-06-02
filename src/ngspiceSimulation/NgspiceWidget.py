@@ -82,9 +82,27 @@ class NgspiceWidget(QtWidgets.QWidget):
     def _start_process(self) -> None:
         ngspice_bin = self._ngspice_binary(self.netlist_path)
         logger.info(f"Using ngspice binary: {ngspice_bin}")
+        if ngspice_bin != "ngspice":
+            # d_cosim run on the bundled ngspice: its Icarus adapter (ivlng)
+            # dlopens libvvp at runtime, so the iverilog lib dir must be on the
+            # loader path.
+            self._add_iverilog_libpath()
         self.process.start(ngspice_bin, self.ngspice_args)
         logger.debug(f"Process dictionary: {self.obj_appconfig.proc_dict}")
         self._register_process(self.process)
+
+    def _add_iverilog_libpath(self) -> None:
+        """Prepend the bundled iverilog lib dir to LD_LIBRARY_PATH so ngspice's
+        ivlng adapter can load libvvp for Icarus Verilog d_cosim."""
+        iv_lib = os.environ.get("ESIM_IVERILOG_LIB") or os.path.expanduser(
+            os.path.join("~", "iverilog", "lib"))
+        if not os.path.isdir(iv_lib):
+            return
+        env = QtCore.QProcessEnvironment.systemEnvironment()
+        existing = env.value("LD_LIBRARY_PATH", "")
+        env.insert("LD_LIBRARY_PATH",
+                   iv_lib + (os.pathsep + existing if existing else ""))
+        self.process.setProcessEnvironment(env)
 
     def _ngspice_binary(self, netlist: str) -> str:
         """Resolve which ngspice executable to run.
