@@ -242,10 +242,20 @@ class NgspiceWidget(QtWidgets.QWidget):
         else:  # Linux/Unix
             try:
                 raw_file = self.command.replace('.cir.out', '.raw')
+                ngspice_bin = self.ngspice_bin
+                # Bundled ngspice46 needs libvvp on the loader path for ivlng
+                ld_prefix = ""
+                if ngspice_bin != "ngspice":
+                    iv_lib_dir = os.environ.get("ESIM_IVERILOG_LIB") or \
+                        os.path.expanduser(os.path.join("~", "iverilog", "lib"))
+                    if os.path.isdir(iv_lib_dir):
+                        ld_prefix = (f"LD_LIBRARY_PATH="
+                                     f"{shlex.quote(iv_lib_dir)}:$LD_LIBRARY_PATH ")
                 # Quote all paths so spaces in project names don't break the shell command
                 xterm_command = (
                     f"cd {shlex.quote(self.project_dir)} && "
-                    f"ngspice -r {shlex.quote(raw_file)} {shlex.quote(self.command)}"
+                    f"{ld_prefix}{shlex.quote(ngspice_bin)}"
+                    f" -r {shlex.quote(raw_file)} {shlex.quote(self.command)}"
                 )
                 self.xterm_process = QtCore.QProcess(self)
                 self.xterm_process.start('xterm', ['-hold', '-e', 'sh', '-c', xterm_command])
