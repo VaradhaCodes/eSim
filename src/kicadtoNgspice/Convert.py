@@ -1,5 +1,6 @@
 import os
 import shutil
+from configparser import ConfigParser
 from xml.etree import ElementTree as ET
 
 from PyQt6 import QtWidgets
@@ -369,6 +370,11 @@ class Convert:
 
         for line in self.obj_track.modelTrack:
             # print "Model Track :",line
+            if line[6] == "NgVeriCosim":
+                cosimLine = self._cosim_model_line(line)
+                if cosimLine:
+                    modelParamValue.append([line[0], cosimLine, line[4]])
+                continue
             if line[2] == 'transfo':
                 try:
                     start = line[7]
@@ -505,6 +511,37 @@ class Convert:
                 schematicInfo.append(item[1])  # Adding model line
 
         return schematicInfo
+
+    def _cosim_model_line(self, line):
+        """Build the d_cosim ".model" line for an NgVeriCosim block and stage
+        its compiled Icarus vvp into the project directory.
+
+        Emits, e.g.:  .model u5 d_cosim simulation="ivlng" sim_args=["adder"]
+        where u5 is the schematic instance (line[3]) and "adder" is the Verilog
+        model name (line[2]) == the vvp basename loaded by ngspice's ivlng
+        adapter. The vvp is copied next to the netlist because ivlng resolves
+        sim_args relative to the ngspice working directory (the project dir).
+        """
+        comp_name = line[3]
+        model_name = line[2]
+        proj_dir = os.path.dirname(self.clarg1)
+
+        try:
+            home = ('library/config' if os.name == 'nt'
+                    else os.path.expanduser('~'))
+            parser = ConfigParser()
+            parser.read(os.path.join(home, '.nghdl', 'config.ini'))
+            digital_home = parser.get('NGHDL', 'DIGITAL_MODEL') + "/Ngveri"
+            vvp_src = os.path.join(digital_home, model_name, model_name)
+            if os.path.isfile(vvp_src):
+                shutil.copy(vvp_src, os.path.join(proj_dir, model_name))
+            else:
+                print("d_cosim: compiled model not found:", vvp_src)
+        except Exception as e:
+            print("d_cosim: could not stage vvp:", str(e))
+
+        return ('.model ' + comp_name + ' d_cosim simulation="ivlng" '
+                'sim_args=["' + model_name + '"] ')
 
     def addMicrocontrollerParameter(self, schematicInfo):
         """
