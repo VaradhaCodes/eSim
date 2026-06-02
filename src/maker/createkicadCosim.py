@@ -102,16 +102,20 @@ class CosimSchematic(createkicad.AutoSchematic):
         if not os.path.isdir(xmlDestination):
             os.makedirs(xmlDestination)
 
-        self.splitText = ""
-        for bit in self.portInfo[:-1]:
-            self.splitText += bit + "-V:"
-        self.splitText += self.portInfo[-1] + "-V"
+        # d_cosim has a fixed 2-port ifspec (d_in vector, d_out vector), so ALL
+        # input bits form one bracket group and ALL output bits another,
+        # regardless of how many separate Verilog ports were declared. (eSim's
+        # PortInfo lumps inout into the input side, which suits the common case.)
+        in_bits = sum(int(self.portInfo[i]) for i in range(self.input_length))
+        out_bits = sum(int(self.portInfo[i])
+                       for i in range(self.input_length, len(self.portInfo)))
+        self.splitText = str(in_bits) + "-V:" + str(out_bits) + "-V"
 
         os.chdir(xmlDestination)
         root = ET.Element("model")
         ET.SubElement(root, "name").text = self.modelname
         ET.SubElement(root, "type").text = "NgVeriCosim"
-        ET.SubElement(root, "node_number").text = str(len(self.portInfo))
+        ET.SubElement(root, "node_number").text = "2"
         ET.SubElement(root, "title").text = (
             "Add parameters for " + str(self.modelname))
         ET.SubElement(root, "split").text = self.splitText
