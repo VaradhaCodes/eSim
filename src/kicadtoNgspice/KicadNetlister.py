@@ -7,59 +7,59 @@
 #                   KiCad >= 7/8 `--format spice` only emits nodes for symbols
 #                   that carry a simulation model; eSim's symbols do not, so that
 #                   export degrades every component to "<ref> __<REF>" with no
-#                   connectivity. The `orcadpcb2` netlist format, however, always
-#                   carries full ref/value/pin->net data, so we generate that via
-#                   kicad-cli and rewrite it into the flat spice form eSim's
-#                   Processing expects:  "<ref> <net-per-pin-in-order> <value>".
+#                   connectivity. We instead use the `kicadxml` netlist, which
+#                   lists every net (including single-node nets such as plot
+#                   markers) with full ref/pin->net data, and rewrite it into the
+#                   flat spice form eSim's Processing expects:
+#                       "<ref> <net-per-pin-in-order> <value>"
 #
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # ==============================================================================
 
 import os
-import re
 import shutil
 import subprocess
-
-# A component header in orcadpcb2:  ( <uuid> <footprint> <refdes> <value>
-_HDR_RE = re.compile(r'^\(\s+(/\S+)\s+(\S+)\s+(\S+)\s+(.+?)\s*$')
-# A pin line:  ( <pin-number> <net-name> )
-_PIN_RE = re.compile(r'^\(\s+(\d+)\s+(\S+)\s+\)\s*$')
+import xml.etree.ElementTree as ET
 
 
 def _sanitize_net(net):
-    """Make a KiCad net name safe as an ngspice node (no parentheses/spaces)."""
-    return net.replace('(', '').replace(')', '').replace(' ', '')
+    """Make a KiCad net name safe + consistent as an ngspice node.
+
+    Strips parentheses/spaces and lowercases (ngspice is case-insensitive; the
+    historical eSim netlist used lowercase, e.g. 'gnd', 'net-_u1-pad1_').
+    """
+    return net.replace('(', '').replace(')', '').replace(' ', '').lower()
 
 
-def orcad_to_spice_lines(orcad_text, title="KiCad schematic"):
-    """Convert orcadpcb2 netlist text to eSim flat-spice component lines."""
-    comps = []          # [(ref, value, [(pin, net), ...]), ...]
-    cur = None
-    for raw in orcad_text.splitlines():
-        s = raw.strip()
-        if not s:
-            continue
-        m = _PIN_RE.match(s)
-        if m and cur is not None:
-            cur[2].append((int(m.group(1)), m.group(2)))
-            continue
-        m = _HDR_RE.match(s)
-        if m:
-            if cur is not None:
-                comps.append(cur)
-            cur = (m.group(3), m.group(4).strip(), [])
-            continue
-        if s == ')' and cur is not None:
-            comps.append(cur)
-            cur = None
-    if cur is not None:
-        comps.append(cur)
+def xml_to_spice_lines(xml_path, title="KiCad schematic"):
+    """Convert a KiCad `kicadxml` netlist into eSim flat-spice component lines."""
+    root = ET.parse(xml_path).getroot()
+
+    # Component reference -> value, preserving document order.
+    order_refs = []
+    values = {}
+    for comp in root.iter('comp'):
+        ref = comp.get('ref')
+        order_refs.append(ref)
+        v = comp.find('value')
+        values[ref] = (v.text or '').strip() if v is not None else ''
+
+    # Component reference -> [(pin_order, net_name), ...]
+    pins = {}
+    for net in root.iter('net'):
+        raw = net.get('name') or ('net' + (net.get('code') or '0'))
+        net_clean = _sanitize_net(raw)
+        for node in net.findall('node'):
+            ref = node.get('ref')
+            pin = node.get('pin') or ''
+            order = int(pin) if pin.isdigit() else 0
+            pins.setdefault(ref, []).append((order, net_clean))
 
     lines = ['.title ' + title]
-    for ref, value, pins in comps:
-        pins.sort(key=lambda p: p[0])
-        nets = ' '.join(_sanitize_net(n) for _, n in pins)
-        lines.append((ref.lower() + ' ' + nets + ' ' + value).strip())
+    for ref in order_refs:
+        nodelist = sorted(pins.get(ref, []), key=lambda t: t[0])
+        nets = ' '.join(n for _, n in nodelist)
+        lines.append((ref.lower() + ' ' + nets + ' ' + values.get(ref, '')).strip())
     lines.append('.end')
     return lines
 
@@ -69,7 +69,7 @@ def _kicad_cli():
 
 
 def generate_netlist(proj_dir, proj_name):
-    """Regenerate <proj>.cir from <proj>.kicad_sch via kicad-cli orcadpcb2.
+    """Regenerate <proj>.cir from <proj>.kicad_sch via kicad-cli kicadxml.
 
     Returns (ok, message). Leaves any existing .cir untouched on failure so the
     legacy/manual workflow still applies.
@@ -82,19 +82,16 @@ def generate_netlist(proj_dir, proj_name):
     if not cli:
         return False, "kicad-cli not found; using existing .cir if present."
 
-    orcad_path = os.path.join(proj_dir, proj_name + '.orcad.tmp')
+    xml_path = os.path.join(proj_dir, proj_name + '.netlist.xml')
     try:
         proc = subprocess.run(
-            [cli, 'sch', 'export', 'netlist', '--format', 'orcadpcb2',
-             '-o', orcad_path, sch],
+            [cli, 'sch', 'export', 'netlist', '--format', 'kicadxml',
+             '-o', xml_path, sch],
             capture_output=True, text=True, timeout=120)
-        if proc.returncode != 0 or not os.path.isfile(orcad_path):
+        if proc.returncode != 0 or not os.path.isfile(xml_path):
             return False, "kicad-cli netlist export failed: " + proc.stderr
 
-        with open(orcad_path, 'r') as fh:
-            orcad_text = fh.read()
-        lines = orcad_to_spice_lines(orcad_text, title=proj_name)
-
+        lines = xml_to_spice_lines(xml_path, title=proj_name)
         cir_path = os.path.join(proj_dir, proj_name + '.cir')
         with open(cir_path, 'w') as fh:
             fh.write('\n'.join(lines) + '\n')
@@ -102,8 +99,8 @@ def generate_netlist(proj_dir, proj_name):
     except Exception as e:
         return False, "Netlist generation error: " + str(e)
     finally:
-        if os.path.isfile(orcad_path):
-            os.remove(orcad_path)
+        if os.path.isfile(xml_path):
+            os.remove(xml_path)
 
 
 if __name__ == '__main__':
