@@ -307,11 +307,18 @@ class DataExtraction:
             except Exception as e:
                 logger.warning(f"Could not parse current file: {e}")
 
+            event_names: List[str] = []
+            event_arrays: List[np.ndarray] = []
+            event_path = os.path.join(file_path, 'plot_data_event.txt')
+            if os.path.exists(event_path):
+                event_names, event_arrays = self._parse_event_file(
+                    event_path, x_arr)
+
             self.x = x_arr
-            self.volts_length = len(v_names)
+            self.volts_length = len(v_names) + len(event_names)
             self.NBIList = i_names
-            self.NBList = v_names + i_names
-            self.y = v_arrays + i_arrays
+            self.NBList = v_names + event_names + i_names
+            self.y = v_arrays + event_arrays + i_arrays
 
             # self.data kept as non-empty so numVals() won't crash on old
             # callers that still reach for data[0] - we give it one dummy row
@@ -345,6 +352,91 @@ class DataExtraction:
             except Exception:
                 pass
             return [self.TRANSIENT_ANALYSIS, 0]
+
+    def _parse_event_file(
+        self, filepath: str, tran_x: np.ndarray
+    ) -> Tuple[List[str], List[np.ndarray]]:
+        """Parse ngspice eprint event file and resample onto tran_x time axis.
+
+        eprint format:
+          **** Results Data ****
+          (blank)
+          Time or Step
+          node1
+          node2
+          (blank)
+          <time>    <state1>    <state2>
+          ...
+          **** Messages ****
+
+        States: '0s'/'0u'/... -> 0 V, '1s'/'1u'/... -> 5 V, 'Us'/'Xu' -> 2.5 V.
+        Step-hold resampling places the last event state at each analog time point.
+        """
+        if not os.path.exists(filepath) or tran_x.size == 0:
+            return [], []
+
+        node_names: List[str] = []
+        events: list = []
+        in_data = False
+        header_done = False
+
+        try:
+            with open(filepath, 'r') as f:
+                for line in f:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    if s == '**** Results Data ****':
+                        in_data = True
+                        continue
+                    if not in_data:
+                        continue
+                    if s.startswith('****'):
+                        break
+                    if s == 'Time or Step':
+                        header_done = False
+                        continue
+                    if not header_done:
+                        if s[0].isdigit() or s[0] == '-':
+                            header_done = True
+                        else:
+                            node_names.append(s)
+                            continue
+                    if header_done and s and (s[0].isdigit() or s[0] == '-'):
+                        parts = s.split()
+                        try:
+                            t = float(parts[0])
+                            events.append((t, parts[1:]))
+                        except (ValueError, IndexError):
+                            pass
+        except OSError as e:
+            logger.warning(f"Cannot open event file {filepath}: {e}")
+            return [], []
+
+        if not node_names or not events:
+            return [], []
+
+        _STATE = {'0': 0.0, '1': 5.0, 'U': 2.5, 'X': 2.5}
+
+        def _sv(s: str) -> float:
+            return _STATE.get(s[0].upper() if s else 'U', 0.0)
+
+        event_times = np.array([e[0] for e in events], dtype=np.float64)
+        n = len(node_names)
+        arrays: List[np.ndarray] = []
+        for i in range(n):
+            sv = np.array([_sv(e[1][i]) if i < len(e[1]) else 0.0
+                           for e in events], dtype=np.float64)
+            idx = np.clip(
+                np.searchsorted(event_times, tran_x, side='right') - 1,
+                0, len(sv) - 1)
+            arrays.append(sv[idx].copy())
+
+        logger.info(
+            f"Event file parsed: {n} nodes, {len(events)} events "
+            f"-> resampled to {len(tran_x)} pts"
+        )
+        return node_names, arrays
 
     def computeAxes(self) -> None:
         """
