@@ -80,9 +80,38 @@ class NgspiceWidget(QtWidgets.QWidget):
             self.obj_appconfig.proc_dict[current_project_name].append(process.processId())
 
     def _start_process(self) -> None:
-        self.process.start('ngspice', self.ngspice_args)
+        ngspice_bin = self._ngspice_binary(self.netlist_path)
+        logger.info(f"Using ngspice binary: {ngspice_bin}")
+        self.process.start(ngspice_bin, self.ngspice_args)
         logger.debug(f"Process dictionary: {self.obj_appconfig.proc_dict}")
         self._register_process(self.process)
+
+    def _ngspice_binary(self, netlist: str) -> str:
+        """Resolve which ngspice executable to run.
+
+        d_cosim (Verilog co-simulation) needs ngspice >= 44. eSim installs a
+        d_cosim-capable build at ~/ngspice46. To avoid disturbing existing
+        (legacy XSPICE .cm) projects, that build is used only when the netlist
+        actually contains a d_cosim model; everything else keeps using the
+        system 'ngspice'. Override with the ESIM_NGSPICE environment variable.
+        """
+        override = os.environ.get("ESIM_NGSPICE")
+        if override and os.path.isfile(override):
+            return override
+        bundled = os.path.expanduser(
+            os.path.join("~", "ngspice46", "bin", "ngspice"))
+        if os.path.isfile(bundled) and self._netlist_uses_dcosim(netlist):
+            return bundled
+        return "ngspice"
+
+    @staticmethod
+    def _netlist_uses_dcosim(netlist: str) -> bool:
+        """True if the netlist instantiates a d_cosim code-model block."""
+        try:
+            with open(netlist, "r") as handle:
+                return "d_cosim" in handle.read().lower()
+        except OSError:
+            return False
 
     def _is_linux(self) -> bool:
         return os.name != "nt"
