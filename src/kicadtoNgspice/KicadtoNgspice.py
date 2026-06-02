@@ -121,23 +121,18 @@ class MainWindow(QtWidgets.QWidget):
         """
         if unknownModelList:
             print("Unknown Model List is : ", unknownModelList)
-            self.msg = QtWidgets.QErrorMessage()
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Unknown Models")
-            self.content = "Your schematic contain unknown model " + \
-                           ', '.join(unknownModelList)
-            self.msg.showMessage(self.content)
-            self.msg.exec()
+            QtWidgets.QMessageBox.warning(
+                None, "Unknown Models",
+                "Your schematic contains unknown model(s): " +
+                ', '.join(unknownModelList)
+            )
 
         elif multipleModelList:
-            self.msg = QtWidgets.QErrorMessage()
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Multiple Models")
-            self.mcontent = "Look like you have duplicate model in \
-            modelParamXML directory " + \
-                            ', '.join(multipleModelList[0])
-            self.msg.showMessage(self.mcontent)
-            self.msg.exec()
+            QtWidgets.QMessageBox.warning(
+                None, "Multiple Models",
+                "Duplicate model found in modelParamXML directory: " +
+                ', '.join(multipleModelList[0])
+            )
 
         else:
             self.createMainWindow()
@@ -871,6 +866,16 @@ class MainWindow(QtWidgets.QWidget):
         out = open(outfile, "w")
         out.writelines(infoline)
         out.writelines('\n')
+        # Verilog co-simulators loaded by the d_cosim code model (Icarus
+        # ivlng/vvp) are one-shot: the vvp runs to completion once and cannot
+        # be reset. With `ngspice -b`, an analysis *card* (.tran/.ac/...) is
+        # auto-run, and a `.control` `run` runs it a second time -- that pass
+        # reuses the finished vvp ("already run", 0 ports, mismatched counts).
+        # For such netlists, run the analysis exactly once inside `.control`
+        # and drop the analysis card. Non-d_cosim netlists are unchanged.
+        uses_dcosim = any(
+            'd_cosim' in str(line).lower() for line in store_schematicInfo)
+
         sections = [
             simulatorOption,
             initialCondOption,
@@ -878,6 +883,8 @@ class MainWindow(QtWidgets.QWidget):
             analysisOption]
 
         for section in sections:
+            if uses_dcosim and section is analysisOption:
+                continue        # moved into .control below (single run)
             if len(section) == 0:
                 continue
             else:
@@ -887,7 +894,12 @@ class MainWindow(QtWidgets.QWidget):
 
         out.writelines('\n* Control Statements \n')
         out.writelines('.control\n')
-        out.writelines('run\n')
+        if uses_dcosim:
+            for line in analysisOption:
+                # '.tran 1e-3 15e-3 0' -> 'tran 1e-3 15e-3 0' (runs once)
+                out.writelines(line.strip().lstrip('.') + '\n')
+        else:
+            out.writelines('run\n')
         # out.writelines(outputOption)
         out.writelines('print allv > plot_data_v.txt\n')
         out.writelines('print alli > plot_data_i.txt\n')
