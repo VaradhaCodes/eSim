@@ -43,8 +43,10 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.ngspice_args = self._prepare_ngspice_arguments(netlist)
         logger.info(f"NGSpice arguments: {self.ngspice_args}")
 
+        self.ngspice_bin = self._ngspice_binary(netlist)
         self.process = QtCore.QProcess(self)
-        self.terminal_ui = TerminalUi.TerminalUi(self.process, self.ngspice_args)
+        self.terminal_ui = TerminalUi.TerminalUi(
+            self.process, self.ngspice_args, self.ngspice_bin)
 
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.addWidget(self.terminal_ui)
@@ -80,8 +82,8 @@ class NgspiceWidget(QtWidgets.QWidget):
             self.obj_appconfig.proc_dict[current_project_name].append(process.processId())
 
     def _start_process(self) -> None:
-        ngspice_bin = self._ngspice_binary(self.netlist_path)
-        logger.info(f"Using ngspice binary: {ngspice_bin}")
+        ngspice_bin = self.ngspice_bin
+        print("eSim: launching ngspice ->", ngspice_bin)
         if ngspice_bin != "ngspice":
             # d_cosim run on the bundled ngspice: its Icarus adapter (ivlng)
             # dlopens libvvp at runtime, so the iverilog lib dir must be on the
