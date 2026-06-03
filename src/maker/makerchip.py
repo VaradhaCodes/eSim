@@ -30,6 +30,7 @@
 from PyQt6 import QtWidgets
 from . import Maker
 from . import NgVeri
+from . import VerilogVerifier as VerilogVerifierModule
 
 # filecount is used to count thenumber of objects created
 filecount = 0
@@ -63,25 +64,35 @@ class makerchip(QtWidgets.QWidget):
         self.setWindowTitle("Makerchip and Verilog to Ngspice Converter")
         self.show()
 
-    # Creating the maker and ngveri widgets
+    # Creating the maker, ngveri, and verilog verifier widgets
     def createWidget(self):
         global obj_Maker
+        global obj_NgVeri
+        global obj_VerilogVerifier
         global filecount
         self.convertWindow = QtWidgets.QWidget()
+        self._widget_filecount = filecount
 
         self.MakerTab = QtWidgets.QScrollArea()
         obj_Maker = Maker.Maker(filecount)
         self.MakerTab.setWidget(obj_Maker)
         self.MakerTab.setWidgetResizable(True)
 
-        global obj_NgVeri
         self.NgVeriTab = QtWidgets.QScrollArea()
         obj_NgVeri = NgVeri.NgVeri(filecount)
         self.NgVeriTab.setWidget(obj_NgVeri)
         self.NgVeriTab.setWidgetResizable(True)
+
+        self.VerilogVerifierTab = QtWidgets.QScrollArea()
+        obj_VerilogVerifier = VerilogVerifierModule.VerilogVerifier()
+        obj_VerilogVerifier.sendToNgVeri.connect(self._on_send_to_ngveri)
+        self.VerilogVerifierTab.setWidget(obj_VerilogVerifier)
+        self.VerilogVerifierTab.setWidgetResizable(True)
+
         self.tabWidget = QtWidgets.QTabWidget()
         self.tabWidget.addTab(self.MakerTab, "Makerchip")
         self.tabWidget.addTab(self.NgVeriTab, "NgVeri")
+        self.tabWidget.addTab(self.VerilogVerifierTab, "Verilog Verifier")
         # The object refresh gets destroyed when Ngspice\
         # to verilog converter is called
         # so calling refresh_change to start toggling of refresh again
@@ -93,3 +104,9 @@ class makerchip(QtWidgets.QWidget):
         # incrementing filecount for every new window
         filecount = filecount + 1
         return self.convertWindow
+
+    def _on_send_to_ngveri(self, filepath):
+        fc = self._widget_filecount
+        if fc < len(Maker.verilogFile):
+            Maker.verilogFile[fc] = filepath
+        self.tabWidget.setCurrentIndex(1)
