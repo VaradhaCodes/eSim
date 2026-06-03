@@ -201,11 +201,22 @@ class AutoSchematic:
         os.chdir(self.lib_loc)
         print("Changing directory to ", self.lib_loc)
 
-        # Removing ")" from "eSim_Ngveri.kicad_sym"
+        # Strip the outer lib terminator ')' so we can append a new symbol.
+        # The terminator is always a lone ')' on its own line at the very end.
+        # Using a regex avoids the brittle [:-2] slice which corrupts the header
+        # when the file was manually edited to contain only the header line.
+        _LIB_HEADER = (
+            "(kicad_symbol_lib (version 20211014) "
+            "(generator kicad_symbol_editor)\n\n"
+        )
         file = open(self.kicad_ngveri_sym, "r")
         content_file = file.read()
-        new_content_file = content_file[:-2]
         file.close()
+        new_content_file = re.sub(r'\n\)\s*$', '', content_file)
+        # Reinitialise if the content is empty or lacks the lib header
+        # (covers fresh files, user-cleared files, and corrupted files).
+        if not new_content_file.lstrip().startswith('(kicad_symbol_lib'):
+            new_content_file = _LIB_HEADER
         file = open(self.kicad_ngveri_sym, "w")
         file.write(new_content_file)
         file.close()
@@ -216,13 +227,6 @@ class AutoSchematic:
         line1 = line1.split()
         line1 = [w.replace('comp_name', self.modelname) for w in line1]
         self.template["start_def"] = ' '.join(line1)
-
-        if os.stat(self.kicad_ngveri_sym).st_size == 0:
-            sym_file.write(
-                "(kicad_symbol_lib (version 20211014) " +
-                "(generator kicad_symbol_editor)" +
-                "\n\n"
-            )                       # Eeschema starter code
 
         # sym_file.write("#encoding utf-8"+ "\n"+ "#"+ "\n" +
         # "#test_compo" + "\n"+ "#"+ "\n")

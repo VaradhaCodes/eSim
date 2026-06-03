@@ -153,3 +153,39 @@ Icarus)" → builds vvp + `NgVeriCosim` symbol → place symbol from
 - ngspice cosim source: `~/src/ngspice-46/src/xspice/verilog/` (icarus_shim.c,
   vpi.c) + `src/xspice/icm/digital/d_cosim/ifspec.ifs`
 - ngspice examples: `~/src/ngspice-46/examples/xspice/icarus_verilog/`
+
+## SESSION UPDATE: Digital Node Plotting, UI Fixes, & The Timescale Bug
+
+**Date:** 2026-06-03 · **Branch:** `feature/ngveri-dcosim`
+
+### 1. FEATURE: Digital/Event Node Plotting in eSim Waveform Viewer
+**The Problem:** eSim's Python plotting relies on `plot_data_v.txt` generated via the `print allv` command. However, `allv` only captures *analog* nodes. Pure digital/event nodes (like `adc_bridge` outputs, e.g., `plot_v_in_msb`) were invisible in the standard eSim plots, and batch mode ignores native `plot` commands.
+**The Fix:** Implemented a focused, two-phase capture system to explicitly extract event nodes without breaking the global analog flow:
+* **Netlist Generation (`src/kicadtoNgspice/KicadtoNgspice.py`):** Added `_get_event_plot_nodes()` to scan the schematic info for `.model` definitions (`adc_bridge`, `d_cosim`, `dac_bridge`) and isolate explicitly probed event nodes. It automatically injects an `eprint` command (e.g., `eprint plot_v_in_msb > plot_data_event.txt`) into the `.control` block.
+* **Data Extraction (`src/ngspiceSimulation/data_extraction.py`):** Added `_parse_event_file()`. This parses the `eprint` output, maps digital logic states to analog voltages (`0s`/`0u` $\rightarrow$ 0V, `1s`/`1u` $\rightarrow$ 5V, `Us`/`Xu` $\rightarrow$ 2.5V), and step-hold resamples the data onto the analog transient time axis (`tran_x`). These arrays are merged seamlessly into the standard node lists.
+* **Commit:** `62b101cc`
+
+### 2. BUG FIX: Native "Ngspice Plots" UI Button Crash
+**The Problem:** Clicking the "Ngspice Plots" button in the eSim GUI opened an xterm session using the system's legacy `ngspice` (v35) binary, which immediately crashed when encountering `d_cosim` elements.
+**The Fix:**
+* Patched `open_ngspice_plots()` in `src/ngspiceSimulation/NgspiceWidget.py`. 
+* It now dynamically uses `self.ngspice_bin` (resolving to v46 for `d_cosim` netlists).
+* Injected `LD_LIBRARY_PATH=$HOME/iverilog/lib` into the xterm execution string so the bundled ngspice46 can successfully `dlopen` `libvvp.so` (the Icarus engine).
+* **Commit:** `a7c169d7`
+
+### 3. BUG FIX: `d_cosim` Icarus Flatlining (The `half_adder` 0V Bug)
+**The Problem:** A standard `half_adder.v` module run through `d_cosim` was outputting a continuous 0V on both `sum` and `carry`, despite valid logic transitions on the input pins. (Note: The C-source of ngspice/xspice/vpi was deeply debugged to find this. Modifying `icarus_shim.c` to use `After_input` or forcing `advance()` at `t=0` in `cfunc.mod` caused timing regressions and were strictly reverted. The ngspice-46 C-code remains pristine).
+**The Root Causes:**
+1.  **Missing Timescale (Primary Blocker):** The user's `half_adder.v` lacked a ``timescale` directive. Without this, Icarus (`ivlng`) computes `tick_length = pow(10, vpiTimeUnit)`. With no timescale, `vpiTimeUnit=0`, resulting in a `tick_length` of 1 full second. Because the eSim transient simulation executes in milliseconds, the calculated VVP `ticks` equaled 0. The VVP engine never advanced, the active-event queue froze, and `cbValueChange` callbacks never fired to update the outputs.
+2.  **Input Threshold Mismatch:** `v1` PWL peaked at `1v` (`pwl(0ms 0v 4ms 0v 5ms 1v)`). Because the `adc_bridge` defines `in_high=2.0V`, the input bit never registered as Logic-1.
+3.  **Initial State Static High:** `v2` PWL started HIGH at `t=0` (`pwl(0ms 5v...)`). `d_cosim` records the initial state but does not execute the Verilog logic until an actual input *transition* forces the VVP to advance ticks.
+
+**The Fixes:**
+* **eSim Backend Patch:** Modified `src/maker/ModelGeneration.py` (`build_cosim`). The compiler now auto-scans the source `.v` file. If ``timescale` is missing, it creates a temporary file, seamlessly injects ``timescale 1ns/1ps\n`, and compiles the temp file. This guarantees VVP ticks advance properly for all future models.
+* **Commit:** `1919cf54`
+
+### REQUIRED USER ACTIONS FOR `half_adder` TESTBED:
+To achieve a successful simulation on the `half_adder` project, the following manual schematic updates are required:
+1.  **Fix V1 (Voltage level):** Update PWL to reach 5V $\rightarrow$ `pwl(0ms 0v 4ms 0v 5ms 5v)`
+2.  **Fix V2 (Force transition):** Force a start at 0V with a rapid rise to 5V $\rightarrow$ `pwl(0ms 0v 0.01ms 5v 4ms 5v 5ms 0v)`
+3.  **Re-Compile:** Click "Convert Verilog to Ngspice (d_cosim)" in eSim again so the backend auto-injects the timescale fix.

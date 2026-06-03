@@ -51,8 +51,10 @@ Performance note (vectorized rewrite):
   calls into a handful of C-level parses.
 """
 
+import glob
 import io
 import os
+import re
 import logging
 import numpy as np
 from typing import List, Tuple, Optional
@@ -60,6 +62,127 @@ from PyQt6 import QtWidgets
 from configuration.Appconfig import Appconfig
 
 logger = logging.getLogger(__name__)
+
+
+def _recover_node_names(proj_dir: str, truncated: List[str]) -> List[str]:
+    """
+    ngspice truncates node-name column headers to 15 chars in `print allv`
+    output.  Recover the full names by parsing the project netlist (.cir.out):
+
+      Pass 1 – build model-name → type map (adc_bridge / dac_bridge / d_cosim).
+      Pass 2 – collect analog nodes:
+                v/i source terminals, adc_bridge group-1 inputs,
+                dac_bridge group-2 outputs (digital nodes skipped).
+      Then natural-sort, which matches ngspice's `print allv` ordering.
+
+    Falls back silently to `truncated` if the netlist is missing, the node
+    count doesn't match, or any other error occurs.
+    """
+    netlists = glob.glob(os.path.join(proj_dir, '*.cir.out'))
+    if not netlists:
+        return truncated
+    netlist_path = netlists[0]
+
+    try:
+        with open(netlist_path) as f:
+            lines = f.readlines()
+
+        # Pass 1: model-name → bridge type
+        model_type: dict = {}
+        has_bridge = False
+        for line in lines:
+            s = line.strip()
+            if not s.lower().startswith('.model'):
+                continue
+            parts = s.split()
+            if len(parts) < 3:
+                continue
+            mname = parts[1]
+            mtype = parts[2].lower().split('(')[0]
+            if 'adc_bridge' in mtype:
+                model_type[mname] = 'adc_bridge'
+                has_bridge = True
+            elif 'dac_bridge' in mtype:
+                model_type[mname] = 'dac_bridge'
+                has_bridge = True
+            elif 'd_cosim' in mtype:
+                model_type[mname] = 'd_cosim'
+            else:
+                model_type[mname] = 'other'
+
+        # Only d_cosim netlists with adc/dac bridges need recovery.
+        if not has_bridge:
+            return truncated
+
+        # Pass 2: collect analog nodes in first-appearance order
+        GROUND = {'0', 'gnd', 'ground'}
+        seen: set = set()
+        analog: List[str] = []
+
+        def _add(node: str) -> None:
+            n = node.strip('[] \t')
+            if n and n.lower() not in GROUND and n not in seen:
+                seen.add(n)
+                analog.append(n)
+
+        for line in lines:
+            s = line.strip()
+            if not s or s.startswith('*') or s.startswith('.') or s.startswith('+'):
+                continue
+
+            first = s[0].lower()
+
+            if first in ('v', 'i'):
+                parts = s.split()
+                if len(parts) >= 3:
+                    _add(parts[1])
+                    _add(parts[2])
+
+            elif first == 'a':
+                groups = re.findall(r'\[([^\]]*)\]', s)
+                mname_m = re.search(r'\]\s+(\S+)\s*$', s)
+                if not mname_m or len(groups) < 2:
+                    continue
+                mname = mname_m.group(1)
+                mtype = model_type.get(mname, 'other')
+                g1 = groups[0].split()
+                g2 = groups[1].split()
+
+                if mtype == 'adc_bridge':
+                    for n in g1:
+                        _add(n)          # analog inputs
+                    # g2 = digital outputs → skip
+                elif mtype == 'dac_bridge':
+                    # g1 = digital inputs → skip
+                    for n in g2:
+                        _add(n)          # analog outputs
+                elif mtype == 'd_cosim':
+                    pass                 # both groups digital
+                else:
+                    for n in g1 + g2:
+                        _add(n)
+
+        if not analog:
+            return truncated
+
+        # Natural sort matches ngspice's print allv ordering
+        def _nat(s: str) -> list:
+            return [int(c) if c.isdigit() else c.lower()
+                    for c in re.split(r'(\d+)', s)]
+
+        analog.sort(key=_nat)
+
+        if len(analog) != len(truncated):
+            logger.warning(
+                "Node count mismatch: netlist=%d data=%d — using truncated names",
+                len(analog), len(truncated))
+            return truncated
+
+        return analog
+
+    except Exception as exc:
+        logger.warning("Could not recover full node names: %s", exc)
+        return truncated
 
 
 def _block_to_array(rows: List[str], usecols: Tuple[int, ...],
@@ -297,6 +420,7 @@ class DataExtraction:
             is_ac = (analysis_type == self.AC_ANALYSIS)
 
             x_arr, x_name, v_names, v_arrays = self._parse_plot_file(v_path, is_ac=is_ac)
+            v_names = _recover_node_names(file_path, v_names)
 
             i_names: List[str] = []
             i_arrays: List[np.ndarray] = []
