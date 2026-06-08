@@ -732,6 +732,12 @@ and set the load for input ports */
             count--;
             if (init==0)
             {
+                if (''' + self.fname.split('.')[0] + '''[count] != nullptr) {
+                    ''' + self.fname.split('.')[0] + '''[count]->final();
+                    delete ''' + self.fname.split('.')[0] + '''[count];
+                    ''' + self.fname.split('.')[0] + '''[count] = nullptr;
+                }
+                contextp->time(0);
                 ''' + self.fname.split('.')[0] + '''[count]=new V''' + \
             self.fname.split('.')[0] + '''{contextp};
                 contextp->traceEverOn(true);
@@ -904,7 +910,7 @@ and set the load for input ports */
         self.cmd = self.cmd + " -f V" + self.fname.split('.')[0]\
             + ".mk V" + self.fname.split(
             '.')[0] + "__ALL.a sim_main_" \
-            + self.fname.split('.')[0] + ".o ../verilated.o"
+            + self.fname.split('.')[0] + ".o ../verilated.o ../verilated_threads.o"
         self.process = QtCore.QProcess(self)
         self.process.readyReadStandardOutput.connect(self.readAllStandard)
         self.process.start('sh', ['-c', self.cmd])
@@ -947,6 +953,13 @@ and set the load for input ports */
                 self.release_home + "src/xspice/icm/Ngveri/" + "verilated.o"
             )
         if os.path.exists(
+            self.release_home +
+            "src/xspice/icm/Ngveri/" +
+                "verilated_threads.o"):
+            os.remove(
+                self.release_home + "src/xspice/icm/Ngveri/" + "verilated_threads.o"
+            )
+        if os.path.exists(
             path_icm +
             "V" +
             self.fname.split('.')[0] +
@@ -968,7 +981,7 @@ and set the load for input ports */
             self.termtext("Current Directory: " + self.modelpath)
             self.termtext("Command: " + self.cmd)
             self.process.waitForFinished(50000)
-            self.cmd = "cp ../verilated.o " + self.release_home \
+            self.cmd = "cp ../verilated.o ../verilated_threads.o " + self.release_home \
                 + "/src/xspice/icm/Ngveri/"
             self.process.start('sh', ['-c', self.cmd])
             self.termtext("Command: " + self.cmd)
