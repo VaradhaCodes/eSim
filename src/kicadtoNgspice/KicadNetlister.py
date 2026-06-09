@@ -38,11 +38,23 @@ def _kicad_cli():
 def _sanitize_net(name):
     """Make a KiCad net name a safe, consistent ngspice node.
 
-    Strips parentheses/spaces and lowercases (ngspice is case-insensitive; the
-    historical eSim netlist used lowercase). Topology is preserved; exact net
-    spelling differs from the KiCad 5/6 era and does not affect simulation.
+    Lowercases (ngspice is case-insensitive; the historical eSim netlist used
+    lowercase) and maps every character that is not [a-z0-9_] to '_'. KiCad
+    auto-net names embed '(', ')', '+', '-' and '/' (taken from pin names like
+    'v1-+' and from hierarchical sheet paths). Of these, '+', '-' and '/' are
+    arithmetic operators *inside* ngspice 'v()'/'i()' vector references, so an
+    internal node such as 'Net-(v1-+)' could be simulated but never plotted by
+    name. Mapping them to '_' keeps such nodes addressable. User-named nets
+    (in, out, gnd, v_out, c_out) contain none of these and are unaffected.
+    Topology is preserved; only the spelling of auto-named internal nets changes.
+
+    Returns '' for a name with no usable characters so the caller can fall back
+    to a code-based name. Distinct nets that collapse to the same string are
+    disambiguated by the caller (see xml_to_spice_lines); never short here.
     """
-    return name.replace('(', '').replace(')', '').replace(' ', '').lower()
+    safe = ''.join(c if (c.isalnum() or c == '_') else '_'
+                   for c in name.strip().lower())
+    return safe.strip('_')
 
 
 def _node_sort_key(pin, seen_index):
@@ -86,16 +98,31 @@ def xml_to_spice_lines(xml_path, title="KiCad schematic"):
         fel = comp.find('fields')
         if fel is not None:
             for f in fel.findall('field'):
-                fd[f.get('name')] = (f.text or '').strip()
+                # Lower-case field-name keys so Spice_* lookups are
+                # case-insensitive (KiCad lets users type the field name).
+                fd[(f.get('name') or '').strip().lower()] = (f.text or '').strip()
         fields[ref] = fd
 
     # Connectivity: ref -> [(sort_key, net_name), ...]
+    # First assign every net a collision-free, ngspice-safe name. Two distinct
+    # KiCad nets must never collapse to the same node (that would short them), so
+    # any sanitized name clash is disambiguated with the net's unique code.
     pins = {}
     seen = {}
     nets_el = root.find('nets')
+    net_name = {}
+    used = set()
     for net in (nets_el.findall('net') if nets_el is not None else []):
-        raw = net.get('name') or ('net' + (net.get('code') or '0'))
-        net_clean = _sanitize_net(raw)
+        code = net.get('code') or '0'
+        raw = net.get('name') or ('net' + code)
+        safe = _sanitize_net(raw) or ('net' + code)
+        if safe in used:
+            safe = safe + '_' + code
+        used.add(safe)
+        net_name[net] = safe
+
+    for net in (nets_el.findall('net') if nets_el is not None else []):
+        net_clean = net_name[net]
         for node in net.findall('node'):
             ref = node.get('ref')
             pin = node.get('pin') or ''
@@ -105,12 +132,15 @@ def xml_to_spice_lines(xml_path, title="KiCad schematic"):
 
     lines = ['* ' + title + ' (eSim netlist via kicad-cli kicadxml)',
              '* Sheet Name: /']
+    # Values that disable a component, matching the legacy Spice_Netlist_Enabled
+    # convention (N) plus the obvious boolean spellings.
+    disabled = ('n', 'no', 'false', '0')
     for ref in order_refs:
         fd = fields.get(ref, {})
-        if fd.get('Spice_Netlist_Enabled', '').strip().lower() == 'n':
+        if fd.get('spice_netlist_enabled', '').strip().lower() in disabled:
             continue
         ordered = [n for _, n in sorted(pins.get(ref, []), key=lambda t: t[0])]
-        seq = fd.get('Spice_Node_Sequence', '').strip()
+        seq = fd.get('spice_node_sequence', '').strip()
         if seq:
             ordered = _apply_node_sequence(ordered, seq)
         nets = ' '.join(ordered)
