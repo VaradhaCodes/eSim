@@ -907,7 +907,20 @@ def main(args):
     app = QtWidgets.QApplication(args)
     app.setApplicationName("eSim")
 
+    # Auto-repair corrupted KiCad symbol libraries before anything else
+    repair_messages = []
+    try:
+        from maker.KicadSymbolFixer import repair_all_sym_files
+        repair_messages = repair_all_sym_files()
+    except Exception as e:
+        print(f"[KicadSymbolFixer] Warning: auto-repair skipped: {e}")
+
     appView = Application()
+    
+    # Log any symbol fixes to the GUI console
+    for msg in repair_messages:
+        appView.obj_appconfig.print_warning(msg)
+        
     last_project_path = appView.obj_appconfig.load_last_project()
     if last_project_path:
         try:

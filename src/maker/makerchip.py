@@ -27,7 +27,7 @@
 # =========================================================================
 
 # importing the files and libraries
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtCore
 from . import Maker
 from . import NgVeri
 
@@ -80,8 +80,11 @@ class makerchip(QtWidgets.QWidget):
         self.NgVeriTab.setWidget(obj_NgVeri)
         self.NgVeriTab.setWidgetResizable(True)
         self.tabWidget = QtWidgets.QTabWidget()
+
         self.tabWidget.addTab(self.MakerTab, "Makerchip")
         self.tabWidget.addTab(self.NgVeriTab, "NgVeri")
+
+
         # The object refresh gets destroyed when Ngspice\
         # to verilog converter is called
         # so calling refresh_change to start toggling of refresh again
@@ -93,3 +96,4 @@ class makerchip(QtWidgets.QWidget):
         # incrementing filecount for every new window
         filecount = filecount + 1
         return self.convertWindow
+
