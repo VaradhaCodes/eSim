@@ -170,6 +170,27 @@ class Maker(QtWidgets.QWidget):
         # self.notify.start()
         # open("filepath.txt","w").write(self.verilogfile)
 
+    def load_verilog(self, filepath):
+        self.verilogfile = filepath
+        self.text = open(self.verilogfile).read()
+        self.entry_var[0].setText(self.verilogfile)
+        self.entry_var[1].setText(self.text)
+        global verilogFile
+        verilogFile[self.filecount] = self.verilogfile
+        self._stop_current_toggle()
+
+        self.observer = watchdog.observers.Observer()
+        self.event_handler = Handler(
+            self.verilogfile,
+            self.refreshoption,
+            self.observer)
+
+        self.observer.schedule(
+            self.event_handler,
+            path=self.verilogfile,
+            recursive=True)
+        self.observer.start()
+
     # This function is used to call refresh while
     # running Ngspice to Verilog Converter
     # (as the original one gets destroyed)
@@ -372,6 +393,13 @@ Please check if verilog file is chosen.")
         # self.optionsbox2.setTitle("Note: Please save the file once edited")
         # self.optionsgrid2 = QtWidgets.QGridLayout()
         self.optionsgroupbtn = QtWidgets.QButtonGroup()
+        
+        self.verifier_btn = QtWidgets.QPushButton("Verilog Simulator IDE")
+        self.verifier_btn.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
+        self.optionsgroupbtn.addButton(self.verifier_btn)
+        self.verifier_btn.clicked.connect(self.open_verifier)
+        self.optionsgrid.addWidget(self.verifier_btn, 0, 0)
+        
         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
         self.optionsgroupbtn.addButton(self.addoptions)
         self.addoptions.clicked.connect(self.addverilog)
@@ -409,6 +437,26 @@ Please check if verilog file is chosen.")
             # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         self.optionsbox.setLayout(self.optionsgrid)
         return self.optionsbox
+
+    def open_verifier(self):
+        if not hasattr(self, 'verifier_win'):
+            from .VerilogVerifier import VerilogVerifier
+            self.verifier_win = QtWidgets.QDialog(self.window())
+            self.verifier_win.setWindowTitle("eSim-Verilog Simulator IDE")
+            self.verifier_win.setWindowFlags(self.verifier_win.windowFlags() | QtCore.Qt.WindowType.WindowMaximizeButtonHint | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
+            layout = QtWidgets.QVBoxLayout(self.verifier_win)
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.obj_VerilogVerifier = VerilogVerifier()
+            
+            # Connect the signal directly to load_verilog
+            self.obj_VerilogVerifier.sendToNgVeri.connect(self.load_verilog)
+            
+            layout.addWidget(self.obj_VerilogVerifier)
+            self.verifier_win.resize(1000, 700)
+            
+        self.verifier_win.show()
+        self.verifier_win.raise_()
+        self.verifier_win.activateWindow()
 
     # This function adds the other parts of widget like text box
     def creategroup(self):
