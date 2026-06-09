@@ -34,7 +34,6 @@ from PyQt6 import QtGui, QtCore, QtWidgets
 from PyQt6.QtCore import QSize
 from configuration.Appconfig import Appconfig
 from frontEnd import ProjectExplorer
-from frontEnd import TimeExplorer
 from frontEnd import Workspace
 from frontEnd import DockArea
 from projManagement.openProject import OpenProjectInfo
@@ -350,11 +349,6 @@ class Application(QtWidgets.QMainWindow):
                 self.obj_Mainview.obj_projectExplorer.addTreeNode(
                     directory, filelist
                 )
-                self.obj_appconfig.current_project["ProjectName"] = directory
-                project_path = self.obj_appconfig.current_project["ProjectName"]
-                project_name = os.path.basename(project_path)
-                self.obj_Mainview.obj_timeExplorer.load_snapshots(project_name)
-                self.obj_appconfig.save_current_project()
                 updated = True
 
         if not updated:
@@ -376,11 +370,6 @@ class Application(QtWidgets.QMainWindow):
             directory, filelist = self.project.body()
             self.obj_Mainview.obj_projectExplorer.addTreeNode(
                 directory, filelist)
-            self.obj_appconfig.current_project["ProjectName"] = directory
-            project_path = self.obj_appconfig.current_project["ProjectName"]
-            project_name = os.path.basename(project_path)
-            self.obj_Mainview.obj_timeExplorer.load_snapshots(project_name)
-            self.obj_appconfig.save_current_project()
         except BaseException:
             pass
 
@@ -409,7 +398,6 @@ class Application(QtWidgets.QMainWindow):
                     pass
             self.obj_Mainview.obj_dockarea.closeDock()
             self.obj_appconfig.current_project['ProjectName'] = None
-            self.obj_appconfig.save_current_project()
             self.systemTrayIcon.showMessage(
                 'Close', 'Current project ' +
                 os.path.basename(current_project) + ' is Closed.'
@@ -447,7 +435,7 @@ class Application(QtWidgets.QMainWindow):
         webbrowser.open("https://esim.readthedocs.io/en/latest/index.html")
 
     @QtCore.pyqtSlot(QtCore.QProcess.ExitStatus, int)
-    def plotSimulationData(self, exitStatus, exitCode):
+    def plotSimulationData(self, exitCode, exitStatus):
         """Enables interaction for new simulation and
            displays the plotter dock where graphs can be plotted.
         """
@@ -851,8 +839,6 @@ class MainView(QtWidgets.QWidget):
 
         self.obj_dockarea = DockArea.DockArea()
         self.obj_projectExplorer = ProjectExplorer.ProjectExplorer()
-        self.obj_timeExplorer = TimeExplorer.TimeExplorer()
-        self.obj_projectExplorer.set_time_explorer(self.obj_timeExplorer)
 
         # Adding content to vertical middle Split.
         self.middleSplit.setOrientation(QtCore.Qt.Orientation.Vertical)
@@ -864,12 +850,7 @@ class MainView(QtWidgets.QWidget):
         self.middleContainer.setLayout(self.middleContainerLayout)
 
         # Adding content of left split
-        self.leftPanel = QtWidgets.QVBoxLayout()
-        self.leftPanelWidget = QtWidgets.QWidget()
-        self.leftPanel.addWidget(self.obj_projectExplorer)
-        self.leftPanel.addWidget(self.obj_timeExplorer)
-        self.leftPanelWidget.setLayout(self.leftPanel)
-        self.leftSplit.addWidget(self.leftPanelWidget)
+        self.leftSplit.addWidget(self.obj_projectExplorer)
         self.leftSplit.addWidget(self.middleContainer)
 
         # Adding to main Layout
@@ -907,29 +888,7 @@ def main(args):
     app = QtWidgets.QApplication(args)
     app.setApplicationName("eSim")
 
-    # Auto-repair corrupted KiCad symbol libraries before anything else
-    repair_messages = []
-    try:
-        from maker.KicadSymbolFixer import repair_all_sym_files
-        repair_messages = repair_all_sym_files()
-    except Exception as e:
-        print(f"[KicadSymbolFixer] Warning: auto-repair skipped: {e}")
-
     appView = Application()
-    
-    # Log any symbol fixes to the GUI console
-    for msg in repair_messages:
-        appView.obj_appconfig.print_warning(msg)
-        
-    last_project_path = appView.obj_appconfig.load_last_project()
-    if last_project_path:
-        try:
-            open_proj = OpenProjectInfo()
-            directory, filelist = open_proj.body(last_project_path)
-            appView.obj_Mainview.obj_projectExplorer.addTreeNode(directory, filelist)
-        except Exception as e:
-            print("Could not restore last project:", str(e))
-    appView.obj_Mainview.obj_timeExplorer.load_last_snapshots()
     appView.hide()
 
     splash_pix = QtGui.QPixmap(init_path + 'images/splash_screen_esim.png')

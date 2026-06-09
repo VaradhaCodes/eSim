@@ -51,11 +51,7 @@ class DockArea(QtWidgets.QMainWindow):
 
             # Adding to main Layout
             self.welcomeWidget.setLayout(self.welcomeLayout)
-            
-            # Note: Explicitly not using apply_fullscreen_feature for the Welcome screen 
-            # as it looks too big on the main home window.
             dock[dockName].setWidget(self.welcomeWidget)
-            
             # CSS
             dock[dockName].setStyleSheet(" \
             QWidget { border-radius: 15px; border: 1px solid gray;\
@@ -65,71 +61,6 @@ class DockArea(QtWidgets.QMainWindow):
 
         # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
         self.show()
-
-    def apply_fullscreen_feature(self, dock_widget, original_widget):
-        """Wraps a dock's inner widget with a Fullscreen pop-out button."""
-        title = dock_widget.windowTitle()
-        wrapper = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        top_bar = QtWidgets.QHBoxLayout()
-        top_bar.addStretch()
-        fs_btn = QtWidgets.QPushButton("🗗 Fullscreen")
-        fs_btn.setStyleSheet("""
-            QPushButton {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-                font-weight: 600;
-                color: #495057;
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 4px 12px;
-                margin: 2px 5px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-            QPushButton:pressed {
-                background-color: #dee2e6;
-            }
-        """)
-        top_bar.addWidget(fs_btn)
-        
-        layout.addLayout(top_bar)
-        layout.addWidget(original_widget)
-        
-        dock_widget.setWidget(wrapper)
-        
-        popout_state = {"win": None}
-        def toggle_popout():
-            if not popout_state["win"]:
-                win = QtWidgets.QDialog(self.window())
-                win.setWindowTitle(title)
-                win.setWindowFlags(win.windowFlags() | QtCore.Qt.WindowType.WindowMaximizeButtonHint | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
-                
-                win_layout = QtWidgets.QVBoxLayout(win)
-                win_layout.setContentsMargins(0, 0, 0, 0)
-                win_layout.addWidget(wrapper)
-                
-                fs_btn.setText("🡮 Dock to eSim")
-                
-                def on_close(event):
-                    dock_widget.setWidget(wrapper)
-                    fs_btn.setText("🗗 Fullscreen")
-                    popout_state["win"] = None
-                    event.accept()
-                    
-                win.closeEvent = on_close
-                popout_state["win"] = win
-                win.resize(1000, 700)
-                win.showMaximized()
-            else:
-                popout_state["win"].close()
-                
-        fs_btn.clicked.connect(toggle_popout)
 
     def get_main_view_reference(self):
         """Get reference to the MainView widget."""
@@ -165,7 +96,7 @@ class DockArea(QtWidgets.QMainWindow):
         self.testWidget.setLayout(self.testLayout)
         dock['Tips-' + str(count)] = \
             QtWidgets.QDockWidget('Tips-' + str(count))
-        self.apply_fullscreen_feature(dock['Tips-' + str(count)], self.testWidget)
+        dock['Tips-' + str(count)].setWidget(self.testWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock['Tips-' + str(count)])
         self.tabifyDockWidget(
@@ -201,7 +132,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)
              ] = QtWidgets.QDockWidget(dockName
                                        + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.plottingWidget)
+        dock[dockName + str(count)] \
+            .setWidget(self.plottingWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -248,7 +180,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)
              ] = QtWidgets.QDockWidget(dockName
                                        + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.ngspiceWidget)
+        dock[dockName + str(count)] \
+            .setWidget(self.ngspiceWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -391,7 +324,7 @@ class DockArea(QtWidgets.QMainWindow):
         self.eConWidget.setLayout(self.eConLayout)
 
         dock[dockName + str(count)] = QtWidgets.QDockWidget(dockName + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.eConWidget)
+        dock[dockName + str(count)].setWidget(self.eConWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'], dock[dockName + str(count)])
 
@@ -439,7 +372,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName +
              str(count)] = QtWidgets.QDockWidget(dockName
                                                  + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.modelwidget)
+        dock[dockName + str(count)] \
+            .setWidget(self.modelwidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -474,7 +408,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.kicadToNgspiceWidget.setLayout(self.kicadToNgspiceLayout)
         dock[dockName + str(count)] = \
             QtWidgets.QDockWidget(dockName + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.kicadToNgspiceWidget)
+        dock[dockName +
+             str(count)].setWidget(self.kicadToNgspiceWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -519,7 +454,8 @@ class DockArea(QtWidgets.QMainWindow):
             dock[dockName +
                 str(count)] = QtWidgets.QDockWidget(dockName
                                                     + str(count))
-            self.apply_fullscreen_feature(dock[dockName + str(count)], self.subcktWidget)
+            dock[dockName + str(count)] \
+                .setWidget(self.subcktWidget)
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                             dock[dockName + str(count)])
             self.tabifyDockWidget(dock['Welcome'],
@@ -577,20 +513,11 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName +
              str(count)] = QtWidgets.QDockWidget(dockName
                                                  + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.makerWidget)
+        dock[dockName + str(count)].setWidget(self.makerWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
                               dock[dockName + str(count)])
-
-        # Track this as a plotting dock so console is collapsed
-        self.active_plotting_docks.add(dock[dockName + str(count)])
-        
-        # Connect to tab change signal
-        try:
-            self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
-        except:
-            pass
 
         # CSS
         dock[dockName + str(count)].setStyleSheet(" \
@@ -601,11 +528,6 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
         dock[dockName + str(count)].raise_()
-
-        # Collapse console immediately
-        main_view = self.get_main_view_reference()
-        if main_view:
-            QtCore.QTimer.singleShot(100, main_view.collapse_console_area)
 
         count = count + 1
 
@@ -619,7 +541,7 @@ class DockArea(QtWidgets.QMainWindow):
         self.usermanualWidget.setLayout(self.usermanualLayout)
         dock['User Manual-' +
              str(count)] = QtWidgets.QDockWidget('User Manual-' + str(count))
-        self.apply_fullscreen_feature(dock['User Manual-' + str(count)], self.usermanualWidget)
+        dock['User Manual-' + str(count)].setWidget(self.usermanualWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock['User Manual-' + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -651,7 +573,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.modelicaWidget.setLayout(self.modelicaLayout)
         dock[dockName + str(count)
              ] = QtWidgets.QDockWidget(dockName + str(count))
-        self.apply_fullscreen_feature(dock[dockName + str(count)], self.modelicaWidget)
+        dock[dockName + str(count)] \
+            .setWidget(self.modelicaWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName
                                 + str(count)])
