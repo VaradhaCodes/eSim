@@ -64,7 +64,9 @@ class NewProjectInfo(QtWidgets.QWidget):
         self.workspace = self.obj_appconfig.default_workspace['workspace']
         # self.projName = self.projEdit.text()
         # Remove leading and trailing space
-        self.projName = str(self.projName).rstrip().lstrip()
+        # self.projName = str(self.projName).rstrip().lstrip()
+        # Remove leading and trailing spaces AND replace internal spaces with underscores
+        self.projName = str(self.projName).strip().replace(" ", "_")
 
         self.projDir = os.path.join(self.workspace, str(self.projName))
 
@@ -93,6 +95,7 @@ class NewProjectInfo(QtWidgets.QWidget):
                     'write permission on ' + self.workspace
                 )
                 self.msg.exec()
+                return None, None
 
             # New KiCad v6 file extension
             f.write("schematicFile " + self.projName + ".kicad_sch\n")
