@@ -887,6 +887,7 @@ class MainWindow(QtWidgets.QWidget):
 
         out.writelines('\n* Control Statements \n')
         out.writelines('.control\n')
+        out.writelines('set width=1000\n')
         out.writelines('run\n')
         # out.writelines(outputOption)
         out.writelines('print allv > plot_data_v.txt\n')
