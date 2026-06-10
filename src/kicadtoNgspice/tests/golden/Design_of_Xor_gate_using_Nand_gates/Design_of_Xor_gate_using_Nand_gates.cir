@@ -1,0 +1,22 @@
+* C:\Users\hp\Desktop\Esim\Design_of_Xor_gate_using_Nand_gates\Design_of_Xor_gate_using_Nand_gates.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 10-Nov-21 10:44:01
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+U4  Net-_U3-Pad3_ Net-_U3-Pad4_ Net-_U4-Pad3_ d_nand		
+U5  Net-_U3-Pad3_ Net-_U4-Pad3_ Net-_U5-Pad3_ d_nand		
+U6  Net-_U4-Pad3_ Net-_U3-Pad4_ Net-_U6-Pad3_ d_nand		
+U7  Net-_U5-Pad3_ Net-_U6-Pad3_ Net-_U7-Pad3_ d_nand		
+U3  A B Net-_U3-Pad3_ Net-_U3-Pad4_ adc_bridge_2		
+v1  A GND pulse		
+v2  B GND pulse		
+U8  Net-_U7-Pad3_ Q dac_bridge_1		
+U1  A plot_v1		
+U2  B plot_v1		
+U9  Q plot_v1		
+R1  Q GND 1k		
+
+.end

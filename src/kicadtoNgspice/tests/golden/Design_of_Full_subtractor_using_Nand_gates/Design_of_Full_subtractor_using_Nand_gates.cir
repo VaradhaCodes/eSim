@@ -1,0 +1,31 @@
+* C:\Users\hp\Desktop\Esim\Design_of_Full_subtractor_using_Nand_gates\Design_of_Full_subtractor_using_Nand_gates.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 30-Sep-21 09:33:42
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+U5  Net-_U4-Pad4_ Net-_U4-Pad5_ Net-_U5-Pad3_ d_nand		
+U8  Net-_U5-Pad3_ Net-_U4-Pad5_ Net-_U12-Pad2_ d_nand		
+U7  Net-_U4-Pad4_ Net-_U5-Pad3_ Net-_U12-Pad1_ d_nand		
+U12  Net-_U12-Pad1_ Net-_U12-Pad2_ Net-_U12-Pad3_ d_nand		
+U6  Net-_U12-Pad3_ Net-_U10-Pad2_ Net-_U10-Pad1_ d_nand		
+U9  Net-_U12-Pad3_ Net-_U10-Pad1_ Net-_U11-Pad1_ d_nand		
+U10  Net-_U10-Pad1_ Net-_U10-Pad2_ Net-_U10-Pad3_ d_nand		
+U11  Net-_U11-Pad1_ Net-_U10-Pad3_ Net-_U11-Pad3_ d_nand		
+v1  A GND pulse		
+v2  B GND pulse		
+v3  Bin GND pulse		
+U4  A B Bin Net-_U4-Pad4_ Net-_U4-Pad5_ Net-_U10-Pad2_ adc_bridge_3		
+U14  Net-_U11-Pad3_ Net-_U13-Pad3_ Diff Borrow dac_bridge_2		
+R1  Borrow GND 1k		
+R2  Diff GND 1k		
+U13  Net-_U12-Pad2_ Net-_U10-Pad3_ Net-_U13-Pad3_ d_nand		
+U3  A plot_v1		
+U1  B plot_v1		
+U2  Bin plot_v1		
+U16  Diff plot_v1		
+U15  Borrow plot_v1		
+
+.end

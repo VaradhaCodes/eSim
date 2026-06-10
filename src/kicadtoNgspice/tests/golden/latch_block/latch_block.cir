@@ -1,0 +1,23 @@
+* C:\FOSSEE\eSim\library\SubcircuitLibrary\latch_block\latch_block.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 04/09/26 21:16:27
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+X1  Net-_U1-Pad1_ Net-_U2-Pad2_ Net-_U1-Pad2_ latchh		
+v1  Net-_U2-Pad1_ GND PULSE(0 5 150n 1n 1n 20n 200n)		
+U2  Net-_U2-Pad1_ Net-_U2-Pad2_ adc_bridge_1		
+X2  Net-_U1-Pad3_ Net-_U3-Pad2_ Net-_U1-Pad4_ latchh		
+v2  Net-_U3-Pad1_ GND PULSE(0 5 150n 1n 1n 20n 200n)		
+U3  Net-_U3-Pad1_ Net-_U3-Pad2_ adc_bridge_1		
+X3  Net-_U1-Pad5_ Net-_U4-Pad2_ Net-_U1-Pad6_ latchh		
+v3  Net-_U4-Pad1_ GND PULSE(0 5 150n 1n 1n 20n 200n)		
+U4  Net-_U4-Pad1_ Net-_U4-Pad2_ adc_bridge_1		
+X4  Net-_U1-Pad7_ Net-_U5-Pad2_ Net-_U1-Pad8_ latchh		
+v4  Net-_U5-Pad1_ GND PULSE(0 5 150n 1n 1n 20n 200n)		
+U5  Net-_U5-Pad1_ Net-_U5-Pad2_ adc_bridge_1		
+U1  Net-_U1-Pad1_ Net-_U1-Pad2_ Net-_U1-Pad3_ Net-_U1-Pad4_ Net-_U1-Pad5_ Net-_U1-Pad6_ Net-_U1-Pad7_ Net-_U1-Pad8_ PORT		
+
+.end
