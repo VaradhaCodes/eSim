@@ -35,6 +35,32 @@ def _kicad_cli():
     return os.environ.get('ESIM_KICAD_CLI') or shutil.which('kicad-cli')
 
 
+def _esim_subckt_lib():
+    """Return the eSim SubcircuitLibrary root, or None if not installed."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    lib = os.path.normpath(os.path.join(here, '../../library/SubcircuitLibrary'))
+    return lib if os.path.isdir(lib) else None
+
+
+def _is_subcircuit_value(value, proj_dir):
+    """True if `value` is a known eSim subcircuit (a .sub file exists for it).
+
+    Checks the project directory first (local copy of the .sub), then the eSim
+    system library (library/SubcircuitLibrary/<value>/<value>.sub). Returns
+    False for plain device values (10k, 1e-6, eSim_PNP) and for eSim
+    behavioural block names (plot_v1, PORT, adc_bridge_1, d_dff, …) which have
+    no .sub file, so those keep their original U prefix unchanged.
+    """
+    if not value:
+        return False
+    if os.path.isfile(os.path.join(proj_dir, value + '.sub')):
+        return True
+    lib = _esim_subckt_lib()
+    if lib and os.path.isfile(os.path.join(lib, value, value + '.sub')):
+        return True
+    return False
+
+
 def _sanitize_net(name):
     """Make a KiCad net name a safe, consistent ngspice node.
 
@@ -80,7 +106,7 @@ def _apply_node_sequence(nodes, seq_field):
     return [nodes[i] for i in order]
 
 
-def xml_to_spice_lines(xml_path, title="KiCad schematic"):
+def xml_to_spice_lines(xml_path, title="KiCad schematic", proj_dir=None):
     """Convert a KiCad `kicadxml` netlist into eSim flat-spice component lines."""
     root = ET.parse(xml_path).getroot()
 
@@ -144,7 +170,15 @@ def xml_to_spice_lines(xml_path, title="KiCad schematic"):
         if seq:
             ordered = _apply_node_sequence(ordered, seq)
         nets = ' '.join(ordered)
-        lines.append((ref.lower() + ' ' + nets + ' ' + value.get(ref, '')).strip())
+        val = value.get(ref, '')
+        ref_out = ref.lower()
+        # Prepend 'x' when the value is an eSim subcircuit (.sub exists) but
+        # the schematic ref doesn't already carry the X prefix.  In SPICE,
+        # subcircuit instantiation requires the X prefix; students often use U1
+        # for an opamp (lm_741) whose golden .cir correctly has XU1.
+        if ref_out and ref_out[0] != 'x' and _is_subcircuit_value(val, proj_dir or ''):
+            ref_out = 'x' + ref_out
+        lines.append((ref_out + ' ' + nets + ' ' + val).strip())
     lines.append('.end')
     return lines
 
@@ -172,7 +206,7 @@ def generate_netlist(proj_dir, proj_name):
         if proc.returncode != 0 or not os.path.isfile(xml_path):
             return False, "kicad-cli netlist export failed: " + proc.stderr.strip()
 
-        lines = xml_to_spice_lines(xml_path, title=proj_name)
+        lines = xml_to_spice_lines(xml_path, title=proj_name, proj_dir=proj_dir)
         cir_path = os.path.join(proj_dir, proj_name + '.cir')
         with open(cir_path, 'w') as fh:
             fh.write('\n'.join(lines) + '\n')

@@ -1,0 +1,26 @@
+* C:\FOSSEE\eSim\ClassABAmplifier_eSim\ClassABAmplifier_eSim.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 4/2/2026 8:13:57 PM
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+Q2  GND Net-_D2-Pad2_ VOUT BC557		
+R1  Net-_Q1-Pad1_ Net-_D1-Pad1_ 10k		
+D1  Net-_D1-Pad1_ CAPOUT eSim_Diode		
+D2  CAPOUT Net-_D2-Pad2_ eSim_Diode		
+R2  Net-_D2-Pad2_ GND 10k		
+C1  CAPOUT INPUT 100u		
+C2  cout VOUT 100u		
+v2  Net-_Q1-Pad1_ GND 12v		
+v1  INPUT GND sine		
+U2  CAPOUT plot_v1		
+U3  VOUT plot_v1		
+U1  INPUT plot_v1		
+U4  cout current plot_i2		
+R3  current GND 47		
+U5  cout plot_v1		
+Q1  Net-_Q1-Pad1_ Net-_D1-Pad1_ VOUT BC547		
+
+.end
