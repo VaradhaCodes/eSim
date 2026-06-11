@@ -1,0 +1,66 @@
+* C:\Users\chaitanya\eSim-Workspace\boothmultiplier_8bit_test\boothmultiplier_8bit_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/22/26 15:05:33
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  clk rst start multiplier7 multiplier6 multiplier5 multiplier4 multiplier3 multiplier2 multiplier1 multiplier0 multiplicand7 multiplicand6 multiplicand5 multiplicand4 multiplicand3 multiplicand2 multiplicand1 multiplicand0 out15 out14 out13 out12 out11 out10 out9 out8 out7 out6 out5 out4 out3 out2 out1 out0 done boothmultiplier_8bit_ip		
+v1  multiplier1 GND pulse		
+v3  multiplier2 GND pulse		
+v5  multiplier3 GND pulse		
+v7  multiplier4 GND pulse		
+v9  multiplier5 GND pulse		
+v11  multiplier6 GND pulse		
+v13  multiplier7 GND pulse		
+v15  start GND pulse		
+v16  rst GND pulse		
+v18  clk GND pulse		
+v2  multiplier0 GND pulse		
+v4  multiplicand7 GND pulse		
+v6  multiplicand6 GND pulse		
+v8  multiplicand5 GND pulse		
+v10  multiplicand4 GND pulse		
+v12  multiplicand3 GND pulse		
+v14  multiplicand2 GND pulse		
+v17  multiplicand1 GND pulse		
+U20  out15 plot_v1		
+U22  out14 plot_v1		
+U25  out13 plot_v1		
+U28  out12 plot_v1		
+U30  out11 plot_v1		
+U32  out10 plot_v1		
+U34  out9 plot_v1		
+U36  out8 plot_v1		
+U21  done plot_v1		
+U23  out0 plot_v1		
+U26  out2 plot_v1		
+U27  out3 plot_v1		
+U29  out4 plot_v1		
+U31  out5 plot_v1		
+U33  out6 plot_v1		
+U18  clk plot_v1		
+v19  multiplicand0 GND pulse		
+U16  rst plot_v1		
+U15  start plot_v1		
+U13  multiplier7 plot_v1		
+U11  multiplier6 plot_v1		
+U9  multiplier5 plot_v1		
+U7  multiplier4 plot_v1		
+U6  multiplier3 plot_v1		
+U3  multiplier2 plot_v1		
+U1  multiplier1 plot_v1		
+U19  multiplicand0 plot_v1		
+U17  multiplicand1 plot_v1		
+U14  multiplicand2 plot_v1		
+U12  multiplicand3 plot_v1		
+U10  multiplicand4 plot_v1		
+U8  multiplicand5 plot_v1		
+U5  multiplicand6 plot_v1		
+U4  multiplicand7 plot_v1		
+U2  multiplier0 plot_v1		
+U24  out1 plot_v1		
+U35  out7 plot_v1		
+
+.end

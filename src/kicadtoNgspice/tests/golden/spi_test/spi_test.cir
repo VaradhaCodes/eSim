@@ -1,0 +1,76 @@
+* C:\Users\chaitanya\eSim-Workspace\spi_test\spi_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/23/26 10:26:09
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  clk rst start data_in7 data_in6 data_in5 data_in4 data_in3 data_in2 data_in1 data_in0 mdata_in7 mdata_in6 mdata_in5 mdata_in4 mdata_in3 mdata_in2 mdata_in1 mdata_in0 slave_sel slave0_7 slave0_6 slave0_5 slave0_4 slave0_3 slave0_2 slave0_1 slave0_0 slave1_7 slave1_6 slave1_5 slave1_4 slave1_3 slave1_2 slave1_1 slave1_0 done mparallel_data7 mparallel_data6 mparallel_data5 mparallel_data4 mparallel_data3 mparallel_data2 mparallel_data1 mparallel_data0 spi_ip		
+v2  data_in0 GND pulse		
+v3  data_in1 GND pulse		
+v5  data_in2 GND pulse		
+v7  data_in3 GND pulse		
+v9  data_in4 GND pulse		
+v11  data_in5 GND pulse		
+v13  data_in6 GND pulse		
+v15  data_in7 GND pulse		
+v17  start GND pulse		
+v18  rst GND pulse		
+v1  mdata_in7 GND pulse		
+v4  mdata_in6 GND pulse		
+v6  mdata_in5 GND pulse		
+v8  mdata_in4 GND pulse		
+v10  mdata_in3 GND pulse		
+v12  mdata_in2 GND pulse		
+v14  mdata_in1 GND pulse		
+v16  mdata_in0 GND pulse		
+v19  slave_sel GND pulse		
+U23  slave0_7 plot_v1		
+U24  slave0_6 plot_v1		
+U26  slave0_5 plot_v1		
+U28  slave0_4 plot_v1		
+U31  slave0_3 plot_v1		
+U33  slave0_2 plot_v1		
+U35  slave0_1 plot_v1		
+U37  slave0_0 plot_v1		
+U39  slave1_7 plot_v1		
+U41  slave1_6 plot_v1		
+U43  slave1_5 plot_v1		
+U45  slave1_4 plot_v1		
+U21  mparallel_data0 plot_v1		
+U22  mparallel_data1 plot_v1		
+U25  mparallel_data2 plot_v1		
+U27  mparallel_data3 plot_v1		
+U29  mparallel_data4 plot_v1		
+U30  mparallel_data5 plot_v1		
+U32  mparallel_data6 plot_v1		
+U34  mparallel_data7 plot_v1		
+U36  done plot_v1		
+U38  slave1_0 plot_v1		
+U40  slave1_1 plot_v1		
+U42  slave1_2 plot_v1		
+U44  slave1_3 plot_v1		
+v20  clk GND pulse		
+U18  clk plot_v1		
+U19  rst plot_v1		
+U20  start plot_v1		
+U15  data_in7 plot_v1		
+U13  data_in6 plot_v1		
+U11  data_in5 plot_v1		
+U9  data_in4 plot_v1		
+U7  data_in3 plot_v1		
+U5  data_in2 plot_v1		
+U3  data_in1 plot_v1		
+U1  data_in0 plot_v1		
+U17  slave_sel plot_v1		
+U16  mdata_in0 plot_v1		
+U14  mdata_in1 plot_v1		
+U12  mdata_in2 plot_v1		
+U10  mdata_in3 plot_v1		
+U8  mdata_in4 plot_v1		
+U6  mdata_in5 plot_v1		
+U4  mdata_in6 plot_v1		
+U2  mdata_in7 plot_v1		
+
+.end

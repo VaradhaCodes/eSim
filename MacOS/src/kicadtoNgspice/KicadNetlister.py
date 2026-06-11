@@ -42,6 +42,45 @@ def _esim_subckt_lib():
     return lib if os.path.isdir(lib) else None
 
 
+def _modelparam_dir():
+    """Return the eSim modelParamXML root, or None if not installed.
+
+    Holds the XML definition of every eSim *model* block: ngspice behavioural
+    primitives (adc_bridge_N, dac_bridge_N, d_xor, …) and ngveri/makerchip
+    Verilog models (modelParamXML/Ngveri/<name>.xml, written by
+    createkicad.AutoSchematic.createXML).
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    d = os.path.normpath(os.path.join(here, '../../library/modelParamXML'))
+    return d if os.path.isdir(d) else None
+
+
+def _is_model_value(value):
+    """True if `value` is a registered eSim model (a <value>.xml exists under
+    library/modelParamXML/**).
+
+    Covers all model namespaces via os.walk:
+      - modelParamXML/Ngveri/<name>.xml  — Verilog models built with ngveri/makerchip
+      - modelParamXML/Nghdl/<name>.xml   — VHDL models built with nghdl/ghdl
+      - modelParamXML/*.xml              — built-in eSim behavioural primitives
+
+    All three keep their 'u' prefix; Processing.convertICintoBasicBlocks routes
+    Ngveri → modelList (Ngspice Model tab) and Nghdl → microcontrollerList
+    (Microcontroller tab).  A model XML wins over a same-named .sub — a stray
+    .sub in the project dir must not demote a compiled model to a subcircuit.
+    """
+    if not value:
+        return False
+    root = _modelparam_dir()
+    if not root:
+        return False
+    target = value + '.xml'
+    for _dirpath, _dirs, files in os.walk(root):
+        if target in files:
+            return True
+    return False
+
+
 def _is_subcircuit_value(value, proj_dir):
     """True if `value` is a known eSim subcircuit (a .sub file exists for it).
 
@@ -172,12 +211,27 @@ def xml_to_spice_lines(xml_path, title="KiCad schematic", proj_dir=None):
         nets = ' '.join(ordered)
         val = value.get(ref, '')
         ref_out = ref.lower()
+        # A registered eSim model (a <value>.xml under library/modelParamXML/**)
+        # is a behavioural / ngveri-Verilog block that Processing expands into an
+        # XSPICE 'a' device; it must keep its 'u' prefix. The model XML wins over
+        # a same-named .sub — a stray half_adder.sub in the project dir must not
+        # turn the ngveri half_adder block into a subcircuit instantiation.
+        is_model = _is_model_value(val)
         # Prepend 'x' when the value is an eSim subcircuit (.sub exists) but
         # the schematic ref doesn't already carry the X prefix.  In SPICE,
         # subcircuit instantiation requires the X prefix; students often use U1
         # for an opamp (lm_741) whose golden .cir correctly has XU1.
-        if ref_out and ref_out[0] != 'x' and _is_subcircuit_value(val, proj_dir or ''):
+        if ref_out and ref_out[0] != 'x' and not is_model \
+                and _is_subcircuit_value(val, proj_dir or ''):
             ref_out = 'x' + ref_out
+        # KiCad 6→kicadxml: Spice_Primitive=X becomes Sim.Device=SPICE with
+        # Sim.Params containing type="X".  Detect ngveri/subcircuit blocks that
+        # have no .sub in the project dir but carry the Spice_Primitive field.
+        if ref_out and ref_out[0] != 'x' and not is_model:
+            _sd = fd.get('sim.device', '').lower()
+            _sp = fd.get('sim.params', '').lower()
+            if _sd == 'spice' and ('type="x"' in _sp or "type='x'" in _sp):
+                ref_out = 'x' + ref_out
         lines.append((ref_out + ' ' + nets + ' ' + val).strip())
     lines.append('.end')
     return lines

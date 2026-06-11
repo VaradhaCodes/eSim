@@ -1,0 +1,7 @@
+* Sequence_dettb (eSim netlist via kicad-cli kicadxml)
+* Sheet Name: /
+v1 clk gnd pulse
+v2 reset gnd pulse
+v3 data gnd pulse
+x1 clk reset data detect OSD2
+.end

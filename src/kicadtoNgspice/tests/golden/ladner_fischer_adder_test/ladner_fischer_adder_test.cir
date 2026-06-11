@@ -1,0 +1,54 @@
+* C:\Users\chaitanya\eSim-Workspace\ladner_fischer_adder_test\ladner_fischer_adder_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/19/26 15:12:08
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  A7 A6 A5 A4 A3 A2 A1 A0 B7 B6 B5 B4 B3 B2 B1 B0 cin sum7 sum6 sum5 sum4 sum3 sum2 sum1 sum0 cout lf_adder_ip		
+v2  A0 GND pulse		
+v4  A1 GND pulse		
+v6  A2 GND pulse		
+v8  A3 GND pulse		
+v10  A4 GND pulse		
+v12  A5 GND pulse		
+v14  A6 GND pulse		
+v16  A7 GND pulse		
+v1  B7 GND pulse		
+v3  B6 GND pulse		
+v5  B5 GND pulse		
+v7  B4 GND pulse		
+v9  B3 GND pulse		
+v11  B2 GND pulse		
+v13  B1 GND pulse		
+v15  B0 GND pulse		
+v17  cin GND pulse		
+U18  sum7 plot_v1		
+U19  sum6 plot_v1		
+U20  sum5 plot_v1		
+U21  sum4 plot_v1		
+U22  sum3 plot_v1		
+U23  sum2 plot_v1		
+U24  sum1 plot_v1		
+U25  sum0 plot_v1		
+U26  cout plot_v1		
+U16  A7 plot_v1		
+U14  A6 plot_v1		
+U12  A5 plot_v1		
+U10  A4 plot_v1		
+U8  A3 plot_v1		
+U6  A2 plot_v1		
+U4  A1 plot_v1		
+U2  A0 plot_v1		
+U17  cin plot_v1		
+U15  B0 plot_v1		
+U13  B1 plot_v1		
+U11  B2 plot_v1		
+U9  B3 plot_v1		
+U7  B4 plot_v1		
+U5  B5 plot_v1		
+U3  B6 plot_v1		
+U1  B7 plot_v1		
+
+.end

@@ -1,0 +1,28 @@
+* C:\Users\chaitanya\eSim-Workspace\wallace_encoder_test\wallace_encoder_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/20/26 12:39:59
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  in_7 in_6 in_5 in_4 in_3 in_2 in_1 out_2 out_1 out_0 wallace_encoder_7X3_ip		
+v1  in_7 GND pulse		
+v2  in_6 GND pulse		
+v3  in_5 GND pulse		
+v4  in_4 GND pulse		
+v5  in_3 GND pulse		
+v6  in_2 GND pulse		
+v7  in_1 GND pulse		
+U8  out_2 plot_v1		
+U9  out_1 plot_v1		
+U10  out_0 plot_v1		
+U7  in_1 plot_v1		
+U6  in_2 plot_v1		
+U5  in_3 plot_v1		
+U4  in_4 plot_v1		
+U3  in_5 plot_v1		
+U2  in_6 plot_v1		
+U1  in_7 plot_v1		
+
+.end

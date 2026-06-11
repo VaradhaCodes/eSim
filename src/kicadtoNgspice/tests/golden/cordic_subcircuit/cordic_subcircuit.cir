@@ -1,0 +1,24 @@
+* C:\FOSSEE\eSim\library\SubcircuitLibrary\cordic_subcircuit\cordic_subcircuit.cir
+* CORRECTED: model name matches cordic_ip NgSpice model; pin names align with cordic_ip
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/23/26 18:43:44
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+* cordic_ip pin order: clk(1) ist(2) degree_in15..0(3-18) start(19) sin_out15..0(20-35) cos_out15..0(36-51) done(52)
+U1  Net-_U1-Pad1_ Net-_U1-Pad2_ Net-_U1-Pad3_ Net-_U1-Pad4_ Net-_U1-Pad5_ Net-_U1-Pad6_ Net-_U1-Pad7_ Net-_U1-Pad8_ Net-_U1-Pad9_ Net-_U1-Pad10_ Net-_U1-Pad11_ Net-_U1-Pad12_ Net-_U1-Pad13_ Net-_U1-Pad14_ Net-_U1-Pad15_ Net-_U1-Pad16_ Net-_U1-Pad17_ Net-_U1-Pad18_ Net-_U1-Pad19_ Net-_U1-Pad20_ Net-_U1-Pad21_ Net-_U1-Pad22_ Net-_U1-Pad23_ Net-_U1-Pad24_ Net-_U1-Pad25_ Net-_U1-Pad26_ Net-_U1-Pad27_ Net-_U1-Pad28_ Net-_U1-Pad29_ Net-_U1-Pad30_ Net-_U1-Pad31_ Net-_U1-Pad32_ Net-_U1-Pad33_ Net-_U1-Pad34_ Net-_U1-Pad35_ Net-_U1-Pad36_ Net-_U1-Pad37_ Net-_U1-Pad38_ Net-_U1-Pad39_ Net-_U1-Pad40_ Net-_U1-Pad41_ Net-_U1-Pad42_ Net-_U1-Pad43_ Net-_U1-Pad44_ Net-_U1-Pad45_ Net-_U1-Pad46_ Net-_U1-Pad47_ Net-_U1-Pad48_ Net-_U1-Pad49_ Net-_U1-Pad50_ Net-_U1-Pad51_ Net-_U1-Pad52_ cordic		
+U5  Net-_U2-Pad11_ Net-_U2-Pad12_ Net-_U2-Pad13_ Net-_U2-Pad14_ Net-_U2-Pad15_ Net-_U2-Pad16_ Net-_U2-Pad17_ Net-_U2-Pad18_ Net-_U1-Pad11_ Net-_U1-Pad12_ Net-_U1-Pad13_ Net-_U1-Pad14_ Net-_U1-Pad15_ Net-_U1-Pad16_ Net-_U1-Pad17_ Net-_U1-Pad18_ adc_bridge_8		
+U4  Net-_U2-Pad3_ Net-_U2-Pad4_ Net-_U2-Pad5_ Net-_U2-Pad6_ Net-_U2-Pad7_ Net-_U2-Pad8_ Net-_U2-Pad9_ Net-_U2-Pad10_ Net-_U1-Pad3_ Net-_U1-Pad4_ Net-_U1-Pad5_ Net-_U1-Pad6_ Net-_U1-Pad7_ Net-_U1-Pad8_ Net-_U1-Pad9_ Net-_U1-Pad10_ adc_bridge_8		
+U3  Net-_U2-Pad1_ Net-_U2-Pad2_ Net-_U1-Pad1_ Net-_U1-Pad2_ adc_bridge_2		
+U6  Net-_U2-Pad19_ Net-_U1-Pad19_ adc_bridge_1		
+U7  Net-_U1-Pad20_ Net-_U1-Pad21_ Net-_U1-Pad22_ Net-_U1-Pad23_ Net-_U1-Pad24_ Net-_U1-Pad25_ Net-_U1-Pad26_ Net-_U1-Pad27_ Net-_U2-Pad20_ Net-_U2-Pad21_ Net-_U2-Pad22_ Net-_U2-Pad23_ Net-_U2-Pad24_ Net-_U2-Pad25_ Net-_U2-Pad26_ Net-_U12-Pad1_ dac_bridge_8		
+U8  Net-_U1-Pad28_ Net-_U1-Pad29_ Net-_U1-Pad30_ Net-_U1-Pad31_ Net-_U1-Pad32_ Net-_U1-Pad33_ Net-_U1-Pad34_ Net-_U1-Pad35_ Net-_U12-Pad2_ Net-_U12-Pad3_ Net-_U12-Pad4_ Net-_U12-Pad5_ Net-_U12-Pad6_ Net-_U12-Pad7_ Net-_U12-Pad8_ Net-_U12-Pad9_ dac_bridge_8		
+U9  Net-_U1-Pad36_ Net-_U1-Pad37_ Net-_U1-Pad38_ Net-_U1-Pad39_ Net-_U1-Pad40_ Net-_U1-Pad41_ Net-_U1-Pad42_ Net-_U1-Pad43_ Net-_U12-Pad10_ Net-_U12-Pad11_ Net-_U12-Pad12_ Net-_U12-Pad13_ Net-_U12-Pad14_ Net-_U12-Pad15_ Net-_U12-Pad16_ Net-_U12-Pad17_ dac_bridge_8		
+U10  Net-_U1-Pad44_ Net-_U1-Pad45_ Net-_U1-Pad46_ Net-_U1-Pad47_ Net-_U1-Pad48_ Net-_U1-Pad49_ Net-_U1-Pad50_ Net-_U1-Pad51_ Net-_U10-Pad9_ Net-_U10-Pad10_ Net-_U10-Pad11_ Net-_U10-Pad12_ Net-_U10-Pad13_ Net-_U10-Pad14_ Net-_U10-Pad15_ Net-_U10-Pad16_ dac_bridge_8		
+U11  Net-_U1-Pad52_ Net-_U11-Pad2_ dac_bridge_1		
+U2  Net-_U2-Pad1_ Net-_U2-Pad2_ Net-_U2-Pad3_ Net-_U2-Pad4_ Net-_U2-Pad5_ Net-_U2-Pad6_ Net-_U2-Pad7_ Net-_U2-Pad8_ Net-_U2-Pad9_ Net-_U2-Pad10_ Net-_U2-Pad11_ Net-_U2-Pad12_ Net-_U2-Pad13_ Net-_U2-Pad14_ Net-_U2-Pad15_ Net-_U2-Pad16_ Net-_U2-Pad17_ Net-_U2-Pad18_ Net-_U2-Pad19_ Net-_U2-Pad20_ Net-_U2-Pad21_ Net-_U2-Pad22_ Net-_U2-Pad23_ Net-_U2-Pad24_ Net-_U2-Pad25_ Net-_U2-Pad26_ PORT		
+U12  Net-_U12-Pad1_ Net-_U12-Pad2_ Net-_U12-Pad3_ Net-_U12-Pad4_ Net-_U12-Pad5_ Net-_U12-Pad6_ Net-_U12-Pad7_ Net-_U12-Pad8_ Net-_U12-Pad9_ Net-_U12-Pad10_ Net-_U12-Pad11_ Net-_U12-Pad12_ Net-_U12-Pad13_ Net-_U12-Pad14_ Net-_U12-Pad15_ Net-_U12-Pad16_ Net-_U12-Pad17_ Net-_U10-Pad9_ Net-_U10-Pad10_ Net-_U10-Pad11_ Net-_U10-Pad12_ Net-_U10-Pad13_ Net-_U10-Pad14_ Net-_U10-Pad15_ Net-_U10-Pad16_ Net-_U11-Pad2_ PORT		
+
+.end
