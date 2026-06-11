@@ -1,0 +1,60 @@
+* C:\Users\chaitanya\eSim-Workspace\divider_8bit_test\divider_8bit_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/22/26 09:39:54
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  dividend7 dividend6 dividend5 dividend4 dividend3 dividend2 dividend1 dividend0 divisor7 divisor6 divisor5 divisor4 divisor3 divisor2 divisor1 divisor0 quotient7 quotient6 quotient5 quotient4 quotient3 quotient2 quotient1 quotient0 remainder7 remainder6 remainder5 remainder4 remainder3 remainder2 remainder1 remainder0 div_by_zero divider_8bit_ip		
+v2  divisor7 GND pulse		
+v4  divisor6 GND pulse		
+v6  divisor5 GND pulse		
+v8  divisor4 GND pulse		
+v10  divisor3 GND pulse		
+v12  divisor2 GND pulse		
+v13  divisor1 GND pulse		
+v15  divisor0 GND pulse		
+v1  dividend0 GND pulse		
+v3  dividend1 GND pulse		
+v5  dividend2 GND pulse		
+v7  dividend3 GND pulse		
+v9  dividend4 GND pulse		
+v11  dividend5 GND pulse		
+v14  dividend6 GND pulse		
+v16  dividend7 GND pulse		
+U1  quotient7 plot_v1		
+U3  quotient6 plot_v1		
+U5  quotient5 plot_v1		
+U7  quotient4 plot_v1		
+U9  quotient3 plot_v1		
+U11  quotient2 plot_v1		
+U13  quotient1 plot_v1		
+U15  quotient0 plot_v1		
+U2  div_by_zero plot_v1		
+U4  remainder0 plot_v1		
+U6  remainder1 plot_v1		
+U8  remainder2 plot_v1		
+U10  remainder3 plot_v1		
+U12  remainder4 plot_v1		
+U14  remainder5 plot_v1		
+U16  remainder6 plot_v1		
+U17  remainder7 plot_v1		
+U33  dividend7 plot_v1		
+U30  dividend6 plot_v1		
+U28  dividend5 plot_v1		
+U26  dividend4 plot_v1		
+U24  dividend3 plot_v1		
+U22  dividend2 plot_v1		
+U20  dividend1 plot_v1		
+U18  dividend0 plot_v1		
+U32  divisor0 plot_v1		
+U31  divisor1 plot_v1		
+U29  divisor2 plot_v1		
+U27  divisor3 plot_v1		
+U25  divisor4 plot_v1		
+U23  divisor5 plot_v1		
+U21  divisor6 plot_v1		
+U19  divisor7 plot_v1		
+
+.end

@@ -1,0 +1,59 @@
+* C:\Users\chaitanya\eSim-Workspace\alu_test\alu_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/23/26 14:27:54
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  a7 a6 a5 a4 a3 a2 a1 a0 b7 b6 b5 b4 b3 b2 b1 b0 sel3 sel2 sel1 sel0 out7 out6 out5 out4 out3 out2 out1 out0 alu_ip		
+v2  a0 GND pulse		
+v5  a1 GND pulse		
+v7  a2 GND pulse		
+v9  a3 GND pulse		
+v11  a4 GND pulse		
+v14  a5 GND pulse		
+v16  a6 GND pulse		
+v18  a7 GND pulse		
+v1  b7 GND pulse		
+v3  b6 GND pulse		
+v4  b5 GND pulse		
+v6  b4 GND pulse		
+v8  b3 GND pulse		
+v10  b2 GND pulse		
+v12  b1 GND pulse		
+v13  b0 GND pulse		
+v15  sel3 GND pulse		
+v17  sel2 GND pulse		
+v19  sel1 GND pulse		
+v20  sel0 GND pulse		
+U21  out7 plot_v1		
+U22  out6 plot_v1		
+U23  out5 plot_v1		
+U24  out4 plot_v1		
+U25  out3 plot_v1		
+U26  out2 plot_v1		
+U27  out1 plot_v1		
+U28  out0 plot_v1		
+U19  a7 plot_v1		
+U16  a6 plot_v1		
+U14  a5 plot_v1		
+U12  a4 plot_v1		
+U9  a3 plot_v1		
+U7  a2 plot_v1		
+U5  a1 plot_v1		
+U2  a0 plot_v1		
+U20  sel0 plot_v1		
+U18  sel1 plot_v1		
+U17  sel2 plot_v1		
+U15  sel3 plot_v1		
+U13  b0 plot_v1		
+U11  b1 plot_v1		
+U10  b2 plot_v1		
+U8  b3 plot_v1		
+U6  b4 plot_v1		
+U4  b5 plot_v1		
+U3  b6 plot_v1		
+U1  b7 plot_v1		
+
+.end

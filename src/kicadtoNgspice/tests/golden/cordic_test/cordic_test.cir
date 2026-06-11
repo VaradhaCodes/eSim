@@ -1,0 +1,82 @@
+* C:\Users\chaitanya\eSim-Workspace\cordic_test\cordic_test.cir
+
+* EESchema Netlist Version 1.1 (Spice format) creation date: 05/24/26 10:28:26
+
+* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+
+* Sheet Name: /
+x1  clk rst in15 in14 in13 in12 in11 in10 in9 in8 in7 in6 in5 in4 in3 in2 in1 in0 start sin15 sin14 sin13 sin12 sin11 sin10 sin9 sin8 sin7 sin6 sin5 sin4 sin3 sin2 sin1 sin0 cos15 cos14 cos13 cos12 cos11 cos10 cos9 cos8 cos7 cos6 cos5 cos4 cos3 cos2 cos1 cos0 done cordic_ip		
+v1  in8 GND pulse		
+v3  in9 GND pulse		
+v5  in10 GND pulse		
+v8  in11 GND pulse		
+v10  in12 GND pulse		
+v12  in13 GND pulse		
+v14  in14 GND pulse		
+v16  in15 GND pulse		
+v18  rst GND pulse		
+v19  clk GND pulse		
+v2  in7 GND pulse		
+v4  in6 GND pulse		
+v6  in5 GND pulse		
+v7  in4 GND pulse		
+v9  in3 GND pulse		
+v11  in2 GND pulse		
+v13  in1 GND pulse		
+v15  in0 GND pulse		
+v17  start GND pulse		
+U22  sin15 plot_v1		
+U26  sin14 plot_v1		
+U28  sin13 plot_v1		
+U31  sin12 plot_v1		
+U33  sin11 plot_v1		
+U35  sin10 plot_v1		
+U37  sin9 plot_v1		
+U39  sin8 plot_v1		
+U41  sin7 plot_v1		
+U42  sin6 plot_v1		
+U44  sin5 plot_v1		
+U46  sin4 plot_v1		
+U48  sin3 plot_v1		
+U49  sin2 plot_v1		
+U51  sin1 plot_v1		
+U52  sin0 plot_v1		
+U21  cos15 plot_v1		
+U25  cos14 plot_v1		
+U29  cos13 plot_v1		
+U32  cos12 plot_v1		
+U36  cos11 plot_v1		
+U38  cos10 plot_v1		
+U40  cos9 plot_v1		
+U43  cos8 plot_v1		
+U45  cos7 plot_v1		
+U47  cos6 plot_v1		
+U50  cos5 plot_v1		
+U23  cos4 plot_v1		
+U27  cos3 plot_v1		
+U30  cos2 plot_v1		
+U34  cos1 plot_v1		
+U20  done plot_v1		
+U24  cos0 plot_v1		
+U19  clk plot_v1		
+U16  in15 plot_v1		
+U14  in14 plot_v1		
+U12  in13 plot_v1		
+U10  in12 plot_v1		
+U8  in11 plot_v1		
+U6  in10 plot_v1		
+U3  in9 plot_v1		
+U1  in8 plot_v1		
+U18  start plot_v1		
+U15  in0 plot_v1		
+U13  in1 plot_v1		
+U11  in2 plot_v1		
+U9  in3 plot_v1		
+U7  in4 plot_v1		
+U5  in5 plot_v1		
+U4  in6 plot_v1		
+U2  in7 plot_v1		
+U17  rst plot_v1		
+
+.end
