@@ -314,8 +314,9 @@ class NgVeri(QtWidgets.QWidget):
                 mod.write(item)
             mod.close()
 
-            # Remove the KiCad symbol too, so the model actually disappears
-            # from eSim_Ngveri in KiCad (previously left behind forever).
+            # Remove the KiCad symbol + orphan param XML too, so the model
+            # actually disappears from eSim_Ngveri in KiCad (previously left
+            # behind forever).
             try:
                 symbol = createkicad.AutoSchematic()
                 symbol.init(text, "")
@@ -323,6 +324,20 @@ class NgVeri(QtWidgets.QWidget):
             except Exception as err:
                 print("Could not remove KiCad symbol for '" +
                       str(text) + "': " + str(err))
+
+            # Drop the compiled per-model build dir under the release tree, so
+            # the rebuild below truly unlinks the model. Without this its stale
+            # .o/.a got re-bundled and the model kept answering in ngspice even
+            # though the picker entry, symbol and modpath.lst line were gone.
+            model_dir = os.path.join(
+                self.release_dir, "src/xspice/icm/Ngveri", text)
+            try:
+                shutil.rmtree(model_dir)
+            except FileNotFoundError:
+                pass
+            except OSError as err:
+                print("Could not remove build dir '" +
+                      model_dir + "': " + str(err))
 
             self.fname = Maker.verilogFile[self.filecount]
             model = ModelGeneration.ModelGeneration(

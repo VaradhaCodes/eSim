@@ -933,43 +933,28 @@ and set the load for input ports */
         '''
         print("Copying the required files to Release Folder.............")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
-        path_icm = self.release_home + "/src/xspice/icm/Ngveri/"
-        if not os.path.isdir(path_icm + self.fname.split('.')[0]):
-            os.mkdir(path_icm + self.fname.split('.')[0])
-        path_icm = path_icm + self.fname.split('.')[0]
-        if os.path.exists(
-            path_icm +
-            "sim_main_" +
-            self.fname.split('.')[0] +
-                ".o"):
-            os.remove(path_icm + "sim_main_" + self.fname.split('.')[0] + ".o")
-        if os.path.exists(
-            self.release_home +
-            "src/xspice/icm/Ngveri/" +
-                "verilated.o"):
-            os.remove(
-                self.release_home + "src/xspice/icm/Ngveri/" + "verilated.o"
-            )
-        if os.path.exists(
-            self.release_home +
-            "src/xspice/icm/Ngveri/" +
-                "verilated_threads.o"):
-            os.remove(
-                self.release_home + "src/xspice/icm/Ngveri/" + "verilated_threads.o"
-            )
-        if os.path.exists(
-            path_icm +
-            "V" +
-            self.fname.split('.')[0] +
-                "__ALL.a"):
-            os.remove(path_icm + "V" + self.fname.split('.')[0] + "__ALL.a")
+        ngveri_icm = self.release_home + "/src/xspice/icm/Ngveri/"
+        model = self.fname.split('.')[0]
+        # Per-model dir; keep a trailing slash so the os.remove guards below
+        # actually target real files. Without it the paths glued to
+        # ".../Ngveri/<model>sim_main_..." (note the missing slash), never
+        # existed, so the stale-artifact cleanup was a silent no-op.
+        path_icm = ngveri_icm + model + "/"
+        if not os.path.isdir(path_icm):
+            os.mkdir(path_icm)
+        if os.path.exists(path_icm + "sim_main_" + model + ".o"):
+            os.remove(path_icm + "sim_main_" + model + ".o")
+        if os.path.exists(ngveri_icm + "verilated.o"):
+            os.remove(ngveri_icm + "verilated.o")
+        if os.path.exists(ngveri_icm + "verilated_threads.o"):
+            os.remove(ngveri_icm + "verilated_threads.o")
+        if os.path.exists(path_icm + "V" + model + "__ALL.a"):
+            os.remove(path_icm + "V" + model + "__ALL.a")
         # print(self.modelpath)
-        self.cmd = "cp sim_main_" + \
-            self.fname.split('.')[0] + ".o V" + \
-            self.fname.split('.')[0] + "__ALL.a " + path_icm
+        self.cmd = "cp sim_main_" + model + ".o V" + \
+            model + "__ALL.a " + path_icm
         ok1 = self._run(self.cmd, "COPYING FILES", cwd=self.modelpath)
-        self.cmd = "cp ../verilated.o ../verilated_threads.o " + \
-            self.release_home + "/src/xspice/icm/Ngveri/"
+        self.cmd = "cp ../verilated.o ../verilated_threads.o " + ngveri_icm
         ok2 = self._run(self.cmd, "COPYING FILES", cwd=self.modelpath)
         print("Copied the files")
         return ok1 and ok2

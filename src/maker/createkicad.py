@@ -178,7 +178,10 @@ class AutoSchematic:
                 print("Overwriting existing libraries")
                 self.getPortInformation()
                 self.createXML()
-                self.removeOldLibrary()     # Removes the existing library
+                # No explicit removeOldLibrary() here: createSym() ->
+                # _commit_block() already replaces any existing block of this
+                # name idempotently, so pre-removing only rewrites the shared
+                # file twice (and widened the crash window it guards against).
                 self.createSym()
             else:
                 print("Library Creation Cancelled")
@@ -265,10 +268,18 @@ class AutoSchematic:
     def deleteKicadSymbol(self):
         '''
             Public entry point for the NgVeri "Remove Verilog Models" feature:
-            drop this model's symbol from eSim_Ngveri.kicad_sym. Idempotent and
-            safe to call when the symbol is absent.
+            drop this model's symbol from eSim_Ngveri.kicad_sym AND delete the
+            orphan param XML the build left at
+            library/modelParamXML/Ngveri/<name>.xml (previously left behind, so
+            a re-add saw a stale "Library already exists" and re-used old port
+            data). Idempotent and safe to call when either is already absent.
         '''
         self.removeOldLibrary()
+        xml = os.path.join(self.xml_loc, 'Ngveri', self.modelname + '.xml')
+        try:
+            os.remove(xml)
+        except FileNotFoundError:
+            pass
 
     def _commit_block(self, block):
         '''
