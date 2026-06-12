@@ -41,6 +41,13 @@ class ModelGeneration(QtWidgets.QWidget):
     '''
         Class is used to generate the Ngspice Model
     '''
+
+    # Generous cap (ms) so big verilator/make builds are not guillotined at
+    # the old 50 s limit, while a genuinely hung process is still killed and
+    # reported instead of either freezing the GUI forever or silently
+    # producing a half-built model.
+    PROCESS_TIMEOUT = 600000        # 10 minutes
+
     def __init__(self, file, termedit):
         QtWidgets.QWidget.__init__(self)
         super().__init__()
@@ -72,6 +79,45 @@ class ModelGeneration(QtWidgets.QWidget):
         self.licensefile = self.parser.get('SRC', 'LICENSE')
         self.digital_home = self.parser.get(
                             'NGHDL', 'DIGITAL_MODEL') + "/Ngveri"
+
+    def _run(self, cmd, title, cwd=None):
+        '''
+            Run one shell command of the model-build pipeline, streaming its
+            stdout and stderr live into the NgVeri terminal, and return True
+            only when the process exits cleanly with code 0. The working
+            directory is always restored afterwards (even on error/timeout),
+            so a failed step can never leave eSim stuck inside a model
+            sub-directory. This replaces the old "fire QProcess and assume it
+            worked" pattern that made every compile failure look like success.
+        '''
+        prev_dir = os.getcwd()
+        try:
+            if cwd:
+                os.chdir(cwd)
+            self.process = QtCore.QProcess(self)
+            self.process \
+                .readyReadStandardOutput.connect(self.readAllStandard)
+            self.process \
+                .readyReadStandardError.connect(self.readAllStandard)
+            self.termtitle(title)
+            self.termtext("Current Directory: " + (cwd or prev_dir))
+            self.termtext("Command: " + cmd)
+            self.process.start('sh', ['-c', cmd])
+            if not self.process.waitForFinished(self.PROCESS_TIMEOUT):
+                self.process.kill()
+                self.process.waitForFinished(2000)
+                self.termtext("[NgVeri] '" + title +
+                              "' timed out and was stopped.")
+                return False
+            ok = (self.process.exitStatus() ==
+                  QtCore.QProcess.ExitStatus.NormalExit and
+                  self.process.exitCode() == 0)
+            if not ok:
+                self.termtext("[NgVeri] '" + title + "' failed (exit code " +
+                              str(self.process.exitCode()) + ").")
+            return ok
+        finally:
+            os.chdir(prev_dir)
 
     def verilogfile(self):
         '''
@@ -125,35 +171,15 @@ class ModelGeneration(QtWidgets.QWidget):
                    init_path + "library/tlv/pseudo_rand_gen.sv " + \
                    init_path + "library/tlv/pseudo_rand.m4out.tlv " + \
                    self.file + " " + self.modelpath
-
-        self.process = QtCore.QProcess(self)
-        self.args = ['-c', self.cmd]
-        self.process.start('sh', self.args)
-        self.termedit.append("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        self._run(self.cmd, "COPY TLV FILES")
         print("Copied the files required for TLV successfully")
-        self.cur_dir = os.getcwd()
+
         print("Running Sandpiper............")
-        os.chdir(self.modelpath)
         self.cmd = "sandpiper-saas -i " + \
             self.fname.split('.')[0] + ".tlv -o "\
             + self.fname.split('.')[0] + ".sv"
-        # self.args = ['-c', self.cmd]
-        # self.process.start('sh', self.args)
-        self.process.start(self.cmd)
-        self.termtitle("RUN SANDPIPER-SAAS")
-        self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        # self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        self._run(self.cmd, "RUN SANDPIPER-SAAS", cwd=self.modelpath)
         print("Ran Sandpiper successfully")
-        os.chdir(self.cur_dir)
         self.fname = self.fname.split('.')[0] + ".sv"
 
     def verilogParse(self):
@@ -833,8 +859,12 @@ and set the load for input ports */
         text = mod.read()
         mod.close()
         mod = open(self.digital_home + '/modpath.lst', 'a+')
-        if not self.fname.split('.')[0] in text:
-            mod.write(self.fname.split('.')[0] + "\n")
+        # Exact-line membership: a plain "in text" substring test wrongly
+        # treats "divider" as already present because "divider_8bit" contains
+        # it, which silently drops the shorter model from Ngveri.cm.
+        modname = self.fname.split('.')[0]
+        if modname not in text.split():
+            mod.write(modname + "\n")
         mod.close()
 
     def run_verilator(self):
@@ -846,7 +876,6 @@ and set the load for input ports */
         if os.name == 'nt':
             init_path = ''
 
-        self.cur_dir = os.getcwd()
         wno = " "
         with open(init_path + "library/tlv/lint_off.txt") as file:
             for item in file.readlines():
@@ -854,7 +883,6 @@ and set the load for input ports */
                     wno += " -Wno-" + item.strip("\n")
 
         print("Running Verilator.............")
-        os.chdir(self.modelpath)
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         # print(self.modelpath)
 
@@ -874,28 +902,13 @@ and set the load for input ports */
           -fPIC -output-split 0 sim_main_" + \
             self.fname.split('.')[0] + ".cpp --autoflush  \
             -DBSV_RESET_FIFO_HEAD -DBSV_RESET_FIFO_ARRAY  " + self.fname
-        self.process = QtCore.QProcess(self)
-        self.process.readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtitle("RUN VERILATOR")
-        self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        # self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
-        print("Verilator Executed")
-        os.chdir(self.cur_dir)
+        return self._run(self.cmd, "RUN VERILATOR", cwd=self.modelpath)
 
     def make_verilator(self):
         '''
             Running make verilator using this function
         '''
-        self.cur_dir = os.getcwd()
         print("Make Verilator.............")
-        os.chdir(self.modelpath)
 
         if os.path.exists(self.modelpath + "../verilated.o"):
             os.remove(self.modelpath + "../verilated.o")
@@ -911,29 +924,14 @@ and set the load for input ports */
             + ".mk V" + self.fname.split(
             '.')[0] + "__ALL.a sim_main_" \
             + self.fname.split('.')[0] + ".o ../verilated.o ../verilated_threads.o"
-        self.process = QtCore.QProcess(self)
-        self.process.readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtitle("MAKE VERILATOR")
-        self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
-
-        print("Make Verilator Executed")
-        os.chdir(self.cur_dir)
+        return self._run(self.cmd, "MAKE VERILATOR", cwd=self.modelpath)
 
     def copy_verilator(self):
         '''
             This function copies the verilator files/object files from
             "src/xspice/icm/Ngveri/ to release/src/xspice/icm/Ngveri/"
         '''
-        self.cur_dir = os.getcwd()
         print("Copying the required files to Release Folder.............")
-        os.chdir(self.modelpath)
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = self.release_home + "/src/xspice/icm/Ngveri/"
         if not os.path.isdir(path_icm + self.fname.split('.')[0]):
@@ -963,35 +961,18 @@ and set the load for input ports */
             path_icm +
             "V" +
             self.fname.split('.')[0] +
-                "__ALL.o"):
-            os.remove(path_icm + "V" + self.fname.split('.')[0] + "__ALL.o")
+                "__ALL.a"):
+            os.remove(path_icm + "V" + self.fname.split('.')[0] + "__ALL.a")
         # print(self.modelpath)
-        try:
-            self.cmd = "cp sim_main_" + \
-                self.fname.split('.')[0] + ".o V" + \
-                self.fname.split('.')[0] + "__ALL.o " + path_icm
-            self.process = QtCore.QProcess(self)
-            self.args = ['-c', self.cmd]
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.start('sh', self.args)
-            self.termtitle("COPYING FILES")
-            self.termtext("Current Directory: " + self.modelpath)
-            self.termtext("Command: " + self.cmd)
-            self.process.waitForFinished(50000)
-            self.cmd = "cp ../verilated.o ../verilated_threads.o " + self.release_home \
-                + "/src/xspice/icm/Ngveri/"
-            self.process.start('sh', ['-c', self.cmd])
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            print("Copied the files")
-            os.chdir(self.cur_dir)
-        except BaseException:
-            print("There is error in Copying Files ")
+        self.cmd = "cp sim_main_" + \
+            self.fname.split('.')[0] + ".o V" + \
+            self.fname.split('.')[0] + "__ALL.a " + path_icm
+        ok1 = self._run(self.cmd, "COPYING FILES", cwd=self.modelpath)
+        self.cmd = "cp ../verilated.o ../verilated_threads.o " + \
+            self.release_home + "/src/xspice/icm/Ngveri/"
+        ok2 = self._run(self.cmd, "COPYING FILES", cwd=self.modelpath)
+        print("Copied the files")
+        return ok1 and ok2
 
     def runMake(self):
         '''
@@ -1000,73 +981,33 @@ and set the load for input ports */
         print("run Make Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
 
-        try:
-            if os.name == 'nt':
-                # path to msys home directory
-                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                self.cmd = self.msys_home + "/mingw64/bin/mingw32-make.exe"
-            else:
-                self.cmd = "make"
+        if os.name == 'nt':
+            # path to msys home directory
+            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
+            self.cmd = self.msys_home + "/mingw64/bin/mingw32-make.exe"
+        else:
+            self.cmd = "make"
 
-            print("Running Make command in " + path_icm)
-            self.process = QtCore.QProcess(self)
-            self.process.start('sh', ['-c', self.cmd])
-            print("make command process pid ---------- >", self.process.processId())
-
-            self.termtitle("MAKE COMMAND")
-            self.termtext("Current Directory: " + path_icm)
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            os.chdir(self.cur_dir)
-        except BaseException:
-            print("There is error in 'make' ")
+        print("Running Make command in " + path_icm)
+        return self._run(self.cmd, "MAKE COMMAND", cwd=path_icm)
 
     def runMakeInstall(self):
         '''
             Running the make install command for Ngspice
         '''
-        self.cur_dir = os.getcwd()
         print("run Make Install Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
 
-        try:
-            if os.name == 'nt':
-                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                self.cmd = self.msys_home + \
-                    "/mingw64/bin/mingw32-make.exe install"
-            else:
-                self.cmd = "make install"
-            print("Running Make Install")
-            try:
-                self.process.close()
-            except BaseException:
-                pass
-
-            self.process = QtCore.QProcess(self)
-            self.process.start('sh', ['-c', self.cmd])
-            # text="<span style=\" font-size:8pt; font-weight:600;
-            # color:#000000;\" >"
-            self.termtitle("MAKE INSTALL COMMAND")
-            self.termtext("Current Directory: " + path_icm)
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            os.chdir(self.cur_dir)
-
-        except BaseException as e:
-            print(e)
-            print("There is error in 'make install' ")
+        if os.name == 'nt':
+            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
+            self.cmd = self.msys_home + \
+                "/mingw64/bin/mingw32-make.exe install"
+        else:
+            self.cmd = "make install"
+        print("Running Make Install")
+        return self._run(self.cmd, "MAKE INSTALL COMMAND", cwd=path_icm)
 
     def addfile(self):
         '''
@@ -1172,16 +1113,9 @@ and set the load for input ports */
             self.obj_Appconfig.print_info('Adding the Folder')
 
         print("Adding the Folder:" + includefolder.split('/')[-1])
-        self.termtitle("Adding the Folder:" + includefolder.split('/')[-1])
-
-        self.process = QtCore.QProcess(self)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtext("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        self._run(self.cmd,
+                  "Adding the Folder:" + includefolder.split('/')[-1])
         print("Added the folder")
-        # os.chdir(self.cur_dir)
 
     def termtitle(self, textin):
         '''

@@ -30,8 +30,104 @@
 from . import Appconfig
 import re
 import os
+import tempfile
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
+
+
+# ── Robust S-expression helpers for the shared eSim_Ngveri.kicad_sym lib ──
+# The library is one KiCad symbol file appended to by every NgVeri model. The
+# original code mutated it with raw byte/line surgery (content[:-2],
+# lines[0:-2], line.startswith("(symbol")) which, on repeated add/overwrite/
+# delete, glued blocks together ("))(symbol ..."), shed a part's opening
+# "(symbol" line, and left unbalanced parens. KiCad then rejects the whole file
+# and the library disappears. These helpers parse the file into balanced
+# top-level part blocks keyed by model name, so add/overwrite/delete are
+# idempotent and always re-serialize a valid, balanced file (also healing an
+# already-corrupted file on the next write).
+
+_LIB_HEADER = ('(kicad_symbol_lib (version 20211014) '
+               '(generator kicad_symbol_editor)')
+
+# A *part* opener is distinctively '(symbol "<name>" (pin_names'. Sub-units
+# '(symbol "<name>_0_1"(rectangle' / '(symbol "<name>_1_1"' never match this.
+_PART_RE = re.compile(r'\(symbol\s+"([^"]+)"\s+\(pin_names')
+
+
+def _balanced_end(text, start):
+    '''Index just past the ")" that closes the "(" at text[start], honoring
+       quoted strings. Returns -1 if it never balances (truncated/corrupt).'''
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == '\\':
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return -1
+
+
+def _extract_parts(content):
+    '''Parse a (possibly corrupt) kicad_sym into an ordered {name: block}.
+       Only well-formed balanced part blocks are kept; orphaned/duplicate
+       blocks are dropped and the last definition of a name wins (freshest).'''
+    parts = {}
+    for m in _PART_RE.finditer(content):
+        end = _balanced_end(content, m.start())
+        if end != -1:
+            parts[m.group(1)] = content[m.start():end].strip()
+    return parts
+
+
+def _read_parts(path):
+    try:
+        with open(path) as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ''
+    return _extract_parts(content)
+
+
+def _write_lib(path, parts):
+    '''Serialize {name: block} back into a valid, balanced kicad_sym file.
+       Written atomically (temp file in the same dir + os.replace) so a crash,
+       full disk, or kill -9 mid-write can never leave the shared library
+       truncated or empty — the failure mode this module exists to fix.'''
+    out = [_LIB_HEADER, '']
+    for block in parts.values():
+        out.append(block)
+        out.append('')
+    out.append(')')
+    data = '\n'.join(out) + '\n'
+    directory = os.path.dirname(path) or '.'
+    fd, tmp = tempfile.mkstemp(
+        dir=directory, prefix='.eSim_Ngveri_', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)           # atomic on POSIX and Windows
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class AutoSchematic:
@@ -158,38 +254,46 @@ class AutoSchematic:
 
     def removeOldLibrary(self):
         '''
-            removing the old library
+            Remove every block for this model name from the shared library and
+            rewrite a clean, balanced file. Parse-based, so it correctly strips
+            glued/duplicated blocks (which the old startswith() scan missed).
         '''
-        cwd = os.getcwd()
-        os.chdir(self.lib_loc)
-        print("Changing directory to ", self.lib_loc)
-        sym_file = open(self.kicad_ngveri_sym)
-        lines = sym_file.readlines()
-        sym_file.close()
-        lines = lines[0:-2]
-        output = []
-        line_reading_flag = False
+        parts = _read_parts(self.kicad_ngveri_sym)
+        parts.pop(self.modelname, None)
+        _write_lib(self.kicad_ngveri_sym, parts)
 
-        for line in lines:
-            if line.startswith("(symbol"):    # Eeschema Template start
-                if line.split()[1] == f"\"{self.modelname}\"":
-                    line_reading_flag = True
-            if not line_reading_flag:
-                output.append(line)
-            if line.startswith("))"):        # Eeschema Template end
-                line_reading_flag = False
+    def deleteKicadSymbol(self):
+        '''
+            Public entry point for the NgVeri "Remove Verilog Models" feature:
+            drop this model's symbol from eSim_Ngveri.kicad_sym. Idempotent and
+            safe to call when the symbol is absent.
+        '''
+        self.removeOldLibrary()
 
-        sym_file = open(self.kicad_ngveri_sym, 'w')
-        for line in output:
-            sym_file.write(line)
-
-        os.chdir(cwd)
-        print("Leaving directory, ", self.lib_loc)
+    def _commit_block(self, block):
+        '''
+            Idempotently insert/overwrite this model's symbol block in the
+            shared library, then re-serialize a valid balanced file. The block
+            is verified to be a single balanced s-expression first, so a
+            malformed block is rejected instead of poisoning the shared file.
+        '''
+        block = block.strip()
+        if _balanced_end(block, 0) != len(block):
+            raise ValueError(
+                "Refusing to write malformed symbol block for '" +
+                str(self.modelname) + "': not a single balanced s-expression")
+        parts = _read_parts(self.kicad_ngveri_sym)
+        parts[self.modelname] = block
+        _write_lib(self.kicad_ngveri_sym, parts)
 
     def createSym(self):
         '''
-            creating the symbol
-            (pins snapped to KiCad-6 grid)
+            Build this model's KiCad symbol block (pins snapped to the KiCad-6
+            grid) and commit it idempotently to the shared library. The block
+            is assembled as a balanced string and handed to _commit_block(),
+            which replaces any existing block of the same name and
+            re-serializes a valid file — no raw byte/line surgery, so the
+            library can never be left glued or unbalanced.
         '''
         self.grid = 0.635
         self.dist_port = 4 * self.grid         # Distance between two ports # 100 mil (= 2.54 mm)
@@ -197,45 +301,23 @@ class AutoSchematic:
         def snap(val):
                 snapped = round(float(val) / self.grid) * self.grid
                 return f"{snapped:.3f}"
-        cwd = os.getcwd()
-        os.chdir(self.lib_loc)
-        print("Changing directory to ", self.lib_loc)
 
-        # Removing ")" from "eSim_Ngveri.kicad_sym"
-        file = open(self.kicad_ngveri_sym, "r")
-        content_file = file.read()
-        new_content_file = content_file[:-2]
-        file.close()
-        file = open(self.kicad_ngveri_sym, "w")
-        file.write(new_content_file)
-        file.close()
+        block = []                          # lines of this one (symbol ...)
 
-        # Appending new schematic block
-        sym_file = open(self.kicad_ngveri_sym, "a")
         line1 = self.template["start_def"]
         line1 = line1.split()
         line1 = [w.replace('comp_name', self.modelname) for w in line1]
         self.template["start_def"] = ' '.join(line1)
 
-        if os.stat(self.kicad_ngveri_sym).st_size == 0:
-            sym_file.write(
-                "(kicad_symbol_lib (version 20211014) " +
-                "(generator kicad_symbol_editor)" +
-                "\n\n"
-            )                       # Eeschema starter code
-
-        # sym_file.write("#encoding utf-8"+ "\n"+ "#"+ "\n" +
-        # "#test_compo" + "\n"+ "#"+ "\n")
-        sym_file.write(
-            self.template["start_def"] + "\n" + self.template["U_field"] + "\n"
-        )
+        block.append(self.template["start_def"])
+        block.append(self.template["U_field"])
 
         line3 = self.template["comp_name_field"]
         line3 = line3.split()
         line3 = [w.replace('comp_name', self.modelname) for w in line3]
         self.template["comp_name_field"] = ' '.join(line3)
 
-        sym_file.write(self.template["comp_name_field"] + "\n")
+        block.append(self.template["comp_name_field"])
 
         line4 = self.template["blank_field"]
         line4_1 = line4[0]
@@ -248,7 +330,8 @@ class AutoSchematic:
         line4[1] = ' '.join(line4_2)
         self.template["blank_qoutes"] = line4
 
-        sym_file.write(line4[0] + "\n" + line4[1] + "\n")
+        block.append(line4[0])
+        block.append(line4[1])
 
         draw_pos = self.template["draw_pos"]
         draw_pos = draw_pos.split()
@@ -261,9 +344,9 @@ class AutoSchematic:
 
         self.template["draw_pos"] = ' '.join(draw_pos)
 
-        sym_file.write(
-            self.template["draw_pos"] + "\n" + self.template["start_draw"] +
-            " \"" + f"{self.modelname}_1_1\"" + "\n"
+        block.append(self.template["draw_pos"])
+        block.append(
+            self.template["start_draw"] + " \"" + f"{self.modelname}_1_1\""
         )
 
         input_port = self.template["input_port"]
@@ -319,12 +402,10 @@ class AutoSchematic:
                 port_list.append(output_list)
 
         for ports in port_list:
-            sym_file.write(ports + "\n")
-        sym_file.write(
-            self.template["end_draw"] + "\n\n\n"+")"
-        )
-        sym_file.close()
-        os.chdir(cwd)
+            block.append(ports)
+        block.append(self.template["end_draw"])      # "))" closes _1_1 + part
+
+        self._commit_block('\n'.join(block))
 
 
 class PortInfo:

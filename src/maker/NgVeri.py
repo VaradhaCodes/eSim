@@ -31,6 +31,7 @@
 from PyQt6 import QtCore, QtWidgets
 from . import Maker
 from . import ModelGeneration
+from . import createkicad
 import os
 import shutil
 from configuration.Appconfig import Appconfig
@@ -126,39 +127,55 @@ class NgVeri(QtWidgets.QWidget):
                 model.sim_main_header()
                 model.sim_main()
                 model.modpathlst()
-                model.run_verilator()
-                model.make_verilator()
-                model.copy_verilator()
-                model.runMake()
+                # Each build step now returns True only when its process
+                # exits cleanly with code 0. Short-circuit so we stop at the
+                # first failing step, and base the verdict on those real exit
+                # codes instead of a fragile "is the word 'error' somewhere in
+                # the terminal text" search (which both passed broken models
+                # and failed working ones whose log merely mentioned "error").
+                ok = (
+                    model.run_verilator()
+                    and model.make_verilator()
+                    and model.copy_verilator()
+                    and model.runMake()
+                )
 
-                if os.name != 'nt':
-                    model.runMakeInstall()
-                else:
-                    try:
-                        shutil.copy(
-                            self.release_dir +
-                            "/src/xspice/icm/Ngveri/Ngveri.cm",
-                            self.nghdl_home + "/lib/ngspice/"
-                        )
-                    except FileNotFoundError as err:
-                        currentTermLogs.append(
-                            "Error in copying Ngveri code model: " + str(err)
-                        )
+                if ok:
+                    if os.name != 'nt':
+                        ok = model.runMakeInstall()
+                    else:
+                        try:
+                            shutil.copy(
+                                self.release_dir +
+                                "/src/xspice/icm/Ngveri/Ngveri.cm",
+                                self.nghdl_home + "/lib/ngspice/"
+                            )
+                        except FileNotFoundError as err:
+                            ok = False
+                            currentTermLogs.append(
+                                "Error in copying Ngveri code model: " +
+                                str(err)
+                            )
 
-                if "error" not in currentTermLogs.toPlainText().lower():
+                if ok:
                     currentTermLogs.append('''
                         <p style=\" font-size:16pt; font-weight:1000;
                         color:#00FF00;\"> Model Created Successfully!
                         </p>
                     ''')
+                else:
+                    currentTermLogs.append('''
+                        <p style=\" font-size:16pt; font-weight:1000;
+                        color:#FF0000;\">There was an error during model
+                        creation,<br/>Please rectify the error and try again!
+                        </p>
+                    ''')
 
-        except BaseException as err:
+        except Exception as err:
             currentTermLogs.append(
                 "Error in Ngspice code model generation " +
                 "from Verilog: " + str(err)
             )
-
-        if "error" in currentTermLogs.toPlainText().lower():
             currentTermLogs.append('''
                 <p style=\" font-size:16pt; font-weight:1000;
                 color:#FF0000;\">There was an error during model creation,
@@ -289,25 +306,42 @@ class NgVeri(QtWidgets.QWidget):
             data = mod.readlines()
             mod.close()
 
-            data.remove(text + "\n")
+            # Drop the model from modpath.lst (guarded: absent => no crash)
+            if (text + "\n") in data:
+                data.remove(text + "\n")
             mod = open(self.digital_home + '/modpath.lst', 'w')
             for item in data:
                 mod.write(item)
+            mod.close()
+
+            # Remove the KiCad symbol too, so the model actually disappears
+            # from eSim_Ngveri in KiCad (previously left behind forever).
+            try:
+                symbol = createkicad.AutoSchematic()
+                symbol.init(text, "")
+                symbol.deleteKicadSymbol()
+            except Exception as err:
+                print("Could not remove KiCad symbol for '" +
+                      str(text) + "': " + str(err))
+
             self.fname = Maker.verilogFile[self.filecount]
             model = ModelGeneration.ModelGeneration(
                 self.fname, self.entry_var[0])
 
             try:
-                model.runMake()
-
+                ok = model.runMake()
                 if os.name != 'nt':
-                    model.runMakeInstall()
+                    ok = model.runMakeInstall() and ok
                 else:
                     shutil.copy(
                         self.release_dir + "/src/xspice/icm/Ngveri/Ngveri.cm",
                         self.nghdl_home + "/lib/ngspice/"
                     )
-            except BaseException as err:
+                if not ok:
+                    raise RuntimeError(
+                        "the ngspice code-model rebuild returned a "
+                        "non-zero exit status")
+            except Exception as err:
                 QtWidgets.QMessageBox.critical(
                     None, "Error Message",
                     "The verilog model '" + str(text) +
@@ -396,7 +430,11 @@ class NgVeri(QtWidgets.QWidget):
 
         self.entry_var[self.count] = QtWidgets.QComboBox()
         self.entry_var[self.count].addItem("Remove Verilog Models")
-        self.modlst = open(self.digital_home + '/modpath.lst', 'r')
+        modpath_file = self.digital_home + '/modpath.lst'
+        if not os.path.exists(modpath_file):
+            os.makedirs(self.digital_home, exist_ok=True)
+            open(modpath_file, 'w').close()
+        self.modlst = open(modpath_file, 'r')
         self.data = self.modlst.readlines()
         self.modlst.close()
         for item in self.data:

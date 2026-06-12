@@ -32,6 +32,7 @@ from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QThread, pyqtSignal
 from configuration.Appconfig import Appconfig
 import os
+import shutil
 import watchdog.events
 import watchdog.observers
 from os.path import expanduser
@@ -207,7 +208,7 @@ class Maker(QtWidgets.QWidget):
         try:
             wr = self.entry_var[1].toPlainText()
             open(self.verilogfile, "w+").write(wr)
-        except BaseException as err:
+        except Exception as err:
             self.msg = QtWidgets.QErrorMessage(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
@@ -255,11 +256,33 @@ class Maker(QtWidgets.QWidget):
                         self.verilogfile.split('.')[:-1]) + ".tlv"
                     file = os.path.basename('.'.join(
                         self.verilogfile.split('.')[:-1]))
-                    f = open(filename, 'w')
                     code = code.replace(" wire ", " ")
                     code = code.replace(" reg ", " ")
                     vlog_ex = vlog.VerilogExtractor()
                     vlog_mods = vlog_ex.extract_objects_from_source(code)
+
+                    # Find the module matching the file name up front. An empty
+                    # or failed parse, or a name mismatch, is now reported
+                    # clearly here instead of crashing later on a loop variable
+                    # referenced after its loop.
+                    module = None
+                    for m in vlog_mods:
+                        if m.name.lower() == file.lower():
+                            module = m
+                            break
+                    if module is None:
+                        QtWidgets.QMessageBox.critical(
+                            None,
+                            "Error Message",
+                            "<b>Error: File name and module \
+                            name are not same. Please \
+                            ensure that they are same.</b>",
+                            QtWidgets.QMessageBox.StandardButton.Ok)
+                        self.obj_Appconfig.print_info(
+                            'NgVeri stopped due to file \
+name and module name not matching error')
+                        return
+
                     lint_off = open(
                         init_path + "library/tlv/lint_off.txt"
                     ).readlines()
@@ -285,19 +308,6 @@ output logic passed, output logic failed);\n'''
                                         p.name) != "failed":
                                     string += '\t\tlogic ' + p.data_type\
                                      + " " + p.name + ";//" + p.mode + "\n"
-                    if m.name.lower() != file.lower():
-                        QtWidgets.QMessageBox.critical(
-                            None,
-                            "Error Message",
-                            "<b>Error: File name and module \
-                            name are not same. Please \
-                            ensure that they are same.</b>",
-                            QtWidgets.QMessageBox.StandardButton.Ok)
-
-                        self.obj_Appconfig.print_info(
-                            'NgVeri stopped due to file \
-name and module name not matching error')
-                        return
                     string += "//The $random() can be replaced \
 if user wants to assign values\n"
                     for m in vlog_mods:
@@ -328,16 +338,31 @@ Add \\TLV here if desired\
                                      \n\\SV\nendmodule\n\n"
                                 else:
                                     string += ", "
-                    f.write(string)
+                    # Write the .tlv only now that generation has fully
+                    # succeeded, so a failure/return above never leaves a
+                    # half-written, corrupt file on disk.
+                    with open(filename, 'w') as f:
+                        f.write(string)
 
+            makerchip_bin = shutil.which('makerchip')
+            if makerchip_bin is None:
+                QtWidgets.QMessageBox.critical(
+                    None, "Error Message",
+                    "<b>Makerchip was not found on your system.</b><br/>"
+                    "Install it with <i>pip install makerchip-app</i> and "
+                    "make sure it is on your PATH, then try again.",
+                    QtWidgets.QMessageBox.StandardButton.Ok)
+                return
             self.process = QtCore.QProcess(self)
-            cmd = 'makerchip ' + filename
+            self.process.errorOccurred.connect(self._makerchip_launch_error)
             print("File: " + filename)
-            self.process.start(cmd)
+            # Pass the file name as a separate argument (not one space-joined
+            # string) so a path containing spaces is not split into pieces.
+            self.process.start(makerchip_bin, [filename])
             print(
                 "Makerchip IDE command process pid ---------->",
                 self.process.processId())
-        except BaseException as e:
+        except Exception as e:
             print(e)
             self.msg = QtWidgets.QErrorMessage(self)
             self.msg.setModal(True)
@@ -360,6 +385,20 @@ Please check if verilog file is chosen.")
         # self.processfile = QtCore.QProcess(self)
         # self.processfile.start("python3 notify.py")
         # print(self.processfile.readChannel())
+
+    def _makerchip_launch_error(self, _error):
+        '''
+            Called by QProcess.errorOccurred if the Makerchip IDE fails to
+            start (e.g. not installed, or no working browser/network). Tells
+            the user instead of failing silently.
+        '''
+        self.msg = QtWidgets.QErrorMessage(self)
+        self.msg.setModal(True)
+        self.msg.setWindowTitle("Error Message")
+        self.msg.showMessage(
+            "Could not launch the Makerchip IDE. It needs the makerchip-app "
+            "installed, an active internet connection and a browser.")
+        self.msg.exec()
 
     # This creates the buttons/options
 
