@@ -1,0 +1,50 @@
+# nghdl-simulator.patch
+# Apply after extracting nghdl-simulator-source.tar.xz, from the
+# nghdl-simulator/ root:   patch -p1 < nghdl-simulator.patch
+#
+# Fixes required to build/link/load the eSim ngspice fork against a
+# modern toolchain (Verilator 5.x, GCC 14/15). Without these the Ngveri
+# code models fail to link (undefined VlThreadPool / missing __ALL.o) and
+# ngspice never loads ghdl.cm / Ngveri.cm.
+#
+#   1. icm/GNUmakefile.in : link verilated_threads.o (Verilator 5 split it
+#      out of verilated.o); use V<mod>__ALL.a (Verilator 5 emits the
+#      archive, not a single .o); wrap objects in --whole-archive so all
+#      static-archive members are pulled regardless of link order.
+#   2. spinit.in : load ghdl.cm + Ngveri.cm; disable tlines.cm (not built
+#      in this xspice configuration).
+--- a/src/xspice/icm/GNUmakefile.in
++++ b/src/xspice/icm/GNUmakefile.in
+@@ -79,8 +79,9 @@
+ 		$(cm)/dlmain.o \
+ 		dstring.o \
+ 		$(srcdir)/Ngveri/verilated.o \
++		$(srcdir)/Ngveri/verilated_threads.o \
+ 		$(foreach mod,$(modlst), \
+-			$(cm)/$(mod)/V$(mod)__ALL.o \
++			$(cm)/$(mod)/V$(mod)__ALL.a \
+ 			$(cm)/$(mod)/sim_main_$(mod).o \
+ 			$(cm)/$(mod)/cfunc.o \
+ 			$(cm)/$(mod)/ifspec.o \
+@@ -120,7 +121,7 @@
+ #-----
+ 
+ $(cm)/$(cm).cm : $(cm-objs)
+-	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $(VIS_CFLAGS) $(LDFLAGS) $^ $(LIBS) -o $@
++	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) $(VIS_CFLAGS) $(LDFLAGS) -Wl,--whole-archive $^ -Wl,--no-whole-archive $(LIBS) -o $@
+ 
+ # "order-only" prerequisites
+ #   (info "(make) Prerequisite Types")
+--- a/src/spinit.in
++++ b/src/spinit.in
+@@ -25,7 +25,9 @@
+ @XSPICEINIT@ codemodel @pkglibdir@/xtradev.cm
+ @XSPICEINIT@ codemodel @pkglibdir@/xtraevt.cm
+ @XSPICEINIT@ codemodel @pkglibdir@/table.cm
+-@XSPICEINIT@ codemodel @pkglibdir@/tlines.cm
++@XSPICEINIT@ codemodel @pkglibdir@/ghdl.cm
++@XSPICEINIT@ codemodel @pkglibdir@/Ngveri.cm
++*@XSPICEINIT@ codemodel @pkglibdir@/tlines.cm
+ 
+ end
+ 

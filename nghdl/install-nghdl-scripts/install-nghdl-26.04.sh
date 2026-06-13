@@ -41,6 +41,7 @@ function installDependency
     sudo apt-get install -y \
         make autoconf g++ flex bison \
         zlib1g-dev \
+        libreadline-dev \
         libcanberra-gtk3-module \
         libxaw7 libxaw7-dev
 
@@ -64,6 +65,19 @@ function installNGHDL
 
     echo "nghdl-simulator extracted to $HOME/$nghdl"
     cd "$HOME/$nghdl"
+
+    # Apply toolchain-compatibility patch (Verilator 5.x / GCC 14+):
+    # links verilated_threads.o, uses V<mod>__ALL.a archives with
+    # --whole-archive, and loads ghdl.cm / Ngveri.cm in spinit. Without
+    # this the Ngveri code models fail to link/load. Fail loudly if the
+    # patch is present but does not apply (a silent skip = broken build).
+    if [ -f "$src_dir/nghdl-simulator.patch" ]; then
+        echo "Applying nghdl-simulator.patch........................."
+        patch -p1 --forward < "$src_dir/nghdl-simulator.patch"
+    else
+        echo "WARNING: nghdl-simulator.patch not found in $src_dir —"
+        echo "         Verilator-5 / GCC-14+ builds will fail to link."
+    fi
 
     mkdir -p install_dir
     mkdir -p release
