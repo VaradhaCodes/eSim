@@ -954,6 +954,13 @@ class MainWindow(QtWidgets.QWidget):
         # out.writelines(outputOption)
         out.writelines('print allv > plot_data_v.txt\n')
         out.writelines('print alli > plot_data_i.txt\n')
+        # `print allv` truncates column names to ~15 chars, so distinct long
+        # node names (e.g. plot_vout_bit_10..31) collapse to the same string in
+        # the plot legend. Also dump an ASCII rawfile, whose Variables section
+        # keeps FULL names in the same column order; data_extraction uses it to
+        # recover the real names (count-guarded, falls back if absent).
+        out.writelines('set filetype=ascii\n')
+        out.writelines('write plot_data.raw\n')
         event_nodes = _get_event_plot_nodes(store_schematicInfo, plotText)
         if event_nodes:
             out.writelines('eprint ' + ' '.join(event_nodes)

@@ -307,6 +307,15 @@ class DataExtraction:
             except Exception as e:
                 logger.warning(f"Could not parse current file: {e}")
 
+            # ngspice's `print allv` truncates column names to ~15 chars, so
+            # distinct long-named nodes collapse to the same string. Recover the
+            # full names (same column order) from the ASCII rawfile eSim writes
+            # alongside. Count-guarded so a missing/odd rawfile is a no-op.
+            full_v = self._full_voltage_names(
+                os.path.join(file_path, "plot_data.raw"))
+            if len(full_v) == len(v_names):
+                v_names = full_v
+
             # Digital/event nodes (e.g. d_cosim / adc_bridge outputs) are not in
             # `print allv`; ngspice's `eprint` writes them to plot_data_event.txt
             # when present. Resample them onto the analog time axis and fold them
@@ -356,6 +365,38 @@ class DataExtraction:
             except Exception:
                 pass
             return [self.TRANSIENT_ANALYSIS, 0]
+
+    @staticmethod
+    def _full_voltage_names(rawpath: str) -> List[str]:
+        """Read full voltage-node names, in column order, from the ASCII
+        rawfile's Variables section. Returns the inner node name of each
+        ``v(<node>)`` entry (skipping the time scale and current vars), which
+        lines up 1:1 with the `print allv` columns. Empty on any problem.
+        """
+        if not os.path.exists(rawpath):
+            return []
+        names: List[str] = []
+        try:
+            in_vars = False
+            with open(rawpath, 'r', errors='ignore') as f:
+                for line in f:
+                    s = line.strip()
+                    if s.startswith('Variables:'):
+                        in_vars = True
+                        continue
+                    if s.startswith(('Values:', 'Binary:')):
+                        break
+                    if in_vars:
+                        parts = s.split()
+                        if len(parts) >= 2:
+                            nm = parts[1]
+                            low = nm.lower()
+                            if low.startswith('v(') and nm.endswith(')'):
+                                names.append(nm[2:-1])
+        except OSError as e:
+            logger.warning(f"Cannot read rawfile names {rawpath}: {e}")
+            return []
+        return names
 
     def _parse_event_file(
         self, filepath: str, tran_x: np.ndarray
