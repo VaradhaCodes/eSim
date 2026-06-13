@@ -188,13 +188,41 @@ class AutoSchematic:
                 return "Error"
 
         else:
-            print('Pre-existing library...')
-            ret = QtWidgets.QMessageBox.critical(
-                self.parent, "Error", '''<b>A standard library already ''' +
-                '''exists with this name.</b><br/><b>Please change the ''' +
-                '''name of your verilog model and add it again.</b>''',
-                QtWidgets.QMessageBox.StandardButton.Ok
-            )
+            found = os.path.basename(os.path.normpath(xmlFound))
+            print('Pre-existing library in', found)
+            if found == 'NgVeriCosim':
+                # Same name currently a d_cosim block. One name = one backend,
+                # so offer to switch instead of erroring: drop the d_cosim
+                # version, then build the NgVeri code model. Latest wins.
+                ret = QtWidgets.QMessageBox.question(
+                    None, "Model already exists",
+                    "<b>'" + str(self.modelname) + "' already exists as a "
+                    "d_cosim block (Icarus Verilog).</b><br/>"
+                    "Switch it to an NgVeri Ngspice code model? "
+                    "The d_cosim version will be removed.",
+                    QtWidgets.QMessageBox.StandardButton.Ok |
+                    QtWidgets.QMessageBox.StandardButton.Cancel)
+                if ret != QtWidgets.QMessageBox.StandardButton.Ok:
+                    return "Error"
+                # Local import: createkicadCosim imports this module at load
+                # time, so a top-level import here would be circular.
+                from . import createkicadCosim
+                oldModel = createkicadCosim.CosimSchematic()
+                oldModel.init(self.modelname, self.modelpath)
+                oldModel.deleteKicadSymbol()
+                self.getPortInformation()
+                self.createXML()
+                self.createSym()
+                return "No Error"
+            # A built-in / NgHDL / standard library primitive — not ours to
+            # replace. The user must rename their module.
+            QtWidgets.QMessageBox.critical(
+                None, "Error",
+                "<b>A model named '" + str(self.modelname) + "' already "
+                "exists in the eSim '" + found + "' library.</b><br/>"
+                "Please rename your Verilog module/file and add it again.",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            return "Error"
 
     def getPortInformation(self):
         '''

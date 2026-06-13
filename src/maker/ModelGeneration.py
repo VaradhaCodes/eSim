@@ -35,6 +35,7 @@ from configuration import Appconfig
 
 from . import createkicad
 from . import CosimConfig
+from .CosimLogger import CosimLog
 import hdlparse.verilog_parser as vlog
 
 
@@ -61,6 +62,9 @@ class ModelGeneration(QtWidgets.QWidget):
             self.file = file
 
         self.termedit = termedit
+        # Dual-sink d_cosim logger: same events to the NgVeri GUI terminal
+        # (this termedit) AND the OS terminal + ~/.esim/dcosim.log.
+        self.clog = CosimLog(termedit)
         self.cur_dir = os.getcwd()
         self.fname = os.path.basename(file)
         self.fname = self.fname.lower()
@@ -315,23 +319,53 @@ class ModelGeneration(QtWidgets.QWidget):
         '''
         import subprocess
         import tempfile
+        import time
+        import shlex
+
+        log = self.clog
+        log.phase("BUILD d_cosim MODEL (icarus)")
 
         if engine != "icarus":
-            self.termtext(
-                "d_cosim engine '" + str(engine) + "' not supported. "
-                "Only the Icarus Verilog engine is available.")
+            log.error("d_cosim engine '" + str(engine) + "' not supported. "
+                      "Only the Icarus Verilog engine is available.")
             return "Error"
 
+        # ----- [1/4] Resolve toolchain -----
+        log.phase("[1/4] Resolve toolchain")
         iverilog = CosimConfig.iverilog_binary()
         if not iverilog or not CosimConfig.has_iverilog():
-            self.termtext("d_cosim build FAILED: " +
-                          (CosimConfig.missing_reason() or
-                           "iverilog with libvvp not found."))
+            log.error("d_cosim build FAILED: " +
+                      (CosimConfig.missing_reason() or
+                       "iverilog with libvvp not found."))
+            log.fix("Install / rebuild Icarus Verilog with --enable-libvvp, "
+                    "then retry.")
             return "Error"
+        log.info("iverilog: " + iverilog)
+        log.detail("version: " + self._tool_version(iverilog))
 
         model = self.fname.split('.')[0]
         src = os.path.abspath(os.path.join(self.modelpath, self.fname))
-        out = os.path.abspath(os.path.join(self.modelpath, model))
+        # Build the vvp at the ONE canonical location the netlister also
+        # derives (CosimConfig.cosim_vvp_path, keyed by the lowercased model
+        # name). Decoupling it from modelpath's case is what stops the compiled
+        # model from going missing at simulation time on case-sensitive
+        # filesystems (build wrote <Model>/<Model>, lookup read <model>/<model>).
+        out = CosimConfig.cosim_vvp_path(model.lower())
+        if out:
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+        else:
+            out = os.path.abspath(os.path.join(self.modelpath, model.lower()))
+        log.info("Model:       " + model)
+        log.info("Source:      " + src)
+        log.info("Output vvp:  " + out)
+
+        if not os.path.isfile(src):
+            log.error("d_cosim build FAILED: source Verilog not found at " +
+                      src)
+            log.fix("The model dir was not populated (or was removed after a "
+                    "backend switch). Re-run the build; verilogfile() should "
+                    "copy the .v in first.")
+            return "Error"
 
         # eSim's port parser lumps `inout` into the input side, but d_cosim
         # keeps a separate d_inout group -- warn rather than emit a wrong
@@ -339,17 +373,15 @@ class ModelGeneration(QtWidgets.QWidget):
         try:
             with open(os.path.join(self.modelpath, 'connection_info.txt')) as f:
                 if 'inout' in f.read().lower():
-                    self.termtext(
-                        "Warning: this module has inout port(s). d_cosim "
-                        "handling of inout is limited; results may be wrong. "
-                        "Use the legacy NgVeri flow if inout is required.")
+                    log.warn("Module has inout port(s). d_cosim handling of "
+                             "inout is limited; results may be wrong.")
+                    log.fix("Use the legacy NgVeri flow if inout is required.")
         except OSError:
             pass
 
-        self.termtitle("BUILD d_cosim MODEL (icarus)")
-        self.termtext("Model: " + model + "   Source: " + src)
-        self.termtext("Compiler: " + iverilog)
         try:
+            # ----- [2/4] Prepare source -----
+            log.phase("[2/4] Prepare source")
             # d_cosim/ivlng needs a `timescale to advance VVP ticks; without one
             # the tick length defaults to 1 second and combinational logic never
             # re-evaluates. Inject one transparently if the source lacks it.
@@ -364,27 +396,60 @@ class ModelGeneration(QtWidgets.QWidget):
                          ('`timescale 1ns/1ps\n' + verilog_text).encode())
                 os.close(tmp_fd)
                 compile_src = tmp_src
-                self.termtext(
-                    "Note: injected `timescale 1ns/1ps (not present in source)")
+                log.info("Injected `timescale 1ns/1ps (absent in source).")
+            else:
+                log.detail("`timescale present in source.")
+
+            # ----- [3/4] Compile -----
+            log.phase("[3/4] Compile")
+            cmd = [iverilog, "-g2012", "-o", out, compile_src]
+            log.info("$ " + " ".join(shlex.quote(c) for c in cmd))
+            start = time.monotonic()
             try:
                 proc = subprocess.run(
-                    [iverilog, "-g2012", "-o", out, compile_src],
-                    cwd=os.path.abspath(self.modelpath),
+                    cmd, cwd=os.path.abspath(self.modelpath),
                     capture_output=True, text=True, timeout=300)
             finally:
                 if tmp_src and os.path.isfile(tmp_src):
                     os.remove(tmp_src)
-            if proc.stdout:
-                self.termtext(proc.stdout)
+            elapsed = time.monotonic() - start
+            log.output(proc.stdout, 'stdout')
+            log.output(proc.stderr, 'stderr')
+            log.info("iverilog exited rc=%d in %.2fs"
+                     % (proc.returncode, elapsed))
+
+            # ----- [4/4] Verify artifact -----
+            log.phase("[4/4] Verify artifact")
             if proc.returncode != 0 or not os.path.isfile(out):
-                self.termtext(proc.stderr)
-                self.termtext("d_cosim model build FAILED.")
+                log.error("d_cosim model build FAILED (rc=%d)."
+                          % proc.returncode)
+                log.fix("Check the compiler errors above (syntax, missing "
+                        "module, or a construct Icarus -g2012 rejects).")
                 return "Error"
-            self.termtext("Built d_cosim model (Icarus vvp): " + out)
+            log.ok("Built d_cosim model: %s (%d bytes)"
+                   % (out, os.path.getsize(out)))
             return out
-        except Exception as e:
-            self.termtext("d_cosim build error: " + str(e))
+        except subprocess.TimeoutExpired:
+            log.error("iverilog timed out after 300s.")
+            log.fix("Simplify the design or raise the build timeout.")
             return "Error"
+        except Exception as e:
+            log.error("d_cosim build error: " + str(e))
+            return "Error"
+
+    def _tool_version(self, binary):
+        '''
+            First line of "<binary> -V", or "unknown". Best-effort: identifies
+            which compiler actually ran, and never raises.
+        '''
+        try:
+            import subprocess
+            res = subprocess.run([binary, "-V"], capture_output=True,
+                                 text=True, timeout=10)
+            lines = (res.stdout or res.stderr or "").strip().splitlines()
+            return lines[0] if lines and lines[0].strip() else "unknown"
+        except Exception:
+            return "unknown"
 
     def cfuncmod(self):
         '''
@@ -961,6 +1026,53 @@ and set the load for input ports */
         if modname not in text.split():
             mod.write(modname + "\n")
         mod.close()
+        # Self-heal: a stale entry whose build dir was deleted (e.g. the model
+        # was later removed via the d_cosim path, which nuked the shared
+        # <model>/ dir but not this list) makes cmpp abort the ENTIRE Ngveri.cm
+        # build -- "Unable to open <model>/ifspec.ifs". Drop such ghosts now so
+        # one dead entry can't take every other model down with it.
+        self.prune_modpathlst()
+
+    def prune_modpathlst(self):
+        '''
+            Rewrite modpath.lst keeping only entries whose build dir still has
+            an ifspec.ifs (what cmpp needs), and de-duplicating. Returns the
+            list of dropped (ghost / duplicate) names; logs each via clog.
+
+            This is the guard that keeps a single orphaned model -- the usual
+            fallout of switching a model between the d_cosim and legacy NgVeri
+            flows -- from breaking the build for all the others.
+        '''
+        path = self.digital_home + '/modpath.lst'
+        try:
+            with open(path) as f:
+                entries = [ln.strip() for ln in f]
+        except OSError:
+            return []
+
+        kept, dropped, seen = [], [], set()
+        for name in entries:
+            if not name:
+                continue
+            if name in seen:
+                dropped.append(name)        # duplicate line
+                continue
+            ifs = os.path.join(self.digital_home, name, 'ifspec.ifs')
+            if os.path.isfile(ifs):
+                kept.append(name)
+                seen.add(name)
+            else:
+                dropped.append(name)        # ghost: dir/ifspec.ifs gone
+
+        if dropped:
+            with open(path, 'w') as f:
+                for name in kept:
+                    f.write(name + "\n")
+            for name in dropped:
+                self.clog.warn(
+                    'Pruned stale model "' + name + '" from modpath.lst '
+                    '(its build dir / ifspec.ifs is missing).')
+        return dropped
 
     def run_verilator(self):
         '''

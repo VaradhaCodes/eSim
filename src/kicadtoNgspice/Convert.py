@@ -6,6 +6,7 @@ from PyQt6 import QtWidgets
 
 from . import TrackWidget
 from maker import CosimConfig
+from maker.CosimLogger import CosimLog
 
 
 class Convert:
@@ -528,14 +529,22 @@ class Convert:
         model_name = line[2]
         proj_dir = os.path.dirname(self.clarg1)
 
+        log = CosimLog()  # no GUI here: terminal + ~/.esim/dcosim.log only
         vvp_src = CosimConfig.cosim_vvp_path(model_name)
         try:
             if vvp_src and os.path.isfile(vvp_src):
-                shutil.copy(vvp_src, os.path.join(proj_dir, model_name))
+                dst = os.path.join(proj_dir, model_name)
+                shutil.copy(vvp_src, dst)
+                log.info('d_cosim: staged vvp for "%s" -> %s' %
+                         (model_name, dst))
             else:
-                print("d_cosim: compiled model not found:", vvp_src)
+                log.error('d_cosim: compiled model "%s" not found at %s'
+                          % (model_name, vvp_src))
+                log.fix('Rebuild the model in the NgVeri tab ("Add Verilog '
+                        '(d_cosim)") before running the simulation.')
         except OSError as e:
-            print("d_cosim: could not stage vvp:", str(e))
+            log.error('d_cosim: could not stage vvp for "%s": %s'
+                      % (model_name, str(e)))
 
         return ('.model ' + comp_name + ' d_cosim simulation="ivlng" '
                 'sim_args=["' + model_name + '"] ')

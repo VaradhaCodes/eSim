@@ -65,7 +65,19 @@ class CosimSchematic(createkicad.AutoSchematic):
         if xmlFound is None:
             self.getPortInformation()
             self.createXML()
-            self.createSym()
+            try:
+                self.createSym()
+            except Exception:
+                # createSym failed after createXML wrote the param file: remove
+                # the orphan so a retry doesn't see a false "already exists"
+                # with stale port data and skip the rebuild.
+                orphan = os.path.join(
+                    self.xml_loc, 'NgVeriCosim', self.modelname + '.xml')
+                try:
+                    os.remove(orphan)
+                except OSError:
+                    pass
+                raise
             self._ensure_lib_registered()
             return "No Error"
 
@@ -84,13 +96,56 @@ class CosimSchematic(createkicad.AutoSchematic):
             self._ensure_lib_registered()
             return "No Error"
 
+        found = os.path.basename(os.path.normpath(xmlFound))
+        if found == 'Ngveri':
+            # Same name currently a legacy NgVeri code model. One name = one
+            # backend, so offer to switch instead of erroring: drop the NgVeri
+            # version, then build the d_cosim block. Latest wins.
+            ret = QtWidgets.QMessageBox.question(
+                None, "Model already exists",
+                "<b>'" + str(self.modelname) + "' already exists as an "
+                "NgVeri Ngspice code model.</b><br/>"
+                "Switch it to a d_cosim block (Icarus Verilog)? "
+                "The NgVeri version will be removed.",
+                QtWidgets.QMessageBox.StandardButton.Ok |
+                QtWidgets.QMessageBox.StandardButton.Cancel)
+            if ret != QtWidgets.QMessageBox.StandardButton.Ok:
+                return "Error"
+            oldModel = createkicad.AutoSchematic()
+            oldModel.init(self.modelname, self.modelpath)
+            oldModel.deleteKicadSymbol()
+            self.getPortInformation()
+            self.createXML()
+            self.createSym()
+            self._ensure_lib_registered()
+            return "No Error"
+        # A built-in / NgHDL / standard library primitive — not ours to
+        # replace. The user must rename their module.
         QtWidgets.QMessageBox.critical(
             None, "Error",
-            "<b>A different library already exists with this name.</b><br/>"
-            "<b>Please change the name of your Verilog model and add "
-            "it again.</b>",
+            "<b>A model named '" + str(self.modelname) + "' already exists in "
+            "the eSim '" + found + "' library.</b><br/>"
+            "Please rename your Verilog module/file and add it again.",
             QtWidgets.QMessageBox.StandardButton.Ok)
         return "Error"
+
+    def deleteKicadSymbol(self):
+        '''
+            Remove this d_cosim model from eSim_NgVeriCosim.kicad_sym and delete
+            its library/modelParamXML/NgVeriCosim/<name>.xml.
+
+            Overrides AutoSchematic.deleteKicadSymbol, which hardcodes the
+            legacy 'Ngveri' XML subdir (so the base method would orphan the
+            cosim param XML). removeOldLibrary is inherited and already targets
+            the cosim library, because init() repointed self.kicad_ngveri_sym at
+            eSim_NgVeriCosim. Idempotent: safe when either is already absent.
+        '''
+        self.removeOldLibrary()
+        xml = os.path.join(self.xml_loc, 'NgVeriCosim', self.modelname + '.xml')
+        try:
+            os.remove(xml)
+        except FileNotFoundError:
+            pass
 
     @staticmethod
     def _kicad_config_dir():
