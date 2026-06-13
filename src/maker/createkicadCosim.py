@@ -66,6 +66,7 @@ class CosimSchematic(createkicad.AutoSchematic):
             self.getPortInformation()
             self.createXML()
             self.createSym()
+            self._ensure_lib_registered()
             return "No Error"
 
         if xmlFound == target:
@@ -80,6 +81,7 @@ class CosimSchematic(createkicad.AutoSchematic):
             self.getPortInformation()
             self.createXML()
             self.createSym()
+            self._ensure_lib_registered()
             return "No Error"
 
         QtWidgets.QMessageBox.critical(
@@ -89,6 +91,48 @@ class CosimSchematic(createkicad.AutoSchematic):
             "it again.</b>",
             QtWidgets.QMessageBox.StandardButton.Ok)
         return "Error"
+
+    @staticmethod
+    def _kicad_config_dir():
+        '''KiCad per-user config root (holds the version dirs with the symbol
+        library tables): %APPDATA%/kicad on Windows, ~/.config/kicad elsewhere.'''
+        if os.name == 'nt':
+            return os.path.join(os.environ.get('APPDATA', ''), 'kicad')
+        return os.path.join(os.path.expanduser('~'), '.config', 'kicad')
+
+    def _ensure_lib_registered(self):
+        '''
+            Make sure eSim_NgVeriCosim is in the user's KiCad symbol library
+            table(s). The installer seeds the table from the repo template at
+            install time, but a library added AFTER install (this one) is absent
+            for existing users, so the symbol never appears in eeschema. Register
+            it idempotently in every version dir that has a table. Best-effort:
+            failures here must never block model creation.
+        '''
+        base = self._kicad_config_dir()
+        if not os.path.isdir(base):
+            return
+        lib_line = (
+            '  (lib (name "eSim_NgVeriCosim")(type "KiCad")'
+            '(uri "${KICAD6_SYMBOL_DIR}/eSim_NgVeriCosim.kicad_sym")'
+            '(options "")(descr "eSim NgVeri d_cosim (Icarus Verilog) '
+            'symbols"))\n')
+        for ver in os.listdir(base):
+            table = os.path.join(base, ver, 'sym-lib-table')
+            if not os.path.isfile(table):
+                continue
+            try:
+                with open(table) as fh:
+                    content = fh.read()
+                if 'eSim_NgVeriCosim' in content:
+                    continue
+                idx = content.rstrip().rfind(')')   # final ) closes the table
+                if idx == -1:
+                    continue
+                with open(table, 'w') as fh:
+                    fh.write(content[:idx] + lib_line + content[idx:])
+            except OSError:
+                pass
 
     def createXML(self):
         '''
