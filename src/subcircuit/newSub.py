@@ -3,6 +3,7 @@ from projManagement.Validation import Validation
 from configuration.Appconfig import Appconfig
 from projManagement import Worker
 import os
+import shlex
 
 
 # This class is called when User creates new Project.
@@ -54,7 +55,7 @@ class NewSub(QtWidgets.QWidget):
                 os.mkdir(self.schematic_path)
                 self.schematic = os.path.join(
                     self.schematic_path, self.create_schematic)
-                self.cmd = "eeschema " + self.schematic + ".sch"
+                self.cmd = "eeschema " + shlex.quote(self.schematic + ".sch")
                 self.obj_workThread = Worker.WorkerThread(self.cmd)
                 self.obj_workThread.start()
                 self.close()

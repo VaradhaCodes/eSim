@@ -2,6 +2,7 @@ from PyQt6 import QtWidgets, QtCore
 import os
 from xml.etree import ElementTree as ET
 from . import TrackWidget
+from projManagement.projectPaths import stem_from_file
 
 
 class DeviceModel(QtWidgets.QWidget):
@@ -27,7 +28,8 @@ class DeviceModel(QtWidgets.QWidget):
         self.clarg1 = clarg1
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        project_name = stem_from_file(kicadFile)
         self.root = []
         try:
             f = open(

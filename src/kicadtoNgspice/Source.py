@@ -1,6 +1,7 @@
 import os
 from PyQt6 import QtWidgets
 from . import TrackWidget
+from projManagement.projectPaths import stem_from_file
 from xml.etree import ElementTree as ET
 
 
@@ -50,7 +51,8 @@ class Source(QtWidgets.QWidget):
         print("===========================================================")"""
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        project_name = stem_from_file(kicadFile)
 
         try:
             f = open(

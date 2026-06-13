@@ -1,6 +1,7 @@
 from PyQt6 import QtWidgets, QtCore
 from . import TrackWidget
 from projManagement import Validation
+from projManagement.projectPaths import stem_from_file
 import os
 from xml.etree import ElementTree as ET
 
@@ -20,7 +21,8 @@ class SubcircuitTab(QtWidgets.QWidget):
     def __init__(self, schematicInfo, clarg1):
         kicadFile = clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        project_name = stem_from_file(kicadFile)
 
         try:
             f = open(

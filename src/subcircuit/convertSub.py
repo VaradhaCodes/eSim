@@ -1,5 +1,6 @@
 from PyQt6 import QtWidgets
 from projManagement.Validation import Validation
+from projManagement.projectPaths import resolve_stem
 from configuration.Appconfig import Appconfig
 import os
 
@@ -31,10 +32,12 @@ class convertSub(QtWidgets.QWidget):
         self.projDir = self.obj_appconfig.current_subcircuit["SubcircuitName"]
         # Validating if current project is available or not
         if self.obj_validation.validateKicad(self.projDir):
+            # Subcircuit stem comes from its .sub anchor, not the folder name.
+            stem, _status = resolve_stem(self.projDir, 'sub')
             # Checking if project has .cir file or not
-            if self.obj_validation.validateCir(self.projDir):
-                self.projName = os.path.basename(self.projDir)
-                self.project = os.path.join(self.projDir, self.projName)
+            if self.obj_validation.validateCir(self.projDir, stem):
+                self.projName = stem
+                self.project = os.path.join(self.projDir, str(stem))
 
                 var1 = self.project + ".cir"
                 var2 = "sub"

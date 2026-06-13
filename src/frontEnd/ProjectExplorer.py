@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from configuration.Appconfig import Appconfig
 from projManagement.Validation import Validation
+from projManagement.projectPaths import resolve_stem
 
 
 # This is main class for Project Explorer Area.
@@ -179,8 +180,7 @@ class ProjectExplorer(QtWidgets.QWidget):
                 'The current project is: ' + self.filePath
             )
 
-            self.obj_appconfig.current_project["ProjectName"] = str(
-                self.filePath)
+            self.obj_appconfig.set_current_project(str(self.filePath))
             (
                 self.obj_appconfig.
                 proc_dict[self.obj_appconfig.current_project['ProjectName']]
@@ -223,7 +223,7 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.treewidget.takeTopLevelItem(self.int)
 
         if self.obj_appconfig.current_project["ProjectName"] == filePath:
-            self.obj_appconfig.current_project["ProjectName"] = None
+            self.obj_appconfig.set_current_project(None)
 
         del self.obj_appconfig.project_explorer[filePath]
         json.dump(self.obj_appconfig.project_explorer,
@@ -352,6 +352,14 @@ class ProjectExplorer(QtWidgets.QWidget):
                     # rename project folder
                     updatedProjectFiles = []
 
+                    # Inner files are named after the project *stem* (resolved
+                    # from the .proj anchor), which may differ from the folder
+                    # name. Match/replace on the stem so files are renamed even
+                    # when the folder was named differently; renaming to the new
+                    # name re-aligns folder and stem.
+                    oldStem = resolve_stem(projectPath, 'proj')[0] \
+                        or self.baseFileName
+
                     updatedProjectPath = newBaseFileName.join(
                         projectPath.rsplit(self.baseFileName, 1))
                     print("Renaming " + projectPath + " to " +
@@ -371,11 +379,11 @@ class ProjectExplorer(QtWidgets.QWidget):
                     # rename files matching project name
                     try:
                         for projectFile in projectFiles:
-                            if self.baseFileName in projectFile:
+                            if oldStem in projectFile:
                                 oldFilePath = os.path.join(updatedProjectPath,
                                                            projectFile)
                                 projectFile = projectFile.replace(
-                                    self.baseFileName, newBaseFileName, 1)
+                                    oldStem, newBaseFileName, 1)
                                 newFilePath = os.path.join(
                                     updatedProjectPath, projectFile)
                                 print("Renaming " + oldFilePath + " to " +
@@ -392,7 +400,7 @@ class ProjectExplorer(QtWidgets.QWidget):
                             newFilePath = os.path.join(
                                             updatedProjectPath, projectFile)
                             projectFile = projectFile.replace(
-                                    newBaseFileName, self.baseFileName, 1)
+                                    newBaseFileName, oldStem, 1)
                             oldFilePath = os.path.join(
                                     updatedProjectPath, projectFile)
                             os.rename(newFilePath, oldFilePath)

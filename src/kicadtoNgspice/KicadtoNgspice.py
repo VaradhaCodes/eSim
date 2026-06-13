@@ -32,6 +32,7 @@ from . import Source
 from . import SubcircuitTab
 from . import TrackWidget
 from .Processing import PrcocessNetlist
+from projManagement.projectPaths import stem_from_file
 
 
 def _get_event_plot_nodes(schematic_info, plot_text):
@@ -298,7 +299,8 @@ class MainWindow(QtWidgets.QWidget):
         global kicad
         store_schematicInfo = list(schematicInfo)
         (projpath, filename) = os.path.split(self.kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        project_name = stem_from_file(self.kicadFile)
         check = 1
 
         try:

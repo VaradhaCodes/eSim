@@ -55,8 +55,12 @@ class Appconfig(QtWidgets.QWidget):
         workspace_check = 0
 
     default_workspace = {"workspace": home}
-    # Current Project detail
-    current_project = {"ProjectName": None}
+    # Current Project detail.
+    #   ProjectName => the project *folder* path
+    #   ProjName    => the project *stem* (basename shared by <stem>.proj/.cir/
+    #                  .sch/...), resolved from the .proj anchor, NOT the folder
+    #                  name. Use get_proj_stem() to read it.
+    current_project = {"ProjectName": None, "ProjName": None}
     # Current Subcircuit detail
     current_subcircuit = {"SubcircuitName": None}
     # Workspace detail
@@ -106,6 +110,49 @@ class Appconfig(QtWidgets.QWidget):
         self._app_width = 600
         self._app_heigth = 400
 
+    def set_current_project(self, proj_dir, stem=None):
+        """
+        Set the active project. This is the single place that updates both the
+        project folder path and its resolved stem, so callers never have to
+        derive the stem from the folder name themselves.
+
+        @params
+            :proj_dir   => the project folder path, or None to clear the project
+            :stem        => the already-resolved stem; if omitted it is resolved
+                            from the folder's .proj anchor
+        """
+        self.current_project["ProjectName"] = proj_dir
+        if not proj_dir:
+            self.current_project["ProjName"] = None
+            return
+        if stem is None:
+            from projManagement.projectPaths import resolve_stem
+            stem, _status = resolve_stem(proj_dir, 'proj')
+        self.current_project["ProjName"] = stem
+
+    def get_proj_stem(self):
+        """
+        Return the active project's stem (the basename shared by its files).
+
+        This is the canonical replacement for ``os.path.basename(projDir)``
+        when constructing project file paths. Resolves lazily from the .proj
+        anchor if not cached, and falls back to the folder basename so legacy
+        code paths keep working.
+
+        @return
+            the project stem, or None if no project is open
+        """
+        stem = self.current_project.get("ProjName")
+        if stem:
+            return stem
+        proj_dir = self.current_project.get("ProjectName")
+        if not proj_dir:
+            return None
+        from projManagement.projectPaths import resolve_stem
+        stem, _status = resolve_stem(proj_dir, 'proj')
+        self.current_project["ProjName"] = stem
+        return stem
+
     def print_info(self, info):
         self.noteArea['Note'].append('[INFO]: ' + info)
 
@@ -130,7 +177,7 @@ class Appconfig(QtWidgets.QWidget):
                 data = json.load(f)
                 project_path = data.get("ProjectName", None)
                 if project_path and os.path.exists(project_path):
-                    self.current_project["ProjectName"] = project_path
+                    self.set_current_project(project_path)
                     return project_path
                 else:
                     print("Project path does not exist: ", project_path)

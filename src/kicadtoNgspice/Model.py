@@ -5,6 +5,7 @@ from xml.etree import ElementTree as ET
 from PyQt6 import QtWidgets
 
 from . import TrackWidget
+from projManagement.projectPaths import stem_from_file
 
 
 class Model(QtWidgets.QWidget):
@@ -24,7 +25,8 @@ class Model(QtWidgets.QWidget):
         # Processing for getting previous values
         kicadFile = clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        project_name = stem_from_file(kicadFile)
         check = 1
         try:
             f = open(

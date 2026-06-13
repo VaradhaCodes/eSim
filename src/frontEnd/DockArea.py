@@ -117,7 +117,8 @@ class DockArea(QtWidgets.QMainWindow):
     def plottingEditor(self):
         """This function create widget for interactive PythonPlotting."""
         self.projDir = self.obj_appconfig.current_project["ProjectName"]
-        self.projName = os.path.basename(self.projDir)
+        self.projName = self.obj_appconfig.get_proj_stem() \
+            or os.path.basename(self.projDir)
         dockName = f'Plotting-{self.projName}-'
         # self.project = os.path.join(self.projDir, self.projName)
 
