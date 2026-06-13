@@ -36,6 +36,7 @@ class _FuncTraceMixin:
             if it and it.data(Qt.ItemDataRole.UserRole) == -(f_idx + 1):
                 self._update_func_item_appearance(it, label, color, self._func_visible[f_idx])
                 break
+        self._refresh_select_all_btn()
         self._schedule_refresh()
 
     def _populate_func_color_menu(self, menu: QMenu, f_idx: int) -> None:

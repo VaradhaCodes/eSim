@@ -9,6 +9,7 @@ with support for AC, DC, and Transient analysis visualization.
 from __future__ import division
 import os
 import re
+import csv
 import sys
 import json
 import traceback
@@ -318,6 +319,15 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.waveform_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.waveform_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         left_layout.addWidget(self.waveform_list)
+        # Single smart-toggle: selects all when not all are on, deselects all
+        # when they are. Label always names the action the next click performs,
+        # so turning some waveforms off after a select-all flips it back to
+        # "Select All" — no dead/no-op second button.
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.setToolTip(
+            "Toggle every waveform on or off. The label shows the next action.")
+        self.select_all_btn.clicked.connect(self.toggle_select_all_waveforms)
+        left_layout.addWidget(self.select_all_btn)
         QShortcut(QKeySequence.StandardKey.SelectAll, self.waveform_list,
                   activated=self.select_all_waveforms)
         return left_widget
@@ -535,9 +545,8 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         export_layout = QVBoxLayout(export_group)
         export_layout.setContentsMargins(ih, iv, ih, iv)
         export_layout.setSpacing(sp)
-        self.export_btn = QPushButton("Export Image")
-        self.export_btn.clicked.connect(self.export_image)
-        export_layout.addWidget(self.export_btn)
+        # Plot Function kept at the top so adding export buttons below never
+        # pushes it further down the panel.
         self.func_input = QLineEdit()
         self.func_input.setPlaceholderText("e.g., v(net1) + v(net2)  or  abs(v(net1))")
         self.func_input.returnPressed.connect(self.plot_function)
@@ -545,6 +554,20 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.plot_func_btn = QPushButton("Plot Function")
         self.plot_func_btn.clicked.connect(self.plot_function)
         export_layout.addWidget(self.plot_func_btn)
+        # Export buttons grouped in a single row: image (visual) + CSV (data).
+        export_row = QHBoxLayout()
+        export_row.setSpacing(sp)
+        self.export_btn = QPushButton("Export Image")
+        self.export_btn.clicked.connect(self.export_image)
+        export_row.addWidget(self.export_btn)
+        self.export_csv_btn = QPushButton("Export CSV")
+        self.export_csv_btn.setToolTip(
+            "Export ALL simulation waveforms as a CSV table (X axis + one "
+            "column per signal, selected or not) — ready to hand to an AI or "
+            "spreadsheet.")
+        self.export_csv_btn.clicked.connect(self.export_csv)
+        export_row.addWidget(self.export_csv_btn)
+        export_layout.addLayout(export_row)
         export_box.addWidget(export_group)
         right_layout.addWidget(export_box)
 
@@ -556,6 +579,9 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         export_action = QAction('Export Image...', self)
         export_action.triggered.connect(self.export_image)
         file_menu.addAction(export_action)
+        export_csv_action = QAction('Export CSV...', self)
+        export_csv_action.triggered.connect(self.export_csv)
+        file_menu.addAction(export_csv_action)
         view_menu = self.menu_bar.addMenu('View')
         zoom_in_action = QAction('Zoom In', self)
         zoom_in_action.setShortcut('Ctrl++')
@@ -875,6 +901,92 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             except Exception as e:
                 logger.error(f"Error exporting image: {e}")
                 QMessageBox.warning(self, "Export Error", f"Failed to export image: {str(e)}")
+
+    def _collect_plot_data(self) -> Tuple[List[str], List[List[float]]]:
+        """Build a rectangular table of the whole simulation's data.
+
+        First column is the X axis (Time / Frequency / Voltage sweep depending
+        on analysis type); each following column is one signal from the
+        simulation, named with its unit. EVERY node/branch is exported, not
+        just the visible/selected traces, so the user can inspect waveforms
+        they never plotted. Any user-defined function traces are appended too.
+        All columns are clipped to the shortest length so the result is a clean
+        rectangle the csv writer (or an AI) can consume without ragged rows.
+
+        Returns (header, rows). Raises ValueError if there is no data.
+        """
+        raw_x = np.asarray(self.obj_dataext.x, dtype=float)
+
+        # Match the on-screen view: transient plots drop the initial settling
+        # region, so the CSV reflects exactly what the user sees.
+        start_idx = 0
+        if self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS:
+            s = self._get_transient_start_idx(raw_x)
+            if 0 < s < len(raw_x):
+                start_idx = s
+        x = raw_x[start_idx:]
+
+        atype = self.plot_type[0]
+        if atype == DataExtraction.AC_ANALYSIS:
+            x_label = "Frequency (Hz)"
+        elif atype == DataExtraction.DC_ANALYSIS:
+            x_label = "Voltage Sweep (V)"
+        else:
+            x_label = "Time (s)"
+
+        columns: List[Tuple[str, "np.ndarray"]] = [(x_label, x)]
+
+        # Every signal in the simulation, not just visible/selected ones.
+        nb = self.obj_dataext.NBList
+        for idx in range(len(self.obj_dataext.y)):
+            y = np.asarray(self.obj_dataext.y[idx], dtype=float)[start_idx:]
+            name = (self.traces[idx].name if idx in self.traces
+                    else nb[idx] if idx < len(nb) else f"col{idx}")
+            unit = "V" if idx < self.obj_dataext.volts_length else "A"
+            columns.append((f"{name} ({unit})", y))
+
+        # All user-defined function traces. They are derived from the full x
+        # array, so trim them by the same start_idx when their length matches.
+        for label, _fx, fy, *_ in self._func_traces:
+            fy = np.asarray(fy, dtype=float)
+            if len(fy) == len(raw_x):
+                fy = fy[start_idx:]
+            columns.append((label, fy))
+
+        if len(columns) == 1:
+            raise ValueError("No simulation data to export.")
+
+        n = min(len(arr) for _, arr in columns)
+        if n == 0:
+            raise ValueError("Plotted traces contain no data points.")
+
+        header = [name for name, _ in columns]
+        rows = [[float(arr[i]) for _, arr in columns] for i in range(n)]
+        return header, rows
+
+    def export_csv(self) -> None:
+        try:
+            header, rows = self._collect_plot_data()
+        except ValueError as e:
+            QMessageBox.information(self, "Export CSV", str(e))
+            return
+
+        file_name, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", "", "CSV Files (*.csv);;All Files (*)")
+        if not file_name:
+            return
+        if '.' not in os.path.basename(file_name):
+            file_name += '.csv'
+        try:
+            with open(file_name, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+                for row in rows:
+                    writer.writerow([format(v, '.10g') for v in row])
+            self.status_bar.showMessage(f"CSV exported to {file_name}", 3000)
+        except Exception as e:
+            logger.error(f"Error exporting CSV: {e}")
+            QMessageBox.warning(self, "Export Error", f"Failed to export CSV: {str(e)}")
 
     def clear_plot(self) -> None:
         self.timing_annotations.clear()
