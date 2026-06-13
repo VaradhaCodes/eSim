@@ -6,6 +6,7 @@ from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtCore import pyqtSignal, pyqtSlot
 from configuration.Appconfig import Appconfig
 from frontEnd import TerminalUi
+from maker import CosimConfig
 from configparser import ConfigParser
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,14 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.ngspice_args = self._prepare_ngspice_arguments(netlist)
         logger.info(f"NGSpice arguments: {self.ngspice_args}")
 
+        # Use eSim's ngspice (the nghdl-simulator build that carries d_cosim +
+        # ivlng) for ALL simulations; resolved without hardcoded paths.
+        self.ngspice_bin = CosimConfig.ngspice_binary()
+        self.uses_dcosim = self._netlist_uses_dcosim(netlist)
+
         self.process = QtCore.QProcess(self)
-        self.terminal_ui = TerminalUi.TerminalUi(self.process, self.ngspice_args)
+        self.terminal_ui = TerminalUi.TerminalUi(
+            self.process, self.ngspice_args, self.ngspice_bin)
 
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.addWidget(self.terminal_ui)
@@ -80,9 +87,41 @@ class NgspiceWidget(QtWidgets.QWidget):
             self.obj_appconfig.proc_dict[current_project_name].append(process.processId())
 
     def _start_process(self) -> None:
-        self.process.start('ngspice', self.ngspice_args)
+        if self.uses_dcosim:
+            if not CosimConfig.has_dcosim():
+                QtWidgets.QMessageBox.warning(
+                    self, "d_cosim unavailable",
+                    CosimConfig.missing_reason() or
+                    "This ngspice build cannot run d_cosim co-simulation.")
+            # ngspice's ivlng adapter dlopens libvvp at runtime, so the iverilog
+            # lib dir must be on the dynamic-loader search path.
+            self._add_iverilog_libpath()
+        logger.info(f"Launching ngspice -> {self.ngspice_bin}")
+        self.process.start(self.ngspice_bin, self.ngspice_args)
         logger.debug(f"Process dictionary: {self.obj_appconfig.proc_dict}")
         self._register_process(self.process)
+
+    def _add_iverilog_libpath(self) -> None:
+        """Prepend the iverilog lib dir (libvvp) to the dynamic-loader search
+        path so ngspice's ivlng adapter can load it. Cross-platform: PATH on
+        Windows, LD_LIBRARY_PATH elsewhere."""
+        lib = CosimConfig.iverilog_libdir()
+        if not lib:
+            return
+        var = CosimConfig.loader_path_var()
+        env = QtCore.QProcessEnvironment.systemEnvironment()
+        existing = env.value(var, "")
+        env.insert(var, lib + (os.pathsep + existing if existing else ""))
+        self.process.setProcessEnvironment(env)
+
+    @staticmethod
+    def _netlist_uses_dcosim(netlist: str) -> bool:
+        """True if the netlist instantiates a d_cosim code-model block."""
+        try:
+            with open(netlist, "r") as handle:
+                return "d_cosim" in handle.read().lower()
+        except OSError:
+            return False
 
     def _is_linux(self) -> bool:
         return os.name != "nt"
@@ -184,8 +223,11 @@ class NgspiceWidget(QtWidgets.QWidget):
                 self.mintty_process = QtCore.QProcess(self)
                 self.mintty_process.setWorkingDirectory(self.project_dir)
                 # Pass program + args directly — Qt handles quoting internally
-                self.mintty_process.start(mintty_exe, ['ngspice', '-p', self.command])
-                logger.info(f"Started mintty: {mintty_exe} ngspice -p {self.command}")
+                self.mintty_process.start(
+                    mintty_exe, [self.ngspice_bin, '-p', self.command])
+                logger.info(
+                    f"Started mintty: {mintty_exe} "
+                    f"{self.ngspice_bin} -p {self.command}")
 
             except Exception as e:
                 logger.error(f"Failed to start Windows NGSpice plots: {e}")
@@ -193,10 +235,20 @@ class NgspiceWidget(QtWidgets.QWidget):
         else:  # Linux/Unix
             try:
                 raw_file = self.command.replace('.cir.out', '.raw')
+                # d_cosim runs need libvvp on the loader path for ngspice's
+                # ivlng adapter; prepend it for this xterm only.
+                ld_prefix = ""
+                if self.uses_dcosim:
+                    iv_lib = CosimConfig.iverilog_libdir()
+                    if iv_lib:
+                        var = CosimConfig.loader_path_var()
+                        ld_prefix = (f"{var}={shlex.quote(iv_lib)}:"
+                                     f"${{{var}}} ")
                 # Quote all paths so spaces in project names don't break the shell command
                 xterm_command = (
                     f"cd {shlex.quote(self.project_dir)} && "
-                    f"ngspice -r {shlex.quote(raw_file)} {shlex.quote(self.command)}"
+                    f"{ld_prefix}{shlex.quote(self.ngspice_bin)} "
+                    f"-r {shlex.quote(raw_file)} {shlex.quote(self.command)}"
                 )
                 self.xterm_process = QtCore.QProcess(self)
                 self.xterm_process.start('xterm', ['-hold', '-e', 'sh', '-c', xterm_command])

@@ -8,12 +8,15 @@ class TerminalUi(QtWidgets.QMainWindow):
     a progress bar, a console window which displays the log of the
     simulation and button required for re-simulation and cancellation
     of the simulation"""
-    def __init__(self, qProcess, args):
+    def __init__(self, qProcess, args, ngspice_bin='ngspice'):
         """The constructor of the TerminalUi class
         param: qProcess: a PyQt QProcess that runs ngspice
         type: qProcess: :class:`QtCore.QProcess`
         param: args: arguments to be passed on to the ngspice call
         type: args: list
+        param: ngspice_bin: ngspice executable to launch on re-run/redo (eSim's
+               resolved ngspice; d_cosim netlists need the bundled build)
+        type: ngspice_bin: str
         """
         super(TerminalUi, self).__init__()
 
@@ -21,6 +24,7 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.darkColor = True
         self.qProcess = qProcess
         self.args = args
+        self.ngspice_bin = ngspice_bin
         self.iconDir = "../../images"
 
         # Load the ui file
@@ -124,7 +128,7 @@ class TerminalUi(QtWidgets.QMainWindow):
 
         self.qProcess.setProperty("redoPlotFlag", self.Flag)
 
-        self.qProcess.start('ngspice', self.args)
+        self.qProcess.start(self.ngspice_bin, self.args)
 
     def changeColor(self):
         """Toggles the :class:`Ui_Form` console between dark mode

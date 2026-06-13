@@ -32,6 +32,8 @@ from PyQt6 import QtCore, QtWidgets
 from . import Maker
 from . import ModelGeneration
 from . import createkicad
+from . import createkicadCosim
+from . import CosimConfig
 import os
 import shutil
 from configuration.Appconfig import Appconfig
@@ -190,6 +192,65 @@ class NgVeri(QtWidgets.QWidget):
             self.entry_var[0].verticalScrollBar().maximum()
         )
 
+    def addverilog_cosim(self):
+        '''
+            d_cosim (Icarus Verilog) flow. Compiles the chosen Verilog file to a
+            vvp via iverilog and creates an "NgVeriCosim" KiCad symbol. Unlike
+            "Convert Verilog to Ngspice" (legacy static Ngveri.cm), this needs no
+            C/C++ compiler, never rebuilds ngspice, and runs fully locally (no
+            Makerchip). Gated on the d_cosim toolchain being present.
+        '''
+        if not CosimConfig.has_iverilog():
+            QtWidgets.QMessageBox.warning(
+                None, "d_cosim unavailable",
+                "<b>" + (CosimConfig.missing_reason() or
+                         "Icarus Verilog (with libvvp) not found.") + "</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            return
+
+        if len(Maker.verilogFile) < (self.filecount + 1) or \
+                Maker.verilogFile[self.filecount] == "":
+            QtWidgets.QMessageBox.critical(
+                None, "Error Message",
+                "<b>Error: No Verilog File Chosen. Please choose a "
+                "verilog file in Makerchip Tab</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            return
+
+        self.fname = Maker.verilogFile[self.filecount]
+        currentTermLogs = QtWidgets.QTextEdit()
+        model = ModelGeneration.ModelGeneration(self.fname, currentTermLogs)
+        file = (os.path.basename(self.fname)).split('.')[0]
+        if self.entry_var[1].findText(file) == -1:
+            self.entry_var[1].addItem(file)
+
+        try:
+            model.verilogfile()
+            if model.verilogParse(make_symbol=False) == "Error":
+                return
+            sim_lib = model.build_cosim(engine="icarus")
+            if sim_lib == "Error":
+                currentTermLogs.append(
+                    '<p style="color:#FF0000; font-weight:600;">'
+                    'd_cosim model build failed.</p>')
+            else:
+                modelname = file.lower()
+                schematicLib = createkicadCosim.CosimSchematic()
+                schematicLib.init(modelname, model.modelpath, "icarus", sim_lib)
+                if schematicLib.createKicadSymbol() != "Error":
+                    currentTermLogs.append(
+                        '<p style="color:#00AA00; font-weight:600;">'
+                        'd_cosim model "' + modelname + '" created (Icarus). '
+                        'Place it from the eSim_NgVeriCosim library.</p>')
+        except BaseException as err:
+            currentTermLogs.append(
+                "Error in d_cosim model creation: " + str(err))
+
+        self.entry_var[0].append(currentTermLogs.toHtml())
+        self.entry_var[0].verticalScrollBar().setValue(
+            self.entry_var[0].verticalScrollBar().maximum()
+        )
+
     def addfile(self):
         '''
             This function is used to add additional files required
@@ -281,6 +342,16 @@ class NgVeri(QtWidgets.QWidget):
         self.optionsgroupbtn.addButton(self.clearTerminalBtn)
         self.clearTerminalBtn.clicked.connect(self.clearTerminal)
         self.optionsgrid.addWidget(self.clearTerminalBtn, 0, 4)
+
+        self.addcosimbutton = QtWidgets.QPushButton(
+            "Convert Verilog to Ngspice (d_cosim / Icarus)")
+        self.addcosimbutton.setToolTip(
+            "Icarus Verilog co-simulation via ngspice d_cosim: "
+            "no C/C++ compiler and no ngspice rebuild")
+        self.optionsgroupbtn.addButton(self.addcosimbutton)
+        self.addcosimbutton.clicked.connect(self.addverilog_cosim)
+        self.optionsgrid.addWidget(self.addcosimbutton, 1, 1, 1, 4)
+
         self.optionsbox.setLayout(self.optionsgrid)
         # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
 
