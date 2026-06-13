@@ -7,6 +7,7 @@ from PyQt6.QtCore import pyqtSignal, pyqtSlot
 from configuration.Appconfig import Appconfig
 from frontEnd import TerminalUi
 from maker import CosimConfig
+from maker.CosimLogger import CosimLog
 from configparser import ConfigParser
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,18 @@ class NgspiceWidget(QtWidgets.QWidget):
             # ngspice's ivlng adapter dlopens libvvp at runtime, so the iverilog
             # lib dir must be on the dynamic-loader search path.
             self._add_iverilog_libpath()
+            # Tell both audiences this is a co-sim run and which libvvp ngspice
+            # will dlopen -- ivlng load failures otherwise look like generic
+            # ngspice noise. GUI sim console is plain-text, so banner it there;
+            # full detail goes to the terminal + ~/.esim/dcosim.log.
+            clog = CosimLog()
+            clog.phase("d_cosim co-simulation run")
+            clog.info("ngspice: " + str(self.ngspice_bin))
+            clog.info("ivlng libvvp dir: " +
+                      (CosimConfig.iverilog_libdir() or "<none>"))
+            self.terminal_ui.simulationConsole.insertPlainText(
+                "\n[eSim] d_cosim co-simulation: loading Verilog model(s) "
+                "via ngspice ivlng/libvvp ...\n")
         logger.info(f"Launching ngspice -> {self.ngspice_bin}")
         self.process.start(self.ngspice_bin, self.ngspice_args)
         logger.debug(f"Process dictionary: {self.obj_appconfig.proc_dict}")
@@ -185,6 +198,20 @@ class NgspiceWidget(QtWidgets.QWidget):
 
         try:
             self._update_ui_after_simulation()
+
+            if self.uses_dcosim:
+                # Record the co-sim verdict where developers can grep it.
+                dlog = CosimLog()
+                if self._is_simulation_successful(
+                        exit_status, exit_code, error_type):
+                    dlog.ok("d_cosim run finished OK (ngspice rc=%s)."
+                            % str(exit_code))
+                else:
+                    dlog.error("d_cosim run FAILED (ngspice rc=%s)."
+                               % str(exit_code))
+                    dlog.fix("Check the ngspice console above. If it mentions "
+                             "ivlng/libvvp, the model failed to load -- rebuild "
+                             "it in the NgVeri tab and confirm libvvp is found.")
 
             if self.terminal_ui.simulationCancelled:
                 self._show_cancellation_message()
