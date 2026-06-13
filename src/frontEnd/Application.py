@@ -350,9 +350,8 @@ class Application(QtWidgets.QMainWindow):
                 self.obj_Mainview.obj_projectExplorer.addTreeNode(
                     directory, filelist
                 )
-                self.obj_appconfig.current_project["ProjectName"] = directory
-                project_path = self.obj_appconfig.current_project["ProjectName"]
-                project_name = os.path.basename(project_path)
+                self.obj_appconfig.set_current_project(directory)
+                project_name = self.obj_appconfig.get_proj_stem()
                 self.obj_Mainview.obj_timeExplorer.load_snapshots(project_name)
                 self.obj_appconfig.save_current_project()
                 updated = True
@@ -374,11 +373,12 @@ class Application(QtWidgets.QMainWindow):
         self.project = OpenProjectInfo()
         try:
             directory, filelist = self.project.body()
+            if not directory:
+                return
+            self.obj_appconfig.set_current_project(directory)
             self.obj_Mainview.obj_projectExplorer.addTreeNode(
                 directory, filelist)
-            self.obj_appconfig.current_project["ProjectName"] = directory
-            project_path = self.obj_appconfig.current_project["ProjectName"]
-            project_name = os.path.basename(project_path)
+            project_name = self.obj_appconfig.get_proj_stem()
             self.obj_Mainview.obj_timeExplorer.load_snapshots(project_name)
             self.obj_appconfig.save_current_project()
         except BaseException:
@@ -408,11 +408,13 @@ class Application(QtWidgets.QMainWindow):
                 except BaseException:
                     pass
             self.obj_Mainview.obj_dockarea.closeDock()
-            self.obj_appconfig.current_project['ProjectName'] = None
+            closed_stem = self.obj_appconfig.get_proj_stem() \
+                or os.path.basename(current_project)
+            self.obj_appconfig.set_current_project(None)
             self.obj_appconfig.save_current_project()
             self.systemTrayIcon.showMessage(
                 'Close', 'Current project ' +
-                os.path.basename(current_project) + ' is Closed.'
+                closed_stem + ' is Closed.'
             )
 
     def change_workspace(self):
@@ -476,7 +478,7 @@ class Application(QtWidgets.QMainWindow):
         projDir = self.obj_appconfig.current_project["ProjectName"]
 
         if projDir is not None:
-            projName = os.path.basename(projDir)
+            projName = self.obj_appconfig.get_proj_stem()
             ngspiceNetlist = os.path.join(projDir, projName + ".cir.out")
 
             if not os.path.isfile(ngspiceNetlist):
@@ -588,7 +590,7 @@ class Application(QtWidgets.QMainWindow):
 
         if self.projDir is not None:
             if self.obj_validation.validateCirOut(self.projDir):
-                self.projName = os.path.basename(self.projDir)
+                self.projName = self.obj_appconfig.get_proj_stem()
                 self.ngspiceNetlist = os.path.join(
                     self.projDir, self.projName + ".cir.out"
                 )

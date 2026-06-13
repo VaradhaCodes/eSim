@@ -18,6 +18,8 @@
 
 from PyQt6 import QtWidgets, QtCore
 from .Validation import Validation
+from .projectPaths import find_anchors, resolve_stem, \
+    main_schematic, stem_from_file
 from configuration.Appconfig import Appconfig
 import os
 import json
@@ -34,61 +36,118 @@ class OpenProjectInfo(QtWidgets.QWidget):
 
     def body(self):
         """
-        Open a project directory using Qt GUI and validate
-        if .proj file present in it using `Validation` class
+        Let the user pick a project folder (or a .proj file directly), resolve
+        the project from its .proj anchor regardless of the folder's name, and
+        register it as the current project.
 
         @params
 
         @return
-            :dirs        => The directories inside the project folder
-            :filelist    => The files inside the project folder
+            :projDir     => the project folder path (or None if not opened)
+            :filelist    => the top-level files inside the project folder
         """
         self.obj_Appconfig = Appconfig()
         self.openDir = self.obj_Appconfig.default_workspace["workspace"]
+
+        # A project is a folder of files, so we pick the folder; the project is
+        # then resolved from the .proj anchor inside it regardless of the
+        # folder's name (see projectPaths.resolve_stem).
         self.projDir = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
-                self, "open", self.openDir
+                self, "Open Project", self.openDir
             )
         )
+        if not self.projDir:
+            self.obj_Appconfig.print_info('No Project opened')
+            return None, None
 
-        if self.obj_validation.validateOpenproj(self.projDir):
-            self.obj_Appconfig.current_project['ProjectName'] = str(
-                self.projDir)
-            if os.path.isdir(self.projDir):
-                print("True")
+        proj_files = find_anchors(self.projDir, 'proj')
 
-            for dirs, subdirs, filelist in os.walk(
-                    self.obj_Appconfig.current_project["ProjectName"]):
-                # directory = dirs
-                # files = filelist
-                # above 'directory' and 'files' variable never used
-                pass
-            self.obj_Appconfig.project_explorer[dirs] = filelist
-            json.dump(
-                self.obj_Appconfig.project_explorer, open(
-                    self.obj_Appconfig.dictPath["path"], 'w'))
-            self.obj_Appconfig.print_info('Open Project called')
-            self.obj_Appconfig.print_info('Current Project is ' + self.projDir)
-            return dirs, filelist
+        # No anchor -> not an eSim project.
+        if not proj_files:
+            return self._reportNoProject()
 
-        else:
-            self.obj_Appconfig.print_error(
-                "The project doesn't contain .proj file. Please select the " +
-                "proper directory else you won't be able to perform any " +
-                "operation"
-            )
-            reply = QtWidgets.QMessageBox.critical(
-                None, "Error Message",
-                "<b>Error: The project doesn't contain .proj file.</b><br/>"
-                "<b>Please select the proper project directory else you won't"
-                " be able to perform any operation</b>",
-                QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
-            )
-
-            if reply == QtWidgets.QMessageBox.StandardButton.Ok:
-                self.body()
-                self.obj_Appconfig.print_info('Open Project called')
-                self.obj_Appconfig.print_info(
-                    'Current Project is ' + self.projDir)
-            elif reply == QtWidgets.QMessageBox.StandardButton.Cancel:
+        # Resolve the stem from the anchor. If the folder holds more than one
+        # project, ask the user which to open.
+        if len(proj_files) > 1:
+            stem = self._chooseProject(proj_files)
+            if stem is None:
                 self.obj_Appconfig.print_info('No Project opened')
+                return None, None
+        else:
+            stem, _status = resolve_stem(self.projDir, 'proj')
+
+        # Warn (but still open) when the project is missing its schematic and
+        # netlist -- this is a genuinely incomplete project, distinct from a
+        # folder that simply isn't an eSim project at all.
+        schematic = main_schematic(self.projDir, stem)
+        has_cir = os.path.exists(
+            os.path.join(self.projDir, str(stem) + ".cir"))
+        if not os.path.exists(schematic) and not has_cir:
+            QtWidgets.QMessageBox.warning(
+                None, "Incomplete Project",
+                "<b>Warning: this folder has a project (.proj) file but no "
+                "schematic ({0}.kicad_sch / {0}.sch) or netlist "
+                "({0}.cir).</b><br/>The project will open, but some operations "
+                "may be unavailable until those files exist.".format(stem)
+            )
+            self.obj_Appconfig.print_warning(
+                "Project '" + str(stem) +
+                "' is missing its schematic/netlist files.")
+
+        self.obj_Appconfig.set_current_project(str(self.projDir), stem)
+
+        # Build the top-level file list for the project explorer tree.
+        try:
+            filelist = sorted(
+                f for f in os.listdir(self.projDir)
+                if os.path.isfile(os.path.join(self.projDir, f))
+            )
+        except OSError:
+            filelist = []
+
+        self.obj_Appconfig.project_explorer[self.projDir] = filelist
+        json.dump(
+            self.obj_Appconfig.project_explorer, open(
+                self.obj_Appconfig.dictPath["path"], 'w'))
+        self.obj_Appconfig.print_info('Open Project called')
+        self.obj_Appconfig.print_info('Current Project is ' + self.projDir)
+        return self.projDir, filelist
+
+    def _chooseProject(self, proj_files):
+        """
+        When a folder contains more than one .proj, ask the user which project
+        to open. Returns the chosen stem, or None if cancelled.
+        """
+        stems = [stem_from_file(p) for p in proj_files]
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self, "Select Project",
+            "This folder contains multiple eSim projects.\n"
+            "Choose one to open:",
+            stems, 0, False
+        )
+        if ok and choice:
+            return str(choice)
+        return None
+
+    def _reportNoProject(self):
+        """
+        Report a folder that contains no .proj anchor, and offer to retry.
+        Returns the result of the retried open, or (None, None) on cancel.
+        """
+        self.obj_Appconfig.print_error(
+            "No eSim project (.proj) file found in the selected folder. "
+            "Please select a folder that contains an eSim project."
+        )
+        reply = QtWidgets.QMessageBox.critical(
+            None, "Error Message",
+            "<b>Error: No eSim project (.proj) file found in this folder."
+            "</b><br/><b>Please select a folder that contains an eSim project "
+            "(a .proj file), or cancel.</b>",
+            QtWidgets.QMessageBox.StandardButton.Ok
+            | QtWidgets.QMessageBox.StandardButton.Cancel
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Ok:
+            return self.body()
+        self.obj_Appconfig.print_info('No Project opened')
+        return None, None

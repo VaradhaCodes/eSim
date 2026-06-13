@@ -1,6 +1,7 @@
 from PyQt6 import QtCore, QtWidgets
 from . import TrackWidget
 import os
+from projManagement.projectPaths import stem_from_file
 from xml.etree import ElementTree as ET
 
 
@@ -202,7 +203,7 @@ class Analysis(QtWidgets.QWidget):
         """
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        project_name = stem_from_file(kicadFile)
         check = 1
 
         try:
@@ -390,7 +391,7 @@ class Analysis(QtWidgets.QWidget):
         """
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        project_name = stem_from_file(kicadFile)
         check = 1
 
         try:
@@ -693,7 +694,7 @@ class Analysis(QtWidgets.QWidget):
         """
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path .basename(projpath)
+        project_name = stem_from_file(kicadFile)
         check = 1
 
         try:
