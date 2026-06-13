@@ -18,3 +18,18 @@ nghdl*
 tags
 build/
 dist/
+
+# Simulation / KiCad run artifacts
+*.raw
+*.kicad_prl
+*.lck
+_autosave-*
+*auto_saved_files*
+*-rescue.lib
+*-rescue.dcm
+rescue-backup/
+
+# nghdl build/cache artifacts (re-ignored after the !nghdl/** negation above)
+nghdl/**/__pycache__/
+nghdl/src/xspice/
+nghdl/*.tar.xz
