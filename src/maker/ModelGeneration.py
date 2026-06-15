@@ -135,9 +135,8 @@ class ModelGeneration(QtWidgets.QWidget):
         Text += "</span>"
         self.termedit.append(Text)
 
-        read_verilog = open(self.file, 'r')
-        verilog_data = read_verilog.readlines()
-        read_verilog.close()
+        with open(self.file, 'r') as read_verilog:
+            verilog_data = read_verilog.readlines()
         self.modelpath = self.digital_home + \
             "/" + self.fname.split('.')[0] + "/"
         if not os.path.isdir(self.modelpath):
@@ -145,19 +144,16 @@ class ModelGeneration(QtWidgets.QWidget):
 
         if self.fname.split('.')[1] == "tlv":
             self.sandpiper()
-            read_verilog = open(self.modelpath + self.fname, 'r')
-            verilog_data = read_verilog.readlines()
-            read_verilog.close()
-        f = open(self.modelpath + self.fname, 'w')
-
-        for item in verilog_data:
-            if self.fname.split('.')[1] == "sv":
-                string = item.replace("top", self.fname.split('.')[0])
-            else:
-                string = item
-            f.write(string)
-        f.write("\n")
-        f.close()
+            with open(self.modelpath + self.fname, 'r') as read_verilog:
+                verilog_data = read_verilog.readlines()
+        with open(self.modelpath + self.fname, 'w') as f:
+            for item in verilog_data:
+                if self.fname.split('.')[1] == "sv":
+                    string = item.replace("top", self.fname.split('.')[0])
+                else:
+                    string = item
+                f.write(string)
+            f.write("\n")
 
     def sandpiper(self):
         '''
@@ -210,38 +206,38 @@ class ModelGeneration(QtWidgets.QWidget):
         code = header_re.sub(_split_ports, code)
         vlog_ex = vlog.VerilogExtractor()
         vlog_mods = vlog_ex.extract_objects_from_source(code)
-        f = open(self.modelpath + "connection_info.txt", 'w')
-        for m in vlog_mods:
-            if m.name.lower() == self.fname.split('.')[0]:
-                print(str(m.name) + " " + self.fname.split('.')[0])
-                for p in m.ports:
-                    print(p.data_type)
-                    if str(p.data_type).find(':') == -1:
-                        p.port_number = "1"
-                    else:
-                        x = p.data_type.split(":")
-                        print(x)
-                        y = x[0].split("[")
-                        z = x[1].split("]")
-                        z = int(y[1]) - int(z[0])
-                        p.port_number = z + 1
+        with open(self.modelpath + "connection_info.txt", 'w') as f:
+            for m in vlog_mods:
+                if m.name.lower() == self.fname.split('.')[0]:
+                    print(str(m.name) + " " + self.fname.split('.')[0])
+                    for p in m.ports:
+                        print(p.data_type)
+                        if str(p.data_type).find(':') == -1:
+                            p.port_number = "1"
+                        else:
+                            x = p.data_type.split(":")
+                            print(x)
+                            y = x[0].split("[")
+                            z = x[1].split("]")
+                            z = int(y[1]) - int(z[0])
+                            p.port_number = z + 1
 
-        for m in vlog_mods:
-            if m.name.lower() == self.fname.split('.')[0]:
-                m.name = m.name.lower()
-                print('Module "{}":'.format(m.name))
-                for p in m.generics:
-                    print('\t{:20}{:8}{}'.format(p.name, p.mode, p.data_type))
-                print('  Ports:')
-                for p in m.ports:
-                    print(
-                        '\t{:20}{:8}{}'.format(
-                            p.name, p.mode, p.port_number))
-                    f.write(
-                        '\t{:20}{:8}{}\n'.format(
-                            p.name, p.mode, p.port_number))
-                break
-        f.close()
+            for m in vlog_mods:
+                if m.name.lower() == self.fname.split('.')[0]:
+                    m.name = m.name.lower()
+                    print('Module "{}":'.format(m.name))
+                    for p in m.generics:
+                        print('\t{:20}{:8}{}'.format(
+                            p.name, p.mode, p.data_type))
+                    print('  Ports:')
+                    for p in m.ports:
+                        print(
+                            '\t{:20}{:8}{}'.format(
+                                p.name, p.mode, p.port_number))
+                        f.write(
+                            '\t{:20}{:8}{}\n'.format(
+                                p.name, p.mode, p.port_number))
+                    break
         if m.name.lower() != self.fname.split(".")[0]:
             QtWidgets.QMessageBox.critical(
                 None,
@@ -268,8 +264,8 @@ class ModelGeneration(QtWidgets.QWidget):
             This function is used to get the port information
             from "connection_info.txt"
         '''
-        readfile = open(self.modelpath + 'connection_info.txt', 'r')
-        data = readfile.readlines()
+        with open(self.modelpath + 'connection_info.txt', 'r') as readfile:
+            data = readfile.readlines()
         self.input_list = []
         self.output_list = []
         for line in data:
@@ -1015,17 +1011,15 @@ and set the load for input ports */
             This function creates modpathlst in Ngspice folder.
         '''
         print("Editing modpath.lst file")
-        mod = open(self.digital_home + '/modpath.lst', 'r')
-        text = mod.read()
-        mod.close()
-        mod = open(self.digital_home + '/modpath.lst', 'a+')
+        with open(self.digital_home + '/modpath.lst', 'r') as mod:
+            text = mod.read()
         # Exact-line membership: a plain "in text" substring test wrongly
         # treats "divider" as already present because "divider_8bit" contains
         # it, which silently drops the shorter model from Ngveri.cm.
         modname = self.fname.split('.')[0]
-        if modname not in text.split():
-            mod.write(modname + "\n")
-        mod.close()
+        with open(self.digital_home + '/modpath.lst', 'a+') as mod:
+            if modname not in text.split():
+                mod.write(modname + "\n")
         # Self-heal: a stale entry whose build dir was deleted (e.g. the model
         # was later removed via the d_cosim path, which nuked the shared
         # <model>/ dir but not this list) makes cmpp abort the ENTIRE Ngveri.cm
@@ -1243,13 +1237,13 @@ and set the load for input ports */
 
         if not os.path.isdir(self.modelpath):
             os.mkdir(self.modelpath)
-        text = open(includefile).read()
+        with open(includefile) as fh:
+            text = fh.read()
         text = text + '\n'
-        f = open(self.modelpath + filename, 'w')
-        for item in text:
-            f.write(item)
-        f.write("\n")
-        f.close()
+        with open(self.modelpath + filename, 'w') as f:
+            for item in text:
+                f.write(item)
+            f.write("\n")
         print("Added the File:" + filename)
         self.termtitle("Added the File:" + filename)
 

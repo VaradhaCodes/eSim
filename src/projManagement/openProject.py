@@ -34,13 +34,15 @@ class OpenProjectInfo(QtWidgets.QWidget):
         super(OpenProjectInfo, self).__init__()
         self.obj_validation = Validation()
 
-    def body(self):
+    def body(self, projDir=None):
         """
-        Let the user pick a project folder (or a .proj file directly), resolve
-        the project from its .proj anchor regardless of the folder's name, and
-        register it as the current project.
+        Open a project folder, resolve the project from its .proj anchor
+        regardless of the folder's name, and register it as the current project.
 
         @params
+            :projDir     => when given (e.g. restoring the last project at
+                            startup), open this folder directly and skip the
+                            folder picker. When None, prompt the user to choose.
 
         @return
             :projDir     => the project folder path (or None if not opened)
@@ -49,14 +51,20 @@ class OpenProjectInfo(QtWidgets.QWidget):
         self.obj_Appconfig = Appconfig()
         self.openDir = self.obj_Appconfig.default_workspace["workspace"]
 
-        # A project is a folder of files, so we pick the folder; the project is
-        # then resolved from the .proj anchor inside it regardless of the
-        # folder's name (see projectPaths.resolve_stem).
-        self.projDir = QtCore.QDir.toNativeSeparators(
-            QtWidgets.QFileDialog.getExistingDirectory(
-                self, "Open Project", self.openDir
+        # `restoring` (projDir supplied) means a non-interactive startup reopen:
+        # use the saved path as-is and never pop a dialog.
+        restoring = projDir is not None
+        if restoring:
+            self.projDir = QtCore.QDir.toNativeSeparators(str(projDir))
+        else:
+            # A project is a folder of files, so we pick the folder; the project
+            # is then resolved from the .proj anchor inside it regardless of the
+            # folder's name (see projectPaths.resolve_stem).
+            self.projDir = QtCore.QDir.toNativeSeparators(
+                QtWidgets.QFileDialog.getExistingDirectory(
+                    self, "Open Project", self.openDir
+                )
             )
-        )
         if not self.projDir:
             self.obj_Appconfig.print_info('No Project opened')
             return None, None
@@ -65,6 +73,13 @@ class OpenProjectInfo(QtWidgets.QWidget):
 
         # No anchor -> not an eSim project.
         if not proj_files:
+            if restoring:
+                # Don't show the interactive retry dialog during startup; just
+                # decline to restore.
+                self.obj_Appconfig.print_warning(
+                    "Could not restore last project: no .proj anchor in " +
+                    str(self.projDir))
+                return None, None
             return self._reportNoProject()
 
         # Resolve the stem from the anchor. If the folder holds more than one
@@ -107,9 +122,8 @@ class OpenProjectInfo(QtWidgets.QWidget):
             filelist = []
 
         self.obj_Appconfig.project_explorer[self.projDir] = filelist
-        json.dump(
-            self.obj_Appconfig.project_explorer, open(
-                self.obj_Appconfig.dictPath["path"], 'w'))
+        with open(self.obj_Appconfig.dictPath["path"], 'w') as fh:
+            json.dump(self.obj_Appconfig.project_explorer, fh)
         self.obj_Appconfig.print_info('Open Project called')
         self.obj_Appconfig.print_info('Current Project is ' + self.projDir)
         return self.projDir, filelist

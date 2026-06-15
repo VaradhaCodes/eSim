@@ -41,6 +41,37 @@ from configuration.Appconfig import Appconfig
 from configparser import ConfigParser
 
 
+def _safe_model_subdir(base, name):
+    """Resolve ``<base>/<name>`` for deletion, but ONLY when it is provably a
+    single-component subdirectory strictly inside ``base``.
+
+    Returns the absolute path, or ``None`` when ``name`` is empty/blank, holds a
+    path separator, is ``.``/``..``, or resolves to ``base`` itself or outside
+    it. Callers MUST treat ``None`` as "do not delete anything".
+
+    This is the guard that stops a blank model name from collapsing
+    ``os.path.join(base, "")`` to ``"base/"`` and ``shutil.rmtree`` wiping the
+    whole models directory.
+    """
+    if not name or not str(name).strip():
+        return None
+    name = str(name).strip()
+    if (os.sep in name or (os.altsep and os.altsep in name)
+            or name in ('.', '..')):
+        return None
+    base_abs = os.path.abspath(base)
+    target = os.path.abspath(os.path.join(base_abs, name))
+    if target == base_abs:
+        return None
+    try:
+        if os.path.commonpath([base_abs, target]) != base_abs:
+            return None
+    except ValueError:
+        # Different drives (Windows) -> not a subpath.
+        return None
+    return target
+
+
 class NgVeri(QtWidgets.QWidget):
     '''
         This class create the NgVeri Tab
@@ -403,6 +434,11 @@ class NgVeri(QtWidgets.QWidget):
         '''
         if text == "Remove Verilog Models":
             return
+        # A blank/whitespace selection must never reach the teardown helpers:
+        # os.path.join(base, "") collapses to "base/" and rmtree would wipe the
+        # entire models directory. (Defence in depth -- the helpers guard too.)
+        if not text or not str(text).strip():
+            return
         combo = self.entry_var[1]
         index = combo.findText(text)
         # Which backend owns this model: the on-disk modelParamXML layout is
@@ -464,6 +500,10 @@ class NgVeri(QtWidgets.QWidget):
         log = CosimLog(self.entry_var[0])
         log.phase('REMOVE d_cosim model "' + str(text) + '"')
 
+        if not text or not str(text).strip():
+            log.warn("Refusing to remove a d_cosim model with a blank name.")
+            return
+
         try:
             symbol = createkicadCosim.CosimSchematic()
             symbol.init(text, "")
@@ -481,6 +521,16 @@ class NgVeri(QtWidgets.QWidget):
         vvp = CosimConfig.cosim_vvp_path(text)
         if vvp:
             build_dir = os.path.dirname(vvp)
+            # vvp = <DIGITAL_MODEL>/Ngveri/<text>/<text>, so the build dir's
+            # basename must equal the model name. A blank name would collapse it
+            # to the parent Ngveri/ dir -- bail rather than rmtree all models.
+            if os.path.basename(os.path.normpath(build_dir)) != str(text).strip():
+                log.warn("Refusing to remove unexpected d_cosim build dir: " +
+                         build_dir)
+                build_dir = None
+        else:
+            build_dir = None
+        if build_dir:
             try:
                 shutil.rmtree(build_dir)
                 log.info("Removed build dir: " + build_dir)
@@ -542,10 +592,15 @@ class NgVeri(QtWidgets.QWidget):
         #   * release  <release>/src/xspice/icm/Ngveri/<model>  -- holds the
         #     compiled .o/.a that otherwise get re-bundled, keeping the model
         #     answering in ngspice after its symbol/list line are gone.
-        for label, model_dir in (
-                ("source", os.path.join(self.digital_home, text)),
+        for label, base in (
+                ("source", self.digital_home),
                 ("release", os.path.join(
-                    self.release_dir, "src/xspice/icm/Ngveri", text))):
+                    self.release_dir, "src/xspice/icm/Ngveri"))):
+            model_dir = _safe_model_subdir(base, text)
+            if model_dir is None:
+                log.warn("Refusing to remove unsafe " + label +
+                         " dir for model name: " + repr(text))
+                continue
             try:
                 shutil.rmtree(model_dir)
                 log.info("Removed " + label + " dir: " + model_dir)
@@ -622,10 +677,15 @@ class NgVeri(QtWidgets.QWidget):
         except Exception as err:
             log.warn("Could not remove eSim_Ngveri symbol for '" +
                      str(name) + "': " + str(err))
-        for label, d in (
-                ("source", os.path.join(self.digital_home, name)),
+        for label, base in (
+                ("source", self.digital_home),
                 ("release", os.path.join(
-                    self.release_dir, "src/xspice/icm/Ngveri", name))):
+                    self.release_dir, "src/xspice/icm/Ngveri"))):
+            d = _safe_model_subdir(base, name)
+            if d is None:
+                log.warn("Refusing to remove unsafe " + label +
+                         " dir for model name: " + repr(name))
+                continue
             try:
                 shutil.rmtree(d)
                 log.info("Removed " + label + " dir: " + d)
@@ -753,9 +813,8 @@ class NgVeri(QtWidgets.QWidget):
 
         if self.entry_var[2].findText(text) == -1:
             self.entry_var[2].addItem(text)
-            file = open(init_path + "library/tlv/lint_off.txt", 'a+')
-            file.write(text + "\n")
-            file.close()
+            with open(init_path + "library/tlv/lint_off.txt", 'a+') as fh:
+                fh.write(text + "\n")
         self.entry_var[3].setText("")
 
     def creategroup(self):
@@ -786,9 +845,8 @@ class NgVeri(QtWidgets.QWidget):
         if not os.path.exists(modpath_file):
             os.makedirs(self.digital_home, exist_ok=True)
             open(modpath_file, 'w').close()
-        self.modlst = open(modpath_file, 'r')
-        self.data = self.modlst.readlines()
-        self.modlst.close()
+        with open(modpath_file, 'r') as fh:
+            self.data = fh.readlines()
         combo = self.entry_var[self.count]
         for item in self.data:
             if item != "\n":
@@ -816,10 +874,8 @@ class NgVeri(QtWidgets.QWidget):
         init_path = '../../'
         if os.name == 'nt':
             init_path = ''
-        self.lint_off = open(init_path + "library/tlv/lint_off.txt", 'r')
-
-        self.data = self.lint_off.readlines()
-        self.lint_off.close()
+        with open(init_path + "library/tlv/lint_off.txt", 'r') as fh:
+            self.data = fh.readlines()
         for item in self.data:
             if item != "\n":
                 self.entry_var[self.count].addItem(item.strip())

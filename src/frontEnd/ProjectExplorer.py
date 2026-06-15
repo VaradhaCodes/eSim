@@ -108,14 +108,12 @@ class ProjectExplorer(QtWidgets.QWidget):
                 parentnode, [files, os.path.join(parents, files)]
             )
 
-        (
-            self.obj_appconfig.
-            proc_dict[self.obj_appconfig.current_project['ProjectName']]
-        ) = []
-        (
-            self.obj_appconfig.
-            dock_dict[self.obj_appconfig.current_project['ProjectName']]
-        ) = []
+        # setdefault, not assignment: addTreeNode runs again on every refresh,
+        # and clobbering these would drop the PIDs/docks already tracked for an
+        # open project (orphaning its KiCad/ngspice windows on close).
+        projName = self.obj_appconfig.current_project['ProjectName']
+        self.obj_appconfig.proc_dict.setdefault(projName, [])
+        self.obj_appconfig.dock_dict.setdefault(projName, [])
 
     def openMenu(self, position):
         indexes = self.treewidget.selectedIndexes()

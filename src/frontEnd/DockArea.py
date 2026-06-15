@@ -146,7 +146,7 @@ class DockArea(QtWidgets.QMainWindow):
         # Connect to tab change signal
         try:
             self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
-        except:
+        except (RuntimeError, TypeError):
             pass  # In case signal is already connected
 
         dock[dockName + str(count)].setVisible(True)

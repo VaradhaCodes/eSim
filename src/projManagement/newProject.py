@@ -113,9 +113,8 @@ class NewProjectInfo(QtWidgets.QWidget):
             self.obj_appconfig.print_info(
                 'Current project is : ' + self.projDir)
 
-            json.dump(
-                self.obj_appconfig.project_explorer, open(
-                    self.obj_appconfig.dictPath["path"], 'w'))
+            with open(self.obj_appconfig.dictPath["path"], 'w') as fh:
+                json.dump(self.obj_appconfig.project_explorer, fh)
             return self.projDir, newprojlist
 
         elif self.reply == "CHECKEXIST":

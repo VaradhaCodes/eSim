@@ -395,7 +395,7 @@ class DeviceModel(QtWidgets.QWidget):
                         if child[0].text and os.path.exists(child[0].text):
                             self.entry_var[self.count].setText(child[0].text)
                             lib_path_set = True
-                    except:
+                    except (IndexError, AttributeError):
                         pass
             
             # If no previous value, auto-fill with default path
@@ -442,7 +442,7 @@ class DeviceModel(QtWidgets.QWidget):
                             idx = corner_combo.findText(child[1].text)
                             if idx >= 0:
                                 corner_combo.setCurrentIndex(idx)
-                    except:
+                    except (IndexError, AttributeError):
                         pass
             
             corner_combo.currentTextChanged.connect(self.ihpCornerChanged)
@@ -466,7 +466,7 @@ class DeviceModel(QtWidgets.QWidget):
                     try:
                         if child[2].text:
                             param_entry.setText(child[2].text)
-                    except:
+                    except (IndexError, AttributeError):
                         pass
             
             param_entry.textChanged.connect(self.ihpParamChanged)

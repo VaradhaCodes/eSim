@@ -82,6 +82,10 @@ class Appconfig(QtWidgets.QWidget):
         os.path.join(user_home, '.esim', 'config.ini')
     )
 
+    # Default so the attribute always exists: if config.ini is missing the key
+    # (or unreadable on Win10), ModelicaUI reading Appconfig.modelica_map_json
+    # gets None instead of an AttributeError.
+    modelica_map_json = None
     # Try catch added, since eSim cannot be accessed under parser for Win10
     try:
         modelica_map_json = parser_esim.get('eSim', 'MODELICA_MAP_JSON')
@@ -90,7 +94,8 @@ class Appconfig(QtWidgets.QWidget):
         print(str(e))
 
     try:
-        project_explorer = json.load(open(dictPath["path"]))
+        with open(dictPath["path"]) as _pe_fh:
+            project_explorer = json.load(_pe_fh)
     except BaseException:
         project_explorer = {}
     process_obj = []

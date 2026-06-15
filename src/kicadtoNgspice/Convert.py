@@ -225,108 +225,113 @@ class Convert:
         self.Fileopen = os.path.join(filepath, "analysis")
         print("======================================================")
         print("FILEOPEN CONVERT ANALYS", self.Fileopen)
-        self.writefile = open(self.Fileopen, "w")
-        if self.variable == 'AC':
-            self.no = 0
-            self.writefile.write(".ac" +
-                                 ' ' +
-                                 self.ac_type +
-                                 ' ' +
-                                 str(self.defaultvalue(
-                                     self.ac_entry_var[self.no + 2].text())) +
-                                 ' ' +
-                                 str(self.defaultvalue(
-                                     self.ac_entry_var[self.no].text())) +
-                                 self.ac_parameter[self.no] +
-                                 ' ' +
-                                 str(self.defaultvalue(
-                                     self.ac_entry_var[self.no + 1].text())) +
-                                 self.ac_parameter[self.no +
-                                                   1])
-
-        elif self.variable == 'DC':
-            if self.op_check[-1] == 1:
+        # Write inside a `with` so an indexing error mid-build can never leave
+        # the analysis file truncated-and-leaked -- a stale/empty analysis file
+        # would silently make the next run mis-detect as Transient.
+        with open(self.Fileopen, "w") as self.writefile:
+            if self.variable == 'AC':
                 self.no = 0
-                self.writefile.write(".op")
-            elif self.op_check[-1] == 0 or self.op_check[-1] == '0':
+                self.writefile.write(".ac" +
+                                     ' ' +
+                                     self.ac_type +
+                                     ' ' +
+                                     str(self.defaultvalue(
+                                         self.ac_entry_var[self.no + 2].text())) +
+                                     ' ' +
+                                     str(self.defaultvalue(
+                                         self.ac_entry_var[self.no].text())) +
+                                     self.ac_parameter[self.no] +
+                                     ' ' +
+                                     str(self.defaultvalue(
+                                         self.ac_entry_var[self.no + 1].text())) +
+                                     self.ac_parameter[self.no +
+                                                       1])
+
+            elif self.variable == 'DC':
+                # op_check can be empty if the DC widgets were never populated;
+                # default to a .dc sweep instead of raising IndexError on [-1].
+                op_flag = self.op_check[-1] if self.op_check else 0
+                if op_flag == 1:
+                    self.no = 0
+                    self.writefile.write(".op")
+                elif op_flag == 0 or op_flag == '0':
+                    self.no = 0
+                    self.writefile.write(".dc" +
+                                         ' ' +
+                                         str(self.dc_entry_var[self.no].text()) +
+                                         ' ' +
+                                         str(self.defaultvalue(
+                                             self.dc_entry_var[self.no +
+                                                               1].text())) +
+                                         self.converttosciform(
+                                             self.dc_parameter[self.no]) +
+                                         ' ' +
+                                         str(self.defaultvalue(
+                                             self.dc_entry_var[self.no +
+                                                               3].text())) +
+                                         self.converttosciform(
+                                             self.dc_parameter[self.no +
+                                                               2]) +
+                                         ' ' +
+                                         str(self.defaultvalue(
+                                             self.dc_entry_var[self.no +
+                                                               2].text())) +
+                                         self.converttosciform(
+                                             self.dc_parameter[self.no +
+                                                               1]))
+
+                    if self.dc_entry_var[self.no + 4].text():
+                        self.writefile.write(' ' +
+                                             str(self.defaultvalue(
+                                                 self.dc_entry_var[self.no +
+                                                                   4].text())) +
+                                             ' ' +
+                                             str(self.defaultvalue(
+                                                 self.dc_entry_var[self.no +
+                                                                   5].text())) +
+                                             self.converttosciform(
+                                                 self.dc_parameter[self.no +
+                                                                   3]) +
+                                             ' ' +
+                                             str(self.defaultvalue(
+                                                 self.dc_entry_var[self.no +
+                                                                   7].text())) +
+                                             self.converttosciform(
+                                                 self.dc_parameter[self.no +
+                                                                   5]) +
+                                             ' ' +
+                                             str(self.defaultvalue(
+                                                 self.dc_entry_var[self.no +
+                                                                   6].text())) +
+                                             self.converttosciform(
+                                                 self.dc_parameter[self.no +
+                                                                   4]))
+
+            elif self.variable == 'TRAN':
                 self.no = 0
-                self.writefile.write(".dc" +
-                                     ' ' +
-                                     str(self.dc_entry_var[self.no].text()) +
+                self.writefile.write(".tran" +
                                      ' ' +
                                      str(self.defaultvalue(
-                                         self.dc_entry_var[self.no +
-                                                           1].text())) +
+                                         self.tran_entry_var[self.no +
+                                                             1].text())) +
                                      self.converttosciform(
-                                         self.dc_parameter[self.no]) +
+                                         self.trans_parameter[self.no +
+                                                              1]) +
                                      ' ' +
                                      str(self.defaultvalue(
-                                         self.dc_entry_var[self.no +
-                                                           3].text())) +
+                                         self.tran_entry_var[self.no +
+                                                             2].text())) +
                                      self.converttosciform(
-                                         self.dc_parameter[self.no +
-                                                           2]) +
+                                         self.trans_parameter[self.no +
+                                                              2]) +
                                      ' ' +
                                      str(self.defaultvalue(
-                                         self.dc_entry_var[self.no +
-                                                           2].text())) +
+                                         self.tran_entry_var[self.no].text())) +
                                      self.converttosciform(
-                                         self.dc_parameter[self.no +
-                                                           1]))
+                                         self.trans_parameter[self.no]))
 
-                if self.dc_entry_var[self.no + 4].text():
-                    self.writefile.write(' ' +
-                                         str(self.defaultvalue(
-                                             self.dc_entry_var[self.no +
-                                                               4].text())) +
-                                         ' ' +
-                                         str(self.defaultvalue(
-                                             self.dc_entry_var[self.no +
-                                                               5].text())) +
-                                         self.converttosciform(
-                                             self.dc_parameter[self.no +
-                                                               3]) +
-                                         ' ' +
-                                         str(self.defaultvalue(
-                                             self.dc_entry_var[self.no +
-                                                               7].text())) +
-                                         self.converttosciform(
-                                             self.dc_parameter[self.no +
-                                                               5]) +
-                                         ' ' +
-                                         str(self.defaultvalue(
-                                             self.dc_entry_var[self.no +
-                                                               6].text())) +
-                                         self.converttosciform(
-                                             self.dc_parameter[self.no +
-                                                               4]))
-
-        elif self.variable == 'TRAN':
-            self.no = 0
-            self.writefile.write(".tran" +
-                                 ' ' +
-                                 str(self.defaultvalue(
-                                     self.tran_entry_var[self.no +
-                                                         1].text())) +
-                                 self.converttosciform(
-                                     self.trans_parameter[self.no +
-                                                          1]) +
-                                 ' ' +
-                                 str(self.defaultvalue(
-                                     self.tran_entry_var[self.no +
-                                                         2].text())) +
-                                 self.converttosciform(
-                                     self.trans_parameter[self.no +
-                                                          2]) +
-                                 ' ' +
-                                 str(self.defaultvalue(
-                                     self.tran_entry_var[self.no].text())) +
-                                 self.converttosciform(
-                                     self.trans_parameter[self.no]))
-
-        else:
-            pass
-        self.writefile.close()
+            else:
+                pass
 
     def converttosciform(self, string_obj):
         """

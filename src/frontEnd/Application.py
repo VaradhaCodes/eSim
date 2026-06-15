@@ -402,7 +402,7 @@ class Application(QtWidgets.QMainWindow):
             pass
         else:
             temp = self.obj_appconfig.current_project['ProjectName']
-            for pid in self.obj_appconfig.proc_dict[temp]:
+            for pid in self.obj_appconfig.proc_dict.get(temp, []):
                 try:
                     os.kill(pid, 9)
                 except BaseException:
@@ -915,7 +915,9 @@ def main(args):
         try:
             open_proj = OpenProjectInfo()
             directory, filelist = open_proj.body(last_project_path)
-            appView.obj_Mainview.obj_projectExplorer.addTreeNode(directory, filelist)
+            if directory:
+                appView.obj_Mainview.obj_projectExplorer.addTreeNode(
+                    directory, filelist)
         except Exception as e:
             print("Could not restore last project:", str(e))
     appView.obj_Mainview.obj_timeExplorer.load_last_snapshots()
@@ -938,10 +940,12 @@ def main(args):
         else:
             user_home = os.path.expanduser('~')
 
-        file = open(os.path.join(user_home, ".esim/workspace.txt"), 'r')
-        work = int(file.read(1))
-        file.close()
-    except IOError:
+        with open(os.path.join(user_home, ".esim/workspace.txt"), 'r') as file:
+            work = int(file.read(1))
+    # ValueError: an empty/truncated workspace.txt makes int('') fail; treat it
+    # the same as a missing file and fall back to the workspace picker, rather
+    # than letting the exception abort startup.
+    except (IOError, ValueError):
         work = 0
 
     if work != 0:

@@ -148,7 +148,8 @@ class Maker(QtWidgets.QWidget):
                 self.obj_Appconfig.print_info('No Verilog File Chosen')
                 return
 
-        self.text = open(self.verilogfile).read()
+        with open(self.verilogfile) as fh:
+            self.text = fh.read()
         self.entry_var[0].setText(self.verilogfile)
         self.entry_var[1].setText(self.text)
         global verilogFile
@@ -185,7 +186,8 @@ class Maker(QtWidgets.QWidget):
     def refresh(self):
         if not hasattr(self, 'verilogfile'):
             return
-        self.text = open(self.verilogfile).read()
+        with open(self.verilogfile) as fh:
+            self.text = fh.read()
         self.entry_var[1].setText(self.text)
         print("NgVeri File: " + self.verilogfile + " Refreshed")
         self.obj_Appconfig.print_info(
@@ -207,7 +209,8 @@ class Maker(QtWidgets.QWidget):
     def save(self):
         try:
             wr = self.entry_var[1].toPlainText()
-            open(self.verilogfile, "w+").write(wr)
+            with open(self.verilogfile, "w+") as fh:
+                fh.write(wr)
         except Exception as err:
             self.msg = QtWidgets.QErrorMessage(self)
             self.msg.setModal(True)
@@ -250,7 +253,8 @@ class Maker(QtWidgets.QWidget):
                 if reply == QtWidgets.QMessageBox.StandardButton.Cancel:
                     return
                 if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-                    code = open(self.verilogfile).read()
+                    with open(self.verilogfile) as fh:
+                        code = fh.read()
                     text = code
                     filename = '.'.join(
                         self.verilogfile.split('.')[:-1]) + ".tlv"
@@ -283,9 +287,9 @@ class Maker(QtWidgets.QWidget):
 name and module name not matching error')
                         return
 
-                    lint_off = open(
-                        init_path + "library/tlv/lint_off.txt"
-                    ).readlines()
+                    with open(
+                            init_path + "library/tlv/lint_off.txt") as fh:
+                        lint_off = fh.readlines()
                     string = '''\\TLV_version 1d: tl-x.org\n\\SV\n'''
                     for item in lint_off:
                         string += "/* verilator lint_off " + \
