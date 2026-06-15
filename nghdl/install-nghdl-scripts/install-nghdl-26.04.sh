@@ -45,8 +45,31 @@ function installDependency
         libcanberra-gtk3-module \
         libxaw7 libxaw7-dev
 
-    echo "Installing GHDL from Ubuntu 26.04 repos (5.0.1)......."
-    sudo apt-get install -y ghdl
+    echo "Installing GHDL (LLVM backend) from Ubuntu 26.04 repos (5.0.1)."
+    # IMPORTANT: install ghdl-llvm EXPLICITLY, never the 'ghdl' meta-package.
+    # The meta-package's Depends line is:
+    #     ghdl-mcode | ghdl-gcc | ghdl-llvm
+    # and apt picks the FIRST available alternative -> ghdl-mcode (JIT).
+    # nghdl builds the VHDL socket server with `ghdl -e -Wl,ghdlserver.o ...`;
+    # the mcode backend rejects -Wl ("option -Wl is not available when ghdl is
+    # not configured with gcc or llvm"), so the server binary never builds, it
+    # never listens on the socket, and the ngspice A-device client gives up with
+    # "Connect Error ... giving up" => "Simulation Failed". Only gcc/llvm link.
+    # See GHDL-BACKEND-26.04.md in this directory for the full writeup.
+    sudo apt-get install -y ghdl-llvm
+
+    # The /usr/bin/ghdl wrapper (owned by ghdl-common) selects the backend in
+    # order mcode -> gcc -> llvm unless $GHDL_BACKEND is set, so if mcode is ever
+    # present it wins. Keep it out of the box.
+    sudo apt-get purge -y ghdl-mcode 2>/dev/null || true
+
+    # Fail loudly if mcode slipped back in: a working box must NOT have it.
+    if dpkg -l ghdl-mcode 2>/dev/null | grep -q '^ii'; then
+        echo "ERROR: ghdl-mcode is installed; it cannot link the nghdl socket"
+        echo "       server (-Wl) and will break nghdl simulation silently."
+        echo "       Run: sudo apt-get purge -y ghdl-mcode"
+        exit 1
+    fi
 
     echo "Installing Verilator from Ubuntu 26.04 repos (5.032).."
     sudo apt-get install -y verilator
