@@ -1,19 +1,13 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
-from PyQt6.QtWidgets import QMenu
-from PyQt6.QtCore import Qt
 from .data_extraction import DataExtraction
 from .trace import Trace
-from .constants import (DEFAULT_VERTICAL_SPACING, DEFAULT_ZOOM_FACTOR, LEGEND_FONT_SIZE,
-                        CURSOR_ALPHA, THRESHOLD_ALPHA, VIBRANT_COLOR_PALETTE,
+from .constants import (LEGEND_FONT_SIZE, THRESHOLD_ALPHA,
                         TIME_UNIT_THRESHOLD_PS, TIME_UNIT_THRESHOLD_NS,
                         TIME_UNIT_THRESHOLD_US, TIME_UNIT_THRESHOLD_MS,
-                        FREQ_UNIT_THRESHOLD_KHZ, FREQ_UNIT_THRESHOLD_MHZ,
-                        FREQ_UNIT_THRESHOLD_GHZ, REFRESH_DEBOUNCE_MS,
-                        STACKED_REFRESH_DEBOUNCE_MS)
+                        REFRESH_DEBOUNCE_MS, STACKED_REFRESH_DEBOUNCE_MS)
 from .math_utils import (_format_measurement, _format_frequency, _detect_frequency, _trapz)
 
 
@@ -498,6 +492,11 @@ class _RenderMixin:
             # output where sample spacing is non-uniform (up to 200x ratio).
             # Simple mean/mean² gives wrong DC and RMS on such data.
             T = float(x[-1] - x[0])
+            # Degenerate axis (all-equal x) → integration window is zero; skip
+            # the DC/RMS row instead of dividing by zero into inf/nan. Matches
+            # the guard in _render_func_pane_stats.
+            if T <= 0:
+                continue
             dc = float(_trapz(y, x) / T)
             rms_total_sq = float(_trapz(y * y, x) / T)
             # AC RMS = sqrt(RMS² - DC²) — signal amplitude without DC offset.

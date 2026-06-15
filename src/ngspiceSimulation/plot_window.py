@@ -8,37 +8,31 @@ with support for AC, DC, and Transient analysis visualization.
 
 from __future__ import division
 import os
-import re
 import csv
-import sys
 import json
-import traceback
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 from PyQt6 import QtGui, QtCore, QtWidgets
-from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout,
-                             QHBoxLayout, QListWidget, QListWidgetItem, QPushButton,
-                             QCheckBox, QGroupBox, QRadioButton, QButtonGroup,
-                             QLabel, QLineEdit, QSlider, QDoubleSpinBox, QMenu,
-                             QFileDialog, QColorDialog, QInputDialog,
+                             QHBoxLayout, QPushButton,
+                             QCheckBox, QRadioButton, QButtonGroup,
+                             QLabel, QLineEdit, QSlider, QDoubleSpinBox,
+                             QFileDialog,
                              QMessageBox, QStatusBar,
-                             QSplitter, QToolButton, QWidgetAction, QGridLayout,
+                             QSplitter, QToolButton,
                              QSizePolicy, QScrollArea)
-from PyQt6.QtGui import (QColor, QBrush, QPalette, QKeySequence, QShortcut,
-                         QPainter, QPixmap, QFont, QAction, QIcon, QPen)
+from PyQt6.QtGui import (QColor, QKeySequence, QShortcut,
+                         QPainter, QPixmap, QAction, QIcon, QPen)
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.backend_bases import NavigationToolbar2
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
-from matplotlib.text import Text
-from matplotlib.ticker import FuncFormatter, ScalarFormatter
 
 from configuration.Appconfig import Appconfig
 from .plotting_widgets import CollapsibleBox
@@ -46,7 +40,9 @@ from .data_extraction import DataExtraction
 
 logger = logging.getLogger(__name__)
 
-from .constants import *
+from .constants import (DEFAULT_DPI, DEFAULT_EXPORT_DPI, DEFAULT_FIGURE_SIZE,
+                        DEFAULT_VERTICAL_SPACING, DEFAULT_ZOOM_FACTOR,
+                        REFRESH_DEBOUNCE_MS, VIBRANT_COLOR_PALETTE)
 from .trace import Trace, CustomListWidget
 from ._pane_mixin import _PaneMixin
 from ._cursor_mixin import _CursorMixin
@@ -651,7 +647,6 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 # it shows a per-axes selector so each pane can be edited.
                 self.fig.canvas.toolbar.edit_parameters()
                 return
-            from matplotlib.backends.qt_compat import QtWidgets
             from matplotlib.backends.qt_editor import _formlayout
             if hasattr(_formlayout, 'FormDialog'):
                 current_title = self.fig._suptitle.get_text() if self.fig._suptitle is not None else ''
@@ -902,7 +897,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 logger.error(f"Error exporting image: {e}")
                 QMessageBox.warning(self, "Export Error", f"Failed to export image: {str(e)}")
 
-    def _collect_plot_data(self) -> Tuple[List[str], List[List[float]]]:
+    def _collect_plot_data(self) -> Tuple[List[str], "np.ndarray"]:
         """Build a rectangular table of the whole simulation's data.
 
         First column is the X axis (Time / Frequency / Voltage sweep depending
@@ -913,7 +908,8 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         All columns are clipped to the shortest length so the result is a clean
         rectangle the csv writer (or an AI) can consume without ragged rows.
 
-        Returns (header, rows). Raises ValueError if there is no data.
+        Returns (header, matrix) where matrix is a 2-D float array with one
+        column per header entry. Raises ValueError if there is no data.
         """
         raw_x = np.asarray(self.obj_dataext.x, dtype=float)
 
@@ -961,12 +957,17 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             raise ValueError("Plotted traces contain no data points.")
 
         header = [name for name, _ in columns]
-        rows = [[float(arr[i]) for _, arr in columns] for i in range(n)]
-        return header, rows
+        # Clip every column to the shortest length and stack into one 2-D
+        # array so the body can be written with np.savetxt (C-level). The
+        # previous O(rows*cols) Python float()/format() loop was slow and
+        # memory-heavy on million-row transients.
+        matrix = np.column_stack(
+            [np.asarray(arr[:n], dtype=float) for _, arr in columns])
+        return header, matrix
 
     def export_csv(self) -> None:
         try:
-            header, rows = self._collect_plot_data()
+            header, matrix = self._collect_plot_data()
         except ValueError as e:
             QMessageBox.information(self, "Export CSV", str(e))
             return
@@ -979,10 +980,12 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             file_name += '.csv'
         try:
             with open(file_name, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(header)
-                for row in rows:
-                    writer.writerow([format(v, '.10g') for v in row])
+                # Header via csv.writer so names containing commas are quoted;
+                # numeric body via np.savetxt (vectorized) so large exports stay
+                # fast. Both use '\n' so line endings are consistent, and field
+                # counts line up: exactly one column per header name.
+                csv.writer(f, lineterminator='\n').writerow(header)
+                np.savetxt(f, matrix, delimiter=',', fmt='%.10g')
             self.status_bar.showMessage(f"CSV exported to {file_name}", 3000)
         except Exception as e:
             logger.error(f"Error exporting CSV: {e}")

@@ -148,7 +148,6 @@ class DataExtraction:
         numpy reader.  The x axis is taken from the first group only (all
         groups share the same time/frequency axis, as ngspice emits them).
         """
-        cols_per_node = 2 if is_ac else 1
         x_name = 'time'
         all_names: List[str] = []          # output channel names (duplicates kept)
         groups: List[dict] = []            # each: {'indices': [...], 'rows': [str]}
@@ -276,6 +275,12 @@ class DataExtraction:
         if '.tran' in tokens:
             return self.TRANSIENT_ANALYSIS, dec
 
+        # Everything else (.dc, .op, .noise, .disto, …) is plotted on a
+        # linear sweep axis like DC. Log non-.dc directives so an unexpected
+        # analysis type is traceable rather than silently bucketed.
+        if not any(t.lower().startswith('.dc') for t in tokens):
+            logger.debug("Analysis directive %r not AC/Tran/DC; "
+                         "defaulting to DC sweep handling.", tokens[0])
         return self.DC_ANALYSIS, dec
 
     def openFile(self, file_path: str) -> List[int]:
@@ -414,7 +419,7 @@ class DataExtraction:
           ...
           **** Messages ****
 
-        States: '0*' -> 0 V, '1*' -> 5 V, 'U*'/'X*' -> 2.5 V. Step-hold
+        States: '0*' -> 0 V, '1*' -> 5 V, 'U*'/'X*'/'Z*' -> 2.5 V. Step-hold
         resampling places the last event state at each analog time point.
         """
         if not os.path.exists(filepath) or tran_x.size == 0:
@@ -461,7 +466,8 @@ class DataExtraction:
         if not node_names or not events:
             return [], []
 
-        _STATE = {'0': 0.0, '1': 5.0, 'U': 2.5, 'X': 2.5}
+        # Hi-Z ('Z') has no analog level; park it mid-rail like unknown/U/X.
+        _STATE = {'0': 0.0, '1': 5.0, 'U': 2.5, 'X': 2.5, 'Z': 2.5}
 
         def _sv(state: str) -> float:
             return _STATE.get(state[0].upper() if state else 'U', 0.0)

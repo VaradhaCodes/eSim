@@ -4,9 +4,9 @@ from typing import List
 
 from PyQt6 import QtGui, QtCore
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QListWidgetItem,
-                              QMenu, QColorDialog, QInputDialog, QMessageBox,
+                              QMenu, QColorDialog, QInputDialog,
                               QWidgetAction, QGridLayout, QPushButton)
-from PyQt6.QtGui import QColor, QBrush, QPainter, QPixmap, QPen
+from PyQt6.QtGui import QColor, QBrush, QPainter, QPixmap
 from PyQt6.QtCore import Qt
 
 from .constants import (DEFAULT_LINE_THICKNESS, THICKNESS_OPTIONS, LINE_STYLES,

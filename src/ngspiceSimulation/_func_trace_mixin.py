@@ -1,12 +1,11 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 import re
 import numpy as np
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QMenu, QMessageBox, QColorDialog, QInputDialog,
-                             QListWidgetItem, QWidget, QPushButton,
+                             QWidget, QPushButton,
                              QGridLayout, QWidgetAction)
-from PyQt6.QtGui import QColor
 from .constants import DEFAULT_LINE_THICKNESS
 from .math_utils import _safe_eval, _canonical_expr
 

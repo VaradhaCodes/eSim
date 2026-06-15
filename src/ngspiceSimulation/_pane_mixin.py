@@ -1,10 +1,8 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from PyQt6.QtWidgets import QMenu
 from PyQt6.QtCore import Qt
 from PyQt6 import QtCore
-from matplotlib.lines import Line2D
-from .constants import (MIN_STACKED_PANE_HEIGHT_PX, DIVIDER_HIT_TOLERANCE_PX,
-                        STACKED_REFRESH_DEBOUNCE_MS)
+from .constants import (MIN_STACKED_PANE_HEIGHT_PX, DIVIDER_HIT_TOLERANCE_PX)
 
 
 class _PaneMixin:
