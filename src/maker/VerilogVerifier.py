@@ -24,6 +24,19 @@ except ImportError:
 import numpy as np
 from ngspiceSimulation.plot_window import plotWindow
 
+# Theme-aware icon factories used by the Fullscreen / Dock-to-IDE / Copy
+# chrome buttons. They ship their own SVG markup, so the labels stay legible
+# regardless of the OS / font fallback.
+try:
+    from frontEnd.icon_paths import (
+        fullscreen_icon, dock_back_icon, close_icon, copy_icon,
+    )
+except Exception:  # pragma: no cover — running outside frontEnd package.
+    fullscreen_icon = None
+    dock_back_icon = None
+    close_icon = None
+    copy_icon = None
+
 class VcdPlotWindow(plotWindow):
     def __init__(self, timestamps, signals_data, signal_types, project_name="Verilog Simulation", parent=None):
         self.timestamps = timestamps
@@ -66,6 +79,8 @@ class VcdPlotWindow(plotWindow):
         self._rebuild_nb_sorted()
         self.data_info = self.obj_dataext.numVals()
         self.volts_length = self.data_info[1]
+        
+        self._show_empty_state(self.volts_length == 0)
         
         self.analysis_label.setText("Verilog Transient Analysis")
         self.populate_waveform_list()
@@ -172,10 +187,16 @@ class CodeEditor(QtWidgets.QPlainTextEdit):
 
     def lineNumberAreaPaintEvent(self, event):
         painter = QtGui.QPainter(self.lineNumberArea)
-        painter.fillRect(event.rect(), QtGui.QColor("#f8f9fa")) # Light grey gutter
-        
+        # Use the active widget palette so the gutter tracks the
+        # currently-applied QSS theme (dark/light) without hardcoding.
+        pal = self.palette()
+        painter.fillRect(event.rect(), pal.color(QtGui.QPalette.ColorRole.AlternateBase))
+
+        border_color = pal.color(QtGui.QPalette.ColorRole.Mid)
+        text_color = pal.color(QtGui.QPalette.ColorRole.PlaceholderText)
+
         # Subtle right border for the gutter
-        painter.setPen(QtGui.QColor("#dee2e6"))
+        painter.setPen(border_color)
         painter.drawLine(self.lineNumberArea.width() - 1, 0, self.lineNumberArea.width() - 1, event.rect().height())
         
         block = self.firstVisibleBlock()
@@ -186,7 +207,7 @@ class CodeEditor(QtWidgets.QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(blockNumber + 1)
-                painter.setPen(QtGui.QColor("#adb5bd")) # Subtle text color
+                painter.setPen(text_color)
                 painter.drawText(0, int(top), self.lineNumberArea.width() - 4, self.fontMetrics().height(),
                                  QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter, number)
             
@@ -287,9 +308,17 @@ class VerilogHighlighter(QtGui.QSyntaxHighlighter):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.highlightingRules = []
+        # Read the actually-applied palette so syntax colors follow the
+        # user's selected QSS theme rather than just the OS scheme —
+        # this is the same signal theme_utils.apply_theme uses to
+        # decide between style_dark.qss / style_light.qss.
+        pal_window = QtGui.QGuiApplication.palette().color(
+            QtGui.QPalette.ColorRole.Window
+        )
+        is_dark = pal_window.lightness() < 64
 
         keywordFormat = QtGui.QTextCharFormat()
-        keywordFormat.setForeground(QtGui.QColor("#0000ff")) # Blue for keywords
+        keywordFormat.setForeground(QtGui.QColor("#60A5FA" if is_dark else "#165982")) # Blue for keywords
         keywordFormat.setFontWeight(QtGui.QFont.Weight.Bold)
         keywords = [
             "module", "endmodule", "input", "output", "inout", "wire", "reg", "logic",
@@ -302,19 +331,19 @@ class VerilogHighlighter(QtGui.QSyntaxHighlighter):
 
         # Numbers
         numberFormat = QtGui.QTextCharFormat()
-        numberFormat.setForeground(QtGui.QColor("#098658")) # Greenish-teal for numbers
+        numberFormat.setForeground(QtGui.QColor("#B5CEA8" if is_dark else "#098658")) # Greenish-teal for numbers
         self.highlightingRules.append((QtCore.QRegularExpression(r"\b\d+'[bBoOdDhH][0-9a-fA-F_xzXZ]+\b"), numberFormat))
         self.highlightingRules.append((QtCore.QRegularExpression(r"\b\d+\b"), numberFormat))
 
         # Comments
         commentFormat = QtGui.QTextCharFormat()
-        commentFormat.setForeground(QtGui.QColor("#008000")) # Dark green for comments
+        commentFormat.setForeground(QtGui.QColor("#6A9955" if is_dark else "#008000")) # Dark green for comments
         self.highlightingRules.append((QtCore.QRegularExpression(r"//[^\n]*"), commentFormat))
         self.highlightingRules.append((QtCore.QRegularExpression(r"/\*[\s\S]*?\*/"), commentFormat))
 
         # System Tasks
         sysTaskFormat = QtGui.QTextCharFormat()
-        sysTaskFormat.setForeground(QtGui.QColor("#795e26")) # Brown for $tasks
+        sysTaskFormat.setForeground(QtGui.QColor("#DCDCAA" if is_dark else "#795e26")) # Brown for $tasks
         self.highlightingRules.append((QtCore.QRegularExpression(r"\$\w+\b"), sysTaskFormat))
 
     def highlightBlock(self, text):
@@ -620,7 +649,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.hierarchy_list.setEnabled(False)
         
         self.btn_unlock.setVisible(True)
-        
+
         msg = (
             "Icarus Verilog Dependency Missing\n"
             "---------------------------------\n"
@@ -634,7 +663,9 @@ class VerilogVerifier(QtWidgets.QWidget):
             "Once installed, use the 'Locate Icarus Verilog' button below to enable the tool."
         )
         self.console.setPlainText(msg)
-        self.console.setStyleSheet("QTextEdit { background-color: #f8d7da; color: #721c24; padding: 10px; border: 1px solid #f5c6cb; font-family: Consolas, monospace; font-size: 11pt; }")
+        # Flip to the error-state object-name selector so the QSS
+        # theme drives the colors instead of inline setStyleSheet.
+        self._set_console_state('error')
 
     def unlock_ui(self):
         self.editor_tabs.setEnabled(True)
@@ -649,91 +680,35 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_add_module.setEnabled(True)
         self.btn_auto_detect.setEnabled(True)
         self.hierarchy_list.setEnabled(True)
-        
+
         self.btn_unlock.setVisible(False)
-        
+
         self.console.clear()
-        self.console.setStyleSheet(
-            "QTextEdit { background-color: #fcfcfc; color: #495057; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; font-family: Consolas, monospace; font-size: 11pt; }"
-        )
+        self._set_console_state('info')
         self.log("System Unlocked. Icarus Verilog detected.")
 
+    def _set_console_state(self, state: str) -> None:
+        """Switch the console between 'info' and 'error' visual states.
+
+        Implemented by flipping the object-name and re-polishing the
+        widget so the matching #verilogConsole / #verilogConsoleError
+        rule in the active QSS takes effect.
+        """
+        name = 'verilogConsoleError' if state == 'error' else 'verilogConsole'
+        if self.console.objectName() == name:
+            return
+        self.console.setObjectName(name)
+        # Qt caches style matching by objectName; force re-evaluation.
+        style = self.console.style()
+        style.unpolish(self.console)
+        style.polish(self.console)
+        self.console.update()
+
     def init_ui(self):
-        self.setStyleSheet("""
-            QWidget {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            }
-            QPushButton {
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 16px;
-                color: #495057;
-                font-weight: 600;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-            QPushButton:pressed {
-                background-color: #dee2e6;
-                border-color: #adb5bd;
-            }
-            QTabWidget::pane {
-                border: 1px solid #dee2e6;
-                background-color: #ffffff;
-                border-radius: 4px;
-                border-top-left-radius: 0px;
-            }
-            QTabBar::tab {
-                background: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-bottom: none;
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                color: #6c757d;
-                font-weight: 500;
-            }
-            QTabBar::tab:selected {
-                background: #ffffff;
-                color: #212529;
-                font-weight: bold;
-                border-top: 3px solid #007bff;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #e9ecef;
-                color: #495057;
-            }
-            QListWidget {
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                background-color: #ffffff;
-                alternate-background-color: #f8f9fa;
-                font-size: 13px;
-            }
-            QListWidget::item {
-                border-radius: 4px;
-                margin: 2px;
-            }
-            QListWidget::item:selected {
-                background-color: #e7f1ff;
-                color: #0c63e4;
-                font-weight: bold;
-            }
-            QSplitter::handle {
-                background-color: #e9ecef;
-                margin: 2px;
-                border-radius: 2px;
-            }
-            QSplitter::handle:hover {
-                background-color: #ced4da;
-            }
-        """)
-        
+        # Theme-only surfaces come from style_dark/light.qss via the
+        # #verilogRoot object name — never inline-setStyleSheet here.
+        self.setObjectName('verilogRoot')
+
         main_layout = QtWidgets.QVBoxLayout(self)
         
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
@@ -745,9 +720,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         top_layout.setContentsMargins(0, 0, 0, 0)
         
         def setup_popout(widget_to_pop, parent_container, insert_index=0, title="", extra_widgets=None):
-            popout_btn = QtWidgets.QPushButton("🗗 Fullscreen")
-            popout_btn.setStyleSheet("font-weight: bold; color: #444444; padding: 2px 6px; border: 1px solid transparent;")
-            popout_btn.setFlat(True)
+            popout_btn = QtWidgets.QPushButton("  Fullscreen")
+            popout_btn.setProperty('cssClass', 'labeledIcon')
+            popout_btn.setProperty('dockPopButton', 'true')
+            popout_btn.setProperty('isPoppedOut', 'false')
+            popout_btn.setToolTip('Pop out into a separate window')
             if isinstance(widget_to_pop, QtWidgets.QTabWidget):
                 if extra_widgets:
                     corner_widget = QtWidgets.QWidget()
@@ -759,32 +736,43 @@ class VerilogVerifier(QtWidgets.QWidget):
                     widget_to_pop.setCornerWidget(corner_widget)
                 else:
                     widget_to_pop.setCornerWidget(popout_btn)
-                
+
             popout_state = {"win": None}
-            
+
             def toggle_popout():
                 if not popout_state["win"]:
                     win = QtWidgets.QDialog(self.window())
                     win.setWindowTitle(title)
                     win.setWindowFlags(win.windowFlags() | WIN_MAX | WIN_MIN)
+                    # Inherit the parent's object name so the QSS theme
+                    # (#verilogRoot background) is preserved in the popout.
+                    win.setObjectName('verilogRoot')
                     layout = QtWidgets.QVBoxLayout(win)
                     layout.setContentsMargins(0, 0, 0, 0)
                     layout.addWidget(widget_to_pop)
-                    popout_btn.setText("🡮 Dock to IDE")
-                    
+                    popout_btn.setText("  Dock to IDE")
+                    popout_btn.setProperty('isPoppedOut', 'true')
+                    popout_btn.style().unpolish(popout_btn)
+                    popout_btn.style().polish(popout_btn)
+                    popout_btn.setToolTip('Bring the editor back into the main window')
+
                     def on_close(event):
                         parent_container.insertWidget(insert_index, widget_to_pop)
-                        popout_btn.setText("🗗 Fullscreen")
+                        popout_btn.setText("  Fullscreen")
+                        popout_btn.setProperty('isPoppedOut', 'false')
+                        popout_btn.style().unpolish(popout_btn)
+                        popout_btn.style().polish(popout_btn)
+                        popout_btn.setToolTip('Pop out into a separate window')
                         popout_state["win"] = None
                         event.accept()
-                        
+
                     win.closeEvent = on_close
                     popout_state["win"] = win
                     win.resize(1000, 700)
                     win.showMaximized()
                 else:
                     popout_state["win"].close()
-                    
+
             popout_btn.clicked.connect(toggle_popout)
 
         top_h_splitter = QtWidgets.QSplitter(ORIENT_HORIZ)
@@ -794,25 +782,29 @@ class VerilogVerifier(QtWidgets.QWidget):
         sidebar_widget = QtWidgets.QWidget()
         sidebar_layout = QtWidgets.QVBoxLayout(sidebar_widget)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        
+        sidebar_layout.setSpacing(8)
+
         lbl_sidebar = QtWidgets.QLabel("Module Hierarchy")
-        lbl_sidebar.setFont(QtGui.QFont("Segoe UI", 10, FONT_BOLD))
+        lbl_sidebar.setObjectName('verilogSidebarTitle')
         sidebar_layout.addWidget(lbl_sidebar)
-        
+
         self.btn_auto_detect = QtWidgets.QPushButton("Auto-Detect")
+        self.btn_auto_detect.setProperty('cssClass', 'secondary')
         self.btn_auto_detect.clicked.connect(self.auto_detect_hierarchy)
         sidebar_layout.addWidget(self.btn_auto_detect)
-        
+
         self.hierarchy_list = QtWidgets.QListWidget()
         self.hierarchy_list.itemDoubleClicked.connect(self.hierarchy_double_clicked)
         self.hierarchy_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.hierarchy_list.customContextMenuRequested.connect(self.show_hierarchy_context_menu)
+        self.hierarchy_list.setAlternatingRowColors(True)
         sidebar_layout.addWidget(self.hierarchy_list)
         
         top_h_splitter.addWidget(sidebar_widget)
 
         self.editor_tabs = QtWidgets.QTabWidget()
         self.editor_tabs.setTabsClosable(True)
+        self.editor_tabs.setMovable(True)
         self.editor_tabs.tabCloseRequested.connect(self.close_tab)
         self.editor_tabs.tabBarDoubleClicked.connect(self.rename_tab)
         # Track the last-active design tab so auto_generate_tb knows which module to target
@@ -832,32 +824,19 @@ class VerilogVerifier(QtWidgets.QWidget):
         corner_layout.setContentsMargins(0, 0, 0, 0)
         
         self.btn_add_module = QtWidgets.QPushButton("➕ Add Module")
-        self.btn_add_module.setFlat(True)
+        self.btn_add_module.setProperty('cssClass', 'tertiary')
         self.btn_add_module.clicked.connect(self.add_module_tab)
         corner_layout.addWidget(self.btn_add_module)
-        
-        self.popout_btn = QtWidgets.QPushButton("🗗 Fullscreen")
-        self.popout_btn.setStyleSheet("""
-            QPushButton {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-                font-weight: 600;
-                color: #495057;
-                background-color: transparent;
-                border: 1px solid transparent;
-                border-radius: 4px;
-                padding: 4px 10px;
-                margin: 2px 4px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #ced4da;
-                color: #212529;
-            }
-        """)
+
+        self.popout_btn = QtWidgets.QPushButton("  Fullscreen")
+        self.popout_btn.setProperty('cssClass', 'labeledIcon')
+        self.popout_btn.setProperty('dockPopButton', 'true')
+        self.popout_btn.setProperty('isPoppedOut', 'false')
+        self.popout_btn.setToolTip('Pop out the editor into a separate window')
         corner_layout.addWidget(self.popout_btn)
-        
+
         self.editor_tabs.setCornerWidget(corner_widget)
-        
+
         # Override setup_popout to use our existing button
         popout_state = {"win": None}
         def toggle_popout():
@@ -865,19 +844,32 @@ class VerilogVerifier(QtWidgets.QWidget):
                 win = QtWidgets.QDialog(self.window())
                 win.setWindowTitle("Verilog Code Editor")
                 win.setWindowFlags(win.windowFlags() | WIN_MAX | WIN_MIN)
+                win.setObjectName('verilogRoot')
                 layout = QtWidgets.QVBoxLayout(win)
                 layout.setContentsMargins(0, 0, 0, 0)
                 layout.addWidget(self.editor_tabs)
-                self.popout_btn.setText("🡮 Dock to IDE")
-                
+                self.popout_btn.setText("  Dock to IDE")
+                self.popout_btn.setProperty('isPoppedOut', 'true')
+                self.popout_btn.style().unpolish(self.popout_btn)
+                self.popout_btn.style().polish(self.popout_btn)
+                self.popout_btn.setToolTip('Bring the editor back into the main window')
+
                 def on_close(event):
                     top_h_splitter.insertWidget(1, self.editor_tabs)
-                    self.popout_btn.setText("🗗 Fullscreen")
+                    self.popout_btn.setText("  Fullscreen")
+                    self.popout_btn.setProperty('isPoppedOut', 'false')
+                    self.popout_btn.style().unpolish(self.popout_btn)
+                    self.popout_btn.style().polish(self.popout_btn)
+                    self.popout_btn.setToolTip('Pop out the editor into a separate window')
                     popout_state["win"] = None
                     event.accept()
-                    
+
                 win.closeEvent = on_close
                 popout_state["win"] = win
+                # Track the popout so the theme-toggler can re-decorate it
+                if not hasattr(self, '_popout_windows'):
+                    self._popout_windows = []
+                self._popout_windows.append(win)
                 win.resize(1000, 700)
                 win.showMaximized()
             else:
@@ -941,19 +933,21 @@ class VerilogVerifier(QtWidgets.QWidget):
         controls_layout.addWidget(self.btn_simulate)
         
         self.btn_export_csv = QtWidgets.QPushButton("Export CSV")
+        self.btn_export_csv.setProperty('cssClass', 'secondary')
         self.btn_export_csv.clicked.connect(self.export_csv)
         self.btn_export_csv.setEnabled(False)
         controls_layout.addWidget(self.btn_export_csv)
-        
+
         self.btn_send = QtWidgets.QPushButton("Send to Makerchip")
         self.btn_send.clicked.connect(self.send_to_makerchip)
         controls_layout.addWidget(self.btn_send)
-        
-        self.btn_unlock = QtWidgets.QPushButton("Locate Icarus Verilog...")
+
+        self.btn_unlock = QtWidgets.QPushButton("Locate Icarus Verilog…")
+        self.btn_unlock.setProperty('cssClass', 'danger')
         self.btn_unlock.clicked.connect(self.attempt_manual_unlock)
         self.btn_unlock.setVisible(False)
         controls_layout.addWidget(self.btn_unlock)
-        
+
         main_splitter.addWidget(top_container)
         
         # Find/Replace Toolbar
@@ -987,6 +981,15 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
         shortcut.activated.connect(self.show_find_toolbar)
+
+        # F5 → simulate. Mirrors the toolbar "Simulate" button so the
+        # full editor → F5 → waveform round-trip is single keystroke.
+        # Activates only when the verifier has focus (window-level
+        # shortcut) rather than installing a global app shortcut that
+        # could fire from any other dock/tab.
+        simulate_shortcut = QtGui.QShortcut(QtGui.QKeySequence("F5"), self)
+        simulate_shortcut.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        simulate_shortcut.activated.connect(self.simulate_and_wave)
         
         # 2. Bottom widget containing console log and Waveform viewer
         bottom_container = QtWidgets.QWidget()
@@ -1003,21 +1006,18 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console.setPlaceholderText("Console logs will appear here...\nDouble-click a syntax error (e.g. design.v:5: error) to jump directly to the line.")
         self.console.setFont(QtGui.QFont("Consolas", 11))
         self.console.error_clicked.connect(self.jump_to_error)
-        self.console.setStyleSheet("""
-            QTextEdit {
-                background-color: #0c101f;
-                color: #39ff14;
-                border: 1px solid #2d3548;
-                padding: 8px;
-            }
-        """)
+        # Theme-aware via #verilogConsole / #verilogConsoleError rules.
+        self.console.setObjectName('verilogConsole')
         self.console_tabs.addTab(self.console, "Console Output")
         bottom_splitter.addWidget(self.console_tabs)
-        
-        self.btn_copy_console = QtWidgets.QPushButton("📋 Copy")
-        self.btn_copy_console.setFlat(True)
+
+        self.btn_copy_console = QtWidgets.QPushButton("  Copy")
+        self.btn_copy_console.setProperty('cssClass', 'labeledIcon')
+        self.btn_copy_console.setToolTip('Copy console output to clipboard')
+        if copy_icon is not None:
+            self.btn_copy_console.setIcon(copy_icon(16))
         self.btn_copy_console.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(self.console.toPlainText()))
-        
+
         setup_popout(self.console_tabs, bottom_splitter, 0, "Verilog Console Output", extra_widgets=[self.btn_copy_console])
         
         # Inline Waveform viewer (native eSim plotWindow)
@@ -1156,33 +1156,34 @@ class VerilogVerifier(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
             widget = QtWidgets.QWidget()
+            widget.setObjectName('hierarchyRow')
             layout = QtWidgets.QHBoxLayout(widget)
-            layout.setContentsMargins(5, 2, 5, 2)
-            
+            layout.setContentsMargins(8, 2, 6, 2)
+
             lbl = QtWidgets.QLabel(name)
-            
-            # Override global QPushButton padding for these tiny buttons
-            btn_style = "QPushButton { padding: 0px; font-weight: bold; font-size: 14px; color: #212529; }"
-            
+            lbl.setProperty('cssClass', 'subtle')
+
             btn_up = QtWidgets.QPushButton("▲")
             btn_up.setFixedSize(24, 24)
-            btn_up.setStyleSheet(btn_style)
+            btn_up.setProperty('cssClass', 'icon')
+            btn_up.setToolTip('Move this module up in compile order')
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
-            
+
             btn_down = QtWidgets.QPushButton("▼")
             btn_down.setFixedSize(24, 24)
-            btn_down.setStyleSheet(btn_style)
+            btn_down.setProperty('cssClass', 'icon')
+            btn_down.setToolTip('Move this module down in compile order')
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))
-            
+
             layout.addWidget(lbl)
             layout.addStretch()
             layout.addWidget(btn_up)
             layout.addWidget(btn_down)
-            
+
             # Force height to properly contain the 24px buttons
             widget.setMinimumHeight(32)
             item.setSizeHint(QtCore.QSize(0, 32))
-            
+
             self.hierarchy_list.addItem(item)
             self.hierarchy_list.setItemWidget(item, widget)
 
@@ -1242,6 +1243,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.wave_tabs.clear()
         placeholder = QtWidgets.QLabel("No Waveform Data Available")
         placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        placeholder.setObjectName('verilogNoWaveform')
         self.wave_tabs.addTab(placeholder, "Waveform Viewer")
 
     def get_current_editor(self):
@@ -1495,11 +1497,22 @@ class VerilogVerifier(QtWidgets.QWidget):
             
         # Instantiate the native eSim plotWindow adapted for VCD
         self.plot_window = VcdPlotWindow(timestamps, signals_data, signal_types, "Verilog Simulation", self)
-        
+
         self.wave_tabs.clear()
         self.wave_tabs.addTab(self.plot_window, "Waveform Viewer")
-        
+
         self.btn_export_csv.setEnabled(True)
+
+        # Pull focus to the waveform panel so the user lands there after
+        # the simulation completes. Without this, the just-rendered
+        # waveform is invisible to anyone still reading the console log
+        # until they manually click the Waveform Viewer tab. setFocus
+        # is non-destructive: cursor in the editor is untouched.
+        self.wave_tabs.setFocus()
+        for i in range(self.wave_tabs.count()):
+            if self.wave_tabs.widget(i) is self.plot_window:
+                self.wave_tabs.setCurrentIndex(i)
+                break
             
     def export_csv(self):
         if not hasattr(self, 'current_timestamps') or not self.current_timestamps:

@@ -32,6 +32,7 @@ from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QThread, pyqtSignal
 from configuration.Appconfig import Appconfig
 import os
+import shutil
 import watchdog.events
 import watchdog.observers
 from os.path import expanduser
@@ -147,7 +148,8 @@ class Maker(QtWidgets.QWidget):
                 self.obj_Appconfig.print_info('No Verilog File Chosen')
                 return
 
-        self.text = open(self.verilogfile).read()
+        with open(self.verilogfile) as fh:
+            self.text = fh.read()
         self.entry_var[0].setText(self.verilogfile)
         self.entry_var[1].setText(self.text)
         global verilogFile
@@ -170,27 +172,6 @@ class Maker(QtWidgets.QWidget):
         # self.notify.start()
         # open("filepath.txt","w").write(self.verilogfile)
 
-    def load_verilog(self, filepath):
-        self.verilogfile = filepath
-        self.text = open(self.verilogfile).read()
-        self.entry_var[0].setText(self.verilogfile)
-        self.entry_var[1].setText(self.text)
-        global verilogFile
-        verilogFile[self.filecount] = self.verilogfile
-        self._stop_current_toggle()
-
-        self.observer = watchdog.observers.Observer()
-        self.event_handler = Handler(
-            self.verilogfile,
-            self.refreshoption,
-            self.observer)
-
-        self.observer.schedule(
-            self.event_handler,
-            path=self.verilogfile,
-            recursive=True)
-        self.observer.start()
-
     # This function is used to call refresh while
     # running Ngspice to Verilog Converter
     # (as the original one gets destroyed)
@@ -205,7 +186,8 @@ class Maker(QtWidgets.QWidget):
     def refresh(self):
         if not hasattr(self, 'verilogfile'):
             return
-        self.text = open(self.verilogfile).read()
+        with open(self.verilogfile) as fh:
+            self.text = fh.read()
         self.entry_var[1].setText(self.text)
         print("NgVeri File: " + self.verilogfile + " Refreshed")
         self.obj_Appconfig.print_info(
@@ -227,8 +209,9 @@ class Maker(QtWidgets.QWidget):
     def save(self):
         try:
             wr = self.entry_var[1].toPlainText()
-            open(self.verilogfile, "w+").write(wr)
-        except BaseException as err:
+            with open(self.verilogfile, "w+") as fh:
+                fh.write(wr)
+        except Exception as err:
             self.msg = QtWidgets.QErrorMessage(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
@@ -270,20 +253,43 @@ class Maker(QtWidgets.QWidget):
                 if reply == QtWidgets.QMessageBox.StandardButton.Cancel:
                     return
                 if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-                    code = open(self.verilogfile).read()
+                    with open(self.verilogfile) as fh:
+                        code = fh.read()
                     text = code
                     filename = '.'.join(
                         self.verilogfile.split('.')[:-1]) + ".tlv"
                     file = os.path.basename('.'.join(
                         self.verilogfile.split('.')[:-1]))
-                    f = open(filename, 'w')
                     code = code.replace(" wire ", " ")
                     code = code.replace(" reg ", " ")
                     vlog_ex = vlog.VerilogExtractor()
                     vlog_mods = vlog_ex.extract_objects_from_source(code)
-                    lint_off = open(
-                        init_path + "library/tlv/lint_off.txt"
-                    ).readlines()
+
+                    # Find the module matching the file name up front. An empty
+                    # or failed parse, or a name mismatch, is now reported
+                    # clearly here instead of crashing later on a loop variable
+                    # referenced after its loop.
+                    module = None
+                    for m in vlog_mods:
+                        if m.name.lower() == file.lower():
+                            module = m
+                            break
+                    if module is None:
+                        QtWidgets.QMessageBox.critical(
+                            None,
+                            "Error Message",
+                            "<b>Error: File name and module \
+                            name are not same. Please \
+                            ensure that they are same.</b>",
+                            QtWidgets.QMessageBox.StandardButton.Ok)
+                        self.obj_Appconfig.print_info(
+                            'NgVeri stopped due to file \
+name and module name not matching error')
+                        return
+
+                    with open(
+                            init_path + "library/tlv/lint_off.txt") as fh:
+                        lint_off = fh.readlines()
                     string = '''\\TLV_version 1d: tl-x.org\n\\SV\n'''
                     for item in lint_off:
                         string += "/* verilator lint_off " + \
@@ -306,19 +312,6 @@ output logic passed, output logic failed);\n'''
                                         p.name) != "failed":
                                     string += '\t\tlogic ' + p.data_type\
                                      + " " + p.name + ";//" + p.mode + "\n"
-                    if m.name.lower() != file.lower():
-                        QtWidgets.QMessageBox.critical(
-                            None,
-                            "Error Message",
-                            "<b>Error: File name and module \
-                            name are not same. Please \
-                            ensure that they are same.</b>",
-                            QtWidgets.QMessageBox.StandardButton.Ok)
-
-                        self.obj_Appconfig.print_info(
-                            'NgVeri stopped due to file \
-name and module name not matching error')
-                        return
                     string += "//The $random() can be replaced \
 if user wants to assign values\n"
                     for m in vlog_mods:
@@ -349,16 +342,31 @@ Add \\TLV here if desired\
                                      \n\\SV\nendmodule\n\n"
                                 else:
                                     string += ", "
-                    f.write(string)
+                    # Write the .tlv only now that generation has fully
+                    # succeeded, so a failure/return above never leaves a
+                    # half-written, corrupt file on disk.
+                    with open(filename, 'w') as f:
+                        f.write(string)
 
+            makerchip_bin = shutil.which('makerchip')
+            if makerchip_bin is None:
+                QtWidgets.QMessageBox.critical(
+                    None, "Error Message",
+                    "<b>Makerchip was not found on your system.</b><br/>"
+                    "Install it with <i>pip install makerchip-app</i> and "
+                    "make sure it is on your PATH, then try again.",
+                    QtWidgets.QMessageBox.StandardButton.Ok)
+                return
             self.process = QtCore.QProcess(self)
-            cmd = 'makerchip ' + filename
+            self.process.errorOccurred.connect(self._makerchip_launch_error)
             print("File: " + filename)
-            self.process.start(cmd)
+            # Pass the file name as a separate argument (not one space-joined
+            # string) so a path containing spaces is not split into pieces.
+            self.process.start(makerchip_bin, [filename])
             print(
                 "Makerchip IDE command process pid ---------->",
                 self.process.processId())
-        except BaseException as e:
+        except Exception as e:
             print(e)
             self.msg = QtWidgets.QErrorMessage(self)
             self.msg.setModal(True)
@@ -382,6 +390,20 @@ Please check if verilog file is chosen.")
         # self.processfile.start("python3 notify.py")
         # print(self.processfile.readChannel())
 
+    def _makerchip_launch_error(self, _error):
+        '''
+            Called by QProcess.errorOccurred if the Makerchip IDE fails to
+            start (e.g. not installed, or no working browser/network). Tells
+            the user instead of failing silently.
+        '''
+        self.msg = QtWidgets.QErrorMessage(self)
+        self.msg.setModal(True)
+        self.msg.setWindowTitle("Error Message")
+        self.msg.showMessage(
+            "Could not launch the Makerchip IDE. It needs the makerchip-app "
+            "installed, an active internet connection and a browser.")
+        self.msg.exec()
+
     # This creates the buttons/options
 
     def createoptionsBox(self):
@@ -393,13 +415,13 @@ Please check if verilog file is chosen.")
         # self.optionsbox2.setTitle("Note: Please save the file once edited")
         # self.optionsgrid2 = QtWidgets.QGridLayout()
         self.optionsgroupbtn = QtWidgets.QButtonGroup()
-        
+
         self.verifier_btn = QtWidgets.QPushButton("Verilog Simulator IDE")
-        self.verifier_btn.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
+        self.verifier_btn.setProperty('cssClass', 'verifierPrimary')
         self.optionsgroupbtn.addButton(self.verifier_btn)
         self.verifier_btn.clicked.connect(self.open_verifier)
         self.optionsgrid.addWidget(self.verifier_btn, 0, 0)
-        
+
         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
         self.optionsgroupbtn.addButton(self.addoptions)
         self.addoptions.clicked.connect(self.addverilog)
@@ -434,7 +456,6 @@ Please check if verilog file is chosen.")
             self.acceptTOS.clicked.connect(lambda: makerchipTOSAccepted(True))
             self.optionsgrid.addWidget(self.acceptTOS, 0, 5)
             # self.optionsbox.setLayout(self.optionsgrid)
-            # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         self.optionsbox.setLayout(self.optionsgrid)
         return self.optionsbox
 
@@ -475,13 +496,10 @@ Please check if verilog file is chosen.")
         self.entry_var[self.count].setMaximumWidth(1000)
         self.count += 1
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # Routed through QSS via cssClass="themedGroupBox" rather than a
+        # hardcoded `border: 1px solid gray` stylesheet, so the border picks
+        # up the active theme automatically.
+        self.trbox.setProperty('cssClass', 'themedGroupBox')
 
         self.start = QtWidgets.QLabel(".tlv code")
         # self.start2 = QtWidgets.QLabel("Note: \
@@ -496,13 +514,7 @@ Please check if verilog file is chosen.")
         # self.entry_var[self.count].textChanged.connect(self.save)
         self.count += 1
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        self.trbox.setProperty('cssClass', 'themedGroupBox')
 
         return self.trbox
 
