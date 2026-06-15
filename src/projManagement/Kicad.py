@@ -200,6 +200,14 @@ class Kicad:
         """
         print("Function: Open Kicad to Ngspice Converter")
 
+        # Flush unsaved editor buffers so the converter reads current
+        # files off disk, not a stale copy.
+        try:
+            from codeEditor import EditorWindow
+            EditorWindow.flush_all_dirty()
+        except Exception:
+            pass
+
         self.projDir = self.obj_appconfig.current_project["ProjectName"]
         try:
             self.obj_appconfig.print_info(

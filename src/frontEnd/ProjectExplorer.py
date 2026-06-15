@@ -7,6 +7,7 @@ from pathlib import Path
 from configuration.Appconfig import Appconfig
 from projManagement.Validation import Validation
 from projManagement.projectPaths import resolve_stem
+from codeEditor import EditorWindow
 
 
 # This is main class for Project Explorer Area.
@@ -30,6 +31,8 @@ class ProjectExplorer(QtWidgets.QWidget):
         QtWidgets.QWidget.__init__(self)
         self.obj_appconfig = Appconfig()
         self.obj_validation = Validation()
+        # One reusable editor window per project (keyed by project name).
+        self.editor_windows = {}
         self.treewidget = QtWidgets.QTreeWidget()
         self.window = QtWidgets.QVBoxLayout()
         self.fs_watcher = QtCore.QFileSystemWatcher()
@@ -144,33 +147,12 @@ class ProjectExplorer(QtWidgets.QWidget):
 
     def openProject(self):
         self.indexItem = self.treewidget.currentIndex()
-        filename = str(self.indexItem.data())
         self.filePath = str(
             self.indexItem.sibling(self.indexItem.row(), 1).data()
         )
 
         if (os.path.isfile(str(self.filePath))):
-            self.fopen = open(str(self.filePath), 'r')
-            lines = self.fopen.read()
-
-            self.textwindow = QtWidgets.QWidget()
-            self.textwindow.setMinimumSize(600, 500)
-            self.textwindow.setGeometry(QtCore.QRect(400, 150, 400, 400))
-            self.textwindow.setWindowTitle(filename)
-
-            self.text = QtWidgets.QTextEdit()
-            self.save = QtWidgets.QPushButton('Save and Exit')
-            self.save.setDisabled(True)
-
-            self.text.setText(lines)
-            self.text.textChanged.connect(self.enable_save)
-
-            vbox_main = QtWidgets.QVBoxLayout(self.textwindow)
-            vbox_main.addWidget(self.text)
-            vbox_main.addWidget(self.save)
-            self.save.clicked.connect(self.save_data)
-
-            self.textwindow.show()
+            self.openInEditor(str(self.filePath))
         else:
             self.refreshProject(self.filePath)
 
@@ -193,20 +175,28 @@ class ProjectExplorer(QtWidgets.QWidget):
                         self.obj_appconfig.current_project['ProjectName']]
                 ) = []
 
-    def enable_save(self):
-        """This function enables save button option."""
-        self.save.setEnabled(True)
+    def openInEditor(self, filePath):
+        """Open a project text file in the eSim code editor.
 
-    def save_data(self):
+        Reuses one tabbed editor window per project, so a file already
+        open just gets focused instead of spawning another window.
         """
-        This function saves data before it closes the given file.
-        It first opens file in write-mode, write operation is performed, \
-        closes that file and then it closes window.
-        """
-        self.fopen = open(self.filePath, 'w')
-        self.fopen.write(self.text.toPlainText())
-        self.fopen.close()
-        self.textwindow.close()
+        self._editorWindow().open(filePath)
+
+    def _editorWindow(self):
+        """Return the editor window for the current project."""
+        project = self.obj_appconfig.current_project.get('ProjectName')
+        key = project or '__noproject__'
+        window = self.editor_windows.get(key)
+        if window is None:
+            window = EditorWindow.EditorWindow()
+            self.editor_windows[key] = window
+        # Tie its lifecycle to the project so closeDock() reaps it
+        # (re-register in case the project was closed and reopened).
+        if project and project in self.obj_appconfig.dock_dict:
+            if window not in self.obj_appconfig.dock_dict[project]:
+                self.obj_appconfig.dock_dict[project].append(window)
+        return window
 
     def removeProject(self):
         """

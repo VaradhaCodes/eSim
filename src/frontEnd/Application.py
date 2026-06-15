@@ -475,6 +475,14 @@ class Application(QtWidgets.QMainWindow):
 
     def open_ngspice(self):
         """This Function execute ngspice on current project."""
+        # Flush any unsaved edits in the code editor first, so the
+        # simulation reads the netlist the user is actually looking at.
+        try:
+            from codeEditor import EditorWindow
+            EditorWindow.flush_all_dirty()
+        except Exception:
+            pass
+
         projDir = self.obj_appconfig.current_project["ProjectName"]
 
         if projDir is not None:
