@@ -1,25 +1,17 @@
 import os
 import re
-import json
 import shutil
 import tempfile
 import subprocess
-try:
-    from PyQt6 import QtCore, QtGui, QtWidgets
-    TEXT_SELECTABLE = QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
-    WIN_MAX = QtCore.Qt.WindowType.WindowMaximizeButtonHint
-    WIN_MIN = QtCore.Qt.WindowType.WindowMinimizeButtonHint
-    ORIENT_HORIZ = QtCore.Qt.Orientation.Horizontal
-    FONT_BOLD = QtGui.QFont.Weight.Bold
-    TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
-except ImportError:
-    from PyQt5 import QtCore, QtGui, QtWidgets
-    TEXT_SELECTABLE = QtCore.Qt.TextSelectableByMouse
-    WIN_MAX = QtCore.Qt.WindowMaximizeButtonHint
-    WIN_MIN = QtCore.Qt.WindowMinimizeButtonHint
-    ORIENT_HORIZ = QtCore.Qt.Horizontal
-    FONT_BOLD = QtGui.QFont.Bold
-    TAB_RIGHT = QtWidgets.QTabBar.RightSide
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+# eSim is PyQt6-only. These aliases keep the call sites below terse.
+TEXT_SELECTABLE = QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+WIN_MAX = QtCore.Qt.WindowType.WindowMaximizeButtonHint
+WIN_MIN = QtCore.Qt.WindowType.WindowMinimizeButtonHint
+ORIENT_HORIZ = QtCore.Qt.Orientation.Horizontal
+FONT_BOLD = QtGui.QFont.Weight.Bold
+TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
 
 import numpy as np
 from ngspiceSimulation.plot_window import plotWindow
@@ -487,11 +479,6 @@ class VerilogVerifier(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        self.editor_html_path = os.path.normpath(os.path.join(current_dir, "resources", "verilog_editor.html"))
-        self.viewer_html_path = os.path.normpath(os.path.join(current_dir, "resources", "wavedrom_viewer.html"))
-        self.temp_wave_path = os.path.normpath(os.path.join(current_dir, "resources", "temp_wave.html"))
         
         self.popup_dialog = None
         self.current_timestamps = None

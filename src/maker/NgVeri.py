@@ -40,7 +40,7 @@ from .RemoveItemsDialog import RemoveItemsDialog
 import os
 import shutil
 from configuration.Appconfig import Appconfig
-from configparser import ConfigParser
+from configparser import ConfigParser, NoSectionError, NoOptionError
 
 
 def _safe_model_subdir(base, name):
@@ -91,12 +91,22 @@ class NgVeri(QtWidgets.QWidget):
         self.parser = ConfigParser()
         self.parser.read(os.path.join(
             self.home, os.path.join('.nghdl', 'config.ini')))
-        self.nghdl_home = self.parser.get('NGHDL', 'NGHDL_HOME')
-        self.release_dir = self.parser.get('NGHDL', 'RELEASE')
-        self.src_home = self.parser.get('SRC', 'SRC_HOME')
-        self.licensefile = self.parser.get('SRC', 'LICENSE')
-        self.digital_home = self.parser.get('NGHDL', 'DIGITAL_MODEL')
-        self.digital_home = self.digital_home + "/Ngveri"
+        # NGHDL may not be installed/configured yet. Read defensively so a
+        # missing or partial ~/.nghdl/config.ini degrades this tab instead of
+        # crashing the whole Makerchip dock -- NgVeri is built eagerly, unlike
+        # the NGHDL tab which is already lazy+guarded.
+        self.config_available = self.parser.has_section('NGHDL')
+        self.nghdl_home = self._cfg('NGHDL', 'NGHDL_HOME')
+        self.release_dir = self._cfg('NGHDL', 'RELEASE')
+        self.src_home = self._cfg('SRC', 'SRC_HOME')
+        self.licensefile = self._cfg('SRC', 'LICENSE')
+        digital = self._cfg('NGHDL', 'DIGITAL_MODEL')
+        # Never let an empty base collapse model paths to "/Ngveri"; fall back
+        # to a user-local dir so any downstream makedirs/rmtree stays in $HOME.
+        if not digital:
+            digital = os.path.join(
+                os.path.expanduser('~'), '.nghdl', 'DigitalModelLibrary')
+        self.digital_home = digital + "/Ngveri"
         # modelParamXML root (from the maker Appconfig, keyed off eSim_HOME).
         # Used to list/resolve d_cosim models, which live only under
         # NgVeriCosim/ and never appear in modpath.lst.
@@ -110,6 +120,15 @@ class NgVeri(QtWidgets.QWidget):
         self.createNgveriWidget()
         self.fname = ""
         self.filecount = filecount
+
+    def _cfg(self, section, key, default=""):
+        '''Read one ~/.nghdl/config.ini value, or `default` when the section/
+        key is absent. Keeps a missing/partial NGHDL install from crashing the
+        NgVeri tab (and with it the whole eagerly-built Makerchip dock).'''
+        try:
+            return self.parser.get(section, key) or default
+        except (NoSectionError, NoOptionError):
+            return default
 
     def createNgveriWidget(self):
         '''
