@@ -491,6 +491,13 @@ Please check if verilog file is chosen.")
         return self.optionsbox
 
     def open_verifier(self):
+        # When hosted in the Flow Navigator the Verilog Simulator IDE is a
+        # docked stage, not a flying dialog: hand off to the navigator instead
+        # of opening a top-level window. Standalone Maker keeps the dialog.
+        hook = getattr(self, '_verify_hook', None)
+        if hook is not None:
+            hook()
+            return
         if not hasattr(self, 'verifier_win'):
             from .VerilogVerifier import VerilogVerifier
             self.verifier_win = QtWidgets.QDialog(self.window())

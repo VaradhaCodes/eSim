@@ -23,6 +23,7 @@ _NGHDL_SRC = os.path.abspath(
     os.path.join(_HERE, "..", "..", "..", "nghdl", "src"))
 _NGHDL_GUI = os.path.join(_NGHDL_SRC, "ngspice_ghdl.py")
 _MAKERCHIP = os.path.join(_HERE, "..", "makerchip.py")
+_FLOWNAV = os.path.join(_HERE, "..", "FlowNavigator.py")
 _APPLICATION = os.path.join(_HERE, "..", "..", "frontEnd", "Application.py")
 
 
@@ -79,25 +80,27 @@ def test_no_unguarded_sys_exit_in_nghdl_gui():
 # Source-level wiring guards (cheap, no heavy imports)
 # ---------------------------------------------------------------------------
 
-def test_makerchip_wires_nghdl_tab():
-    src = _read(_MAKERCHIP)
-    assert '"NGHDL"' in src, "makerchip.py must add an 'NGHDL' tab"
+def test_flownav_wires_nghdl_stage():
+    # NGHDL is now the VHDL stage of the Flow Navigator (it replaced the flat
+    # Makerchip/NgVeri/NGHDL tab strip), built in embedded mode.
+    src = _read(_FLOWNAV)
+    assert "NGHDL" in src, "FlowNavigator must expose an NGHDL (VHDL) stage"
     assert "Mainwindow(embedded=True)" in src, \
-        "NGHDL tab must construct the GUI in embedded mode"
-    assert "nghdlPlaceholder" in src, \
+        "the NGHDL stage must construct the GUI in embedded mode"
+    assert "_placeholder" in src, \
         "a guarded placeholder fallback must exist"
 
 
-def test_makerchip_nghdl_build_is_guarded():
-    """The lazy NGHDL build must be wrapped in try/except so a broken install
-    cannot take down the Makerchip dock."""
-    tree = ast.parse(_read(_MAKERCHIP))
+def test_flownav_stage_build_is_guarded():
+    """The lazy stage build must be wrapped in try/except so a broken NGHDL
+    install (or any stage) cannot take down the Makerchip dock."""
+    tree = ast.parse(_read(_FLOWNAV))
     build = next((n for n in ast.walk(tree)
-                  if isinstance(n, ast.FunctionDef) and n.name == "buildNgHdlTab"),
+                  if isinstance(n, ast.FunctionDef) and n.name == "_ensure_stage"),
                  None)
-    assert build is not None, "makerchip.py must define buildNgHdlTab"
+    assert build is not None, "FlowNavigator must define _ensure_stage"
     assert any(isinstance(n, ast.Try) for n in ast.walk(build)), \
-        "buildNgHdlTab must guard construction with try/except"
+        "_ensure_stage must guard stage construction with try/except"
 
 
 def test_toolbar_no_standalone_nghdl():
