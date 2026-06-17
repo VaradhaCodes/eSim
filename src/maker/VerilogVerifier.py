@@ -14,6 +14,11 @@ TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
 
 import numpy as np
 from ngspiceSimulation.plot_window import plotWindow
+from PyQt6.Qsci import QsciScintilla
+# Reuse eSim's shared editor lexers + theme so HDL here looks exactly like the
+# project code editor (same QsciLexerVerilog/VHDL colours), instead of a
+# bespoke regex highlighter.
+from codeEditor import lexers, theme
 
 # Shared d_cosim toolchain resolver: it already knows where iverilog lives
 # (env ESIM_IVERILOG -> ~/.nghdl/config.ini [COSIM] -> PATH), recorded by the
@@ -132,74 +137,69 @@ endmodule
 
 
 
-class LineNumberArea(QtWidgets.QWidget):
-    def __init__(self, editor):
-        super().__init__(editor)
-        self.codeEditor = editor
+class HdlEditor(QsciScintilla):
+    """In-memory Verilog/VHDL editor tab built on QsciScintilla.
 
-    def sizeHint(self):
-        return QtCore.QSize(self.codeEditor.lineNumberAreaWidth(), 0)
+    Reuses eSim's shared lexers + theme (the same QsciLexerVerilog/VHDL the
+    project code editor uses) for syntax highlighting, and gets line numbers,
+    folding, brace matching and multi-selection from Scintilla for free --
+    replacing the old bespoke QPlainTextEdit + regex highlighter + hand-painted
+    line-number gutter. ``toPlainText``/``setPlainText`` are kept as thin
+    aliases so the surrounding widget code reads naturally."""
 
-    def paintEvent(self, event):
-        self.codeEditor.lineNumberAreaPaintEvent(event)
+    #: Scintilla indicator id for compile-error squiggles. 8/9 are taken by
+    #: the shared theme's find highlights, so use 10 here.
+    ERROR_INDICATOR = 10
 
-class CodeEditor(QtWidgets.QPlainTextEdit):
-    def __init__(self, parent=None):
+    def __init__(self, filename="design.v", parent=None):
         super().__init__(parent)
-        self.lineNumberArea = LineNumberArea(self)
-        self.blockCountChanged.connect(self.updateLineNumberAreaWidth)
-        self.updateRequest.connect(self.updateLineNumberArea)
-        self.updateLineNumberAreaWidth(0)
+        self.filepath = None
+        self._mono = theme.editor_font()
+        self.setUtf8(True)
+        self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
+        self.setMarginLineNumbers(0, True)
+        self.setMarginWidth(0, "0000")
+        self.setCaretLineVisible(True)
+        self.setBraceMatching(QsciScintilla.BraceMatch.SloppyBraceMatch)
+        self.setAutoIndent(True)
+        self.setIndentationsUseTabs(False)
+        self.setTabWidth(4)
+        self.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)
 
-    def lineNumberAreaWidth(self):
-        digits = 1
-        max_num = max(1, self.blockCount())
-        while max_num >= 10:
-            max_num //= 10
-            digits += 1
-        space = 5 + self.fontMetrics().horizontalAdvance('9') * digits
-        return space
+        self._lexer = lexers.make_lexer(filename, self._mono, self)
+        self.setLexer(self._lexer)
+        theme.apply(self, self._lexer, self._mono)
 
-    def updateLineNumberAreaWidth(self, _):
-        self.setViewportMargins(self.lineNumberAreaWidth(), 0, 0, 0)
+        self.indicatorDefine(
+            QsciScintilla.IndicatorStyle.SquiggleIndicator, self.ERROR_INDICATOR)
+        self.setIndicatorForegroundColor(
+            QtGui.QColor("#e51400"), self.ERROR_INDICATOR)
 
-    def updateLineNumberArea(self, rect, dy):
-        if dy:
-            self.lineNumberArea.scroll(0, dy)
-        else:
-            self.lineNumberArea.update(0, rect.y(), self.lineNumberArea.width(), rect.height())
-        if rect.contains(self.viewport().rect()):
-            self.updateLineNumberAreaWidth(0)
+    # -- QPlainTextEdit-compatible text accessors (keep call sites terse) --
+    def toPlainText(self):
+        return self.text()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        cr = self.contentsRect()
-        self.lineNumberArea.setGeometry(QtCore.QRect(cr.left(), cr.top(), self.lineNumberAreaWidth(), cr.height()))
+    def setPlainText(self, content):
+        self.setText(content)
 
-    def lineNumberAreaPaintEvent(self, event):
-        painter = QtGui.QPainter(self.lineNumberArea)
-        painter.fillRect(event.rect(), QtGui.QColor("#f8f9fa")) # Light grey gutter
-        
-        # Subtle right border for the gutter
-        painter.setPen(QtGui.QColor("#dee2e6"))
-        painter.drawLine(self.lineNumberArea.width() - 1, 0, self.lineNumberArea.width() - 1, event.rect().height())
-        
-        block = self.firstVisibleBlock()
-        blockNumber = block.blockNumber()
-        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
-        bottom = top + self.blockBoundingRect(block).height()
-        
-        while block.isValid() and top <= event.rect().bottom():
-            if block.isVisible() and bottom >= event.rect().top():
-                number = str(blockNumber + 1)
-                painter.setPen(QtGui.QColor("#adb5bd")) # Subtle text color
-                painter.drawText(0, int(top), self.lineNumberArea.width() - 4, self.fontMetrics().height(),
-                                 QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter, number)
-            
-            block = block.next()
-            top = bottom
-            bottom = top + self.blockBoundingRect(block).height()
-            blockNumber += 1
+    # -- compile-error highlighting (Scintilla indicators, not ExtraSelection) --
+    def clear_error_highlights(self):
+        last = max(0, self.lines() - 1)
+        self.clearIndicatorRange(
+            0, 0, last, self.lineLength(last), self.ERROR_INDICATOR)
+
+    def mark_error_line(self, line_num):
+        i = line_num - 1
+        if 0 <= i < self.lines():
+            self.fillIndicatorRange(
+                i, 0, i, max(1, self.lineLength(i)), self.ERROR_INDICATOR)
+
+    def goto_line(self, line_num):
+        i = max(0, line_num - 1)
+        self.setCursorPosition(i, 0)
+        self.ensureLineVisible(i)
+        self.setFocus()
+
 
 class ConsoleEdit(QtWidgets.QTextEdit):
     error_clicked = QtCore.pyqtSignal(int, str)
@@ -217,48 +217,6 @@ class ConsoleEdit(QtWidgets.QTextEdit):
             self.error_clicked.emit(line_num, filename)
 
         super().mouseDoubleClickEvent(e)
-
-
-class VerilogHighlighter(QtGui.QSyntaxHighlighter):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.highlightingRules = []
-
-        keywordFormat = QtGui.QTextCharFormat()
-        keywordFormat.setForeground(QtGui.QColor("#0000ff")) # Blue for keywords
-        keywordFormat.setFontWeight(QtGui.QFont.Weight.Bold)
-        keywords = [
-            "module", "endmodule", "input", "output", "inout", "wire", "reg", "logic",
-            "assign", "always", "initial", "begin", "end", "if", "else", "for", "while",
-            "case", "endcase", "posedge", "negedge", "parameter", "localparam", "integer"
-        ]
-        for word in keywords:
-            pattern = QtCore.QRegularExpression(rf"\b{word}\b")
-            self.highlightingRules.append((pattern, keywordFormat))
-
-        # Numbers
-        numberFormat = QtGui.QTextCharFormat()
-        numberFormat.setForeground(QtGui.QColor("#098658")) # Greenish-teal for numbers
-        self.highlightingRules.append((QtCore.QRegularExpression(r"\b\d+'[bBoOdDhH][0-9a-fA-F_xzXZ]+\b"), numberFormat))
-        self.highlightingRules.append((QtCore.QRegularExpression(r"\b\d+\b"), numberFormat))
-
-        # Comments
-        commentFormat = QtGui.QTextCharFormat()
-        commentFormat.setForeground(QtGui.QColor("#008000")) # Dark green for comments
-        self.highlightingRules.append((QtCore.QRegularExpression(r"//[^\n]*"), commentFormat))
-        self.highlightingRules.append((QtCore.QRegularExpression(r"/\*[\s\S]*?\*/"), commentFormat))
-
-        # System Tasks
-        sysTaskFormat = QtGui.QTextCharFormat()
-        sysTaskFormat.setForeground(QtGui.QColor("#795e26")) # Brown for $tasks
-        self.highlightingRules.append((QtCore.QRegularExpression(r"\$\w+\b"), sysTaskFormat))
-
-    def highlightBlock(self, text):
-        for pattern, format in self.highlightingRules:
-            matchIterator = pattern.globalMatch(text)
-            while matchIterator.hasNext():
-                match = matchIterator.next()
-                self.setFormat(match.capturedStart(), match.capturedLength(), format)
 
 
 class VerilogVerifier(QtWidgets.QWidget):
@@ -651,19 +609,15 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         top_h_splitter.addWidget(self.editor_tabs)
         top_h_splitter.setSizes([200, 800])
-        
-        self.font = QtGui.QFont("Consolas", 11)
-        
+
         # Design editor (Module 1)
         self.design_views = []
         self.add_module_tab("design.v", DEFAULT_DESIGN)
-        
+
         # Testbench editor (always pinned to the end)
-        self.tb_view = CodeEditor()
+        self.tb_view = HdlEditor("tb_design.v")
         self.tb_view.filepath = None
-        self.tb_view.setFont(self.font)
-        self.tb_view.setPlainText(DEFAULT_TB)
-        self.tb_highlighter = VerilogHighlighter(self.tb_view.document())
+        self.tb_view.setText(DEFAULT_TB)
         self.editor_tabs.addTab(self.tb_view, "Testbench (tb_design.v)")
         # Disable close button for tb_view
         self.editor_tabs.tabBar().setTabButton(self.editor_tabs.count()-1, TAB_RIGHT, None)
@@ -810,16 +764,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         if not name:
             name = f"module_{len(self.design_views) + 1}.v"
 
-        editor = CodeEditor()
+        # Name the editor after the tab so the lexer (Verilog vs VHDL) is chosen
+        # from its extension, matching the project code editor.
+        editor = HdlEditor(name)
         editor.filepath = filepath
-        editor.setFont(self.font)
-        editor.setPlainText(content)
-        highlighter = VerilogHighlighter(editor.document())
-
-        # Keep track of highlighters to prevent garbage collection
-        if not hasattr(self, 'highlighters'):
-            self.highlighters = []
-        self.highlighters.append(highlighter)
+        editor.setText(content)
 
         # Append BEFORE insertTab so _on_tab_changed sees it immediately
         self.design_views.append(editor)
@@ -1026,27 +975,25 @@ class VerilogVerifier(QtWidgets.QWidget):
         
     def find_next(self):
         text = self.find_input.text()
-        if not text: return
+        if not text:
+            return
         editor = self.get_current_editor()
-        if not editor.find(text):
-            # Wrap around
-            cursor = editor.textCursor()
-            cursor.movePosition(QtGui.QTextCursor.MoveOperation.Start)
-            editor.setTextCursor(cursor)
-            editor.find(text)
-            
+        # findFirst(expr, regex, case-sensitive, whole-word, wrap, forward).
+        # wrap=True handles the wrap-around the old manual cursor reset did.
+        editor.findFirst(text, False, False, False, True)
+
     def replace_text(self):
         text_to_find = self.find_input.text()
         replacement = self.replace_input.text()
-        if not text_to_find: return
-        
+        if not text_to_find:
+            return
+
         editor = self.get_current_editor()
-        cursor = editor.textCursor()
-        if cursor.hasSelection() and cursor.selectedText() == text_to_find:
-            cursor.insertText(replacement)
-            self.find_next()
-        else:
-            self.find_next()
+        # If the current selection is already the search hit, replace it; then
+        # advance to the next match (mirrors the old behaviour).
+        if editor.hasSelectedText() and editor.selectedText() == text_to_find:
+            editor.replace(replacement)
+        self.find_next()
 
     def jump_to_error(self, line_num, filename):
         """Jump to the error line, searching all tabs by their exact label (basename match).
@@ -1078,34 +1025,15 @@ class VerilogVerifier(QtWidgets.QWidget):
             return
 
         self.editor_tabs.setCurrentIndex(tab_idx)
-            
-        doc = editor.document()
-        block = doc.findBlockByNumber(line_num - 1)
-        if block.isValid():
-            cursor = editor.textCursor()
-            cursor.setPosition(block.position())
-            editor.setTextCursor(cursor)
-            editor.setFocus()
-            
-            # Apply persistent red background highlight
-            selection = QtWidgets.QTextEdit.ExtraSelection()
-            line_color = QtGui.QColor(255, 100, 100, 100) # Semi-transparent red
-            selection.format.setBackground(line_color)
-            selection.format.setProperty(QtGui.QTextFormat.Property.FullWidthSelection, True)
-            selection.cursor = cursor
-            selection.cursor.clearSelection()
-            
-            # Append to existing selections so we don't clear others
-            current_selections = editor.extraSelections()
-            current_selections.append(selection)
-            editor.setExtraSelections(current_selections)
+        editor.mark_error_line(line_num)
+        editor.goto_line(line_num)
 
     def highlight_errors_from_log(self, log_text):
-        """Highlight error lines in all tabs, matching by filename from the log."""
+        """Squiggle the error lines in every tab, matched by filename in the log."""
         # Clear all existing error highlights first
         for v in getattr(self, 'design_views', []):
-            v.setExtraSelections([])
-        self.tb_view.setExtraSelections([])
+            v.clear_error_highlights()
+        self.tb_view.clear_error_highlights()
 
         # Build a map of tab_label -> editor for all design tabs + testbench
         tab_editors = {}
@@ -1121,9 +1049,6 @@ class VerilogVerifier(QtWidgets.QWidget):
         tab_editors['tb.v'] = self.tb_view
         tab_editors['tb_design.v'] = self.tb_view
 
-        # Accumulate per-editor selections
-        editor_selections = {}
-
         matches = re.finditer(r'([\w./-]+\.(?:v|sv)):(\d+):', log_text)
         for match in matches:
             filename = match.group(1)
@@ -1132,29 +1057,8 @@ class VerilogVerifier(QtWidgets.QWidget):
             editor = tab_editors.get(filename) or tab_editors.get(os.path.basename(filename))
             if editor is None:
                 continue
+            editor.mark_error_line(line_num)
 
-            doc = editor.document()
-            block = doc.findBlockByNumber(line_num - 1)
-            if not block.isValid():
-                continue
-
-            cursor = editor.textCursor()
-            cursor.setPosition(block.position())
-
-            selection = QtWidgets.QTextEdit.ExtraSelection()
-            fmt = QtGui.QTextCharFormat()
-            fmt.setBackground(QtGui.QColor(255, 100, 100, 60))
-            fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.SpellCheckUnderline)
-            fmt.setUnderlineColor(QtGui.QColor("red"))
-            fmt.setProperty(QtGui.QTextFormat.Property.FullWidthSelection, True)
-            selection.format = fmt
-            selection.cursor = cursor
-            selection.cursor.clearSelection()
-            editor_selections.setdefault(id(editor), (editor, []))[1].append(selection)
-
-        for _, (editor, selections) in editor_selections.items():
-            editor.setExtraSelections(selections)
-        
         self.analyze_syntax_error(log_text)
 
     def analyze_syntax_error(self, log_text):
@@ -1431,8 +1335,8 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         # Clear previous error highlights
         for v in self.design_views:
-            v.setExtraSelections([])
-        self.tb_view.setExtraSelections([])
+            v.clear_error_highlights()
+        self.tb_view.clear_error_highlights()
 
         if not self.design_views:
             self.log("Error: No design modules found.")
