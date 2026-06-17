@@ -88,3 +88,51 @@ def test_compile_and_simulate_produces_vcd(tmp_path):
         env=icarus.vvp_env(_VVP, libdir=CosimConfig.iverilog_libdir()))
     assert sim.ok, sim.stderr
     assert sim.vcd_path and os.path.isfile(sim.vcd_path)
+
+
+@needs_sim
+def test_build_and_simulate_orchestration(tmp_path):
+    run = icarus.build_and_simulate(
+        _IVERILOG, _VVP, [("counter.v", COUNTER), ("tb_design.v", TB)],
+        str(tmp_path), libdir=CosimConfig.iverilog_libdir())
+    assert run.ok, run.compile.stderr + ((run.sim.stderr) if run.sim else "")
+    # VCD content is read on the worker side so the GUI never touches tmpdir.
+    assert run.vcd_content and "$var" in run.vcd_content
+
+
+# --- CancelToken (tool-free, POSIX uses `sleep`) ------------------------- #
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+posix_only = pytest.mark.skipif(os.name == 'nt', reason="POSIX `sleep` test")
+
+
+@posix_only
+def test_cancel_token_kills_running_process():
+    tok = icarus.CancelToken()
+    out = {}
+
+    def run():
+        try:
+            out['res'] = icarus._run_cmd(['sleep', '30'], None, None, tok)
+        except Exception as exc:
+            out['err'] = exc
+
+    t = threading.Thread(target=run)
+    t.start()
+    time.sleep(0.3)
+    tok.cancel()
+    t.join(5)
+    assert not t.is_alive()          # cancel unblocked the worker
+    assert tok.cancelled
+
+
+@posix_only
+def test_cancel_before_bind_kills_immediately():
+    tok = icarus.CancelToken()
+    tok.cancel()                     # cancelled before a process is bound
+    proc = subprocess.Popen(['sleep', '30'])
+    tok.bind(proc)                   # bind must kill it right away
+    proc.wait(5)
+    assert proc.poll() is not None

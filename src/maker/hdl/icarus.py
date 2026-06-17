@@ -42,6 +42,65 @@ class SimResult:
     vcd_path: Optional[str]          # produced VCD, or None if none written
 
 
+class CancelToken:
+    """Lets a long compile/sim be killed from another thread.
+
+    Qt-free on purpose: the UI hands one of these to the backend (run on a
+    worker thread) and calls :meth:`cancel` from the GUI thread when the user
+    clicks Cancel. The backend binds its live subprocess; binding after a cancel
+    has already been requested kills it immediately, closing the race."""
+
+    def __init__(self):
+        self._proc = None
+        self._cancelled = False
+
+    def bind(self, proc):
+        self._proc = proc
+        if self._cancelled:
+            self._terminate()
+
+    def cancel(self):
+        self._cancelled = True
+        self._terminate()
+
+    def _terminate(self):
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    @property
+    def cancelled(self):
+        return self._cancelled
+
+
+def _run_cmd(cmd, cwd, timeout, cancel, env=None):
+    """Run ``cmd`` and return (returncode, stdout, stderr).
+
+    Uses subprocess.run when no cancel token is given (simplest, fully
+    buffered); otherwise a Popen the token can kill. Raises
+    subprocess.TimeoutExpired on timeout in both modes."""
+    if cancel is None:
+        proc = subprocess.run(
+            cmd, cwd=cwd, env=env, capture_output=True, text=True,
+            timeout=timeout)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True)
+    cancel.bind(proc)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise
+    return proc.returncode, out, err
+
+
 def run_iverilog(
     iverilog_bin: str,
     src_paths: Sequence[str],
@@ -52,6 +111,7 @@ def run_iverilog(
     warnings: bool = False,
     extra_flags: Sequence[str] = (),
     timeout: Optional[float] = None,
+    cancel: Optional[CancelToken] = None,
 ) -> CompileResult:
     """Invoke iverilog on already-on-disk sources, producing ``out_path``.
 
@@ -64,13 +124,11 @@ def run_iverilog(
     cmd += list(extra_flags)
     cmd += ["-o", out_path] + list(src_paths)
 
-    proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-    ok = proc.returncode == 0 and os.path.isfile(out_path)
+    rc, out, err = _run_cmd(cmd, cwd, timeout, cancel)
+    ok = rc == 0 and os.path.isfile(out_path)
     return CompileResult(
-        ok=ok, returncode=proc.returncode, stdout=proc.stdout,
-        stderr=proc.stderr, out_path=out_path if ok else None,
-        cmd=cmd, written=list(src_paths))
+        ok=ok, returncode=rc, stdout=out, stderr=err,
+        out_path=out_path if ok else None, cmd=cmd, written=list(src_paths))
 
 
 def compile_design(
@@ -83,6 +141,7 @@ def compile_design(
     extra_flags: Sequence[str] = (),
     out_name: str = "out.bin",
     timeout: Optional[float] = None,
+    cancel: Optional[CancelToken] = None,
 ) -> CompileResult:
     """Write ``sources`` into ``workdir`` and compile them with iverilog.
 
@@ -102,7 +161,7 @@ def compile_design(
     return run_iverilog(
         iverilog_bin, written, os.path.join(workdir, out_name),
         cwd=workdir, std=std, warnings=warnings, extra_flags=extra_flags,
-        timeout=timeout)
+        timeout=timeout, cancel=cancel)
 
 
 def simulate(
@@ -113,6 +172,7 @@ def simulate(
     env: Optional[dict] = None,
     vcd_name: str = "sim_out.vcd",
     timeout: Optional[float] = None,
+    cancel: Optional[CancelToken] = None,
 ) -> SimResult:
     """Run a compiled design under ``vvp`` in ``workdir``.
 
@@ -120,13 +180,11 @@ def simulate(
     produced ``vcd_name`` (so the caller can tell "no $dumpfile" apart from a
     crash). ``env`` lets the caller fix up the loader path (e.g. prepend the
     vvp dir to PATH on Windows for its DLLs)."""
-    proc = subprocess.run(
-        [vvp_bin, out_path], cwd=workdir, env=env,
-        capture_output=True, text=True, timeout=timeout)
+    rc, out, err = _run_cmd(
+        [vvp_bin, out_path], workdir, timeout, cancel, env=env)
     vcd = os.path.join(workdir, vcd_name)
     return SimResult(
-        ok=proc.returncode == 0, returncode=proc.returncode,
-        stdout=proc.stdout, stderr=proc.stderr,
+        ok=rc == 0, returncode=rc, stdout=out, stderr=err,
         vcd_path=vcd if os.path.isfile(vcd) else None)
 
 
@@ -151,3 +209,53 @@ def vvp_env(vvp_bin: str, base_env: Optional[dict] = None,
         existing = env.get(loader, "")
         env[loader] = os.pathsep.join(extra + ([existing] if existing else []))
     return env
+
+
+@dataclass
+class RunResult:
+    """Combined outcome of compile + simulate, returned by
+    :func:`build_and_simulate`. ``vcd_content`` is read on the worker thread so
+    the GUI thread never has to touch the (about-to-be-deleted) temp dir."""
+    compile: CompileResult
+    sim: Optional[SimResult] = None
+    vcd_content: Optional[str] = None
+
+    @property
+    def ok(self):
+        return self.compile.ok and self.sim is not None and self.sim.ok
+
+
+def build_and_simulate(
+    iverilog_bin: str,
+    vvp_bin: str,
+    sources: Sequence[Tuple[str, str]],
+    workdir: str,
+    *,
+    libdir: Optional[str] = None,
+    std: str = "-g2012",
+    out_name: str = "sim.out",
+    vcd_name: str = "sim_out.vcd",
+    compile_timeout: Optional[float] = None,
+    sim_timeout: Optional[float] = None,
+    cancel: Optional[CancelToken] = None,
+) -> RunResult:
+    """Compile ``sources`` then run the result under vvp, reading back any VCD.
+
+    The single blocking unit of work the IDE runs on a worker thread: it does no
+    Qt and no logging, so the GUI thread can drive it and render the result.
+    Stops early (sim=None) if compilation fails."""
+    cres = compile_design(
+        iverilog_bin, sources, workdir, std=std, out_name=out_name,
+        timeout=compile_timeout, cancel=cancel)
+    if not cres.ok:
+        return RunResult(compile=cres)
+
+    sres = simulate(
+        vvp_bin, cres.out_path, workdir,
+        env=vvp_env(vvp_bin, libdir=libdir), vcd_name=vcd_name,
+        timeout=sim_timeout, cancel=cancel)
+    vcd_content = None
+    if sres.vcd_path:
+        with open(sres.vcd_path, "r", encoding="utf-8") as fh:
+            vcd_content = fh.read()
+    return RunResult(compile=cres, sim=sres, vcd_content=vcd_content)

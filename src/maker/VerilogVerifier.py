@@ -21,12 +21,12 @@ from ngspiceSimulation.plot_window import plotWindow
 # instead of maintaining a second, PATH-only locator that misses prefix builds.
 try:
     from . import CosimConfig
-    from .hdl import icarus
+    from .hdl import icarus, jobs
     from .hdl.vcd import parse_vcd_for_plot
     from .hdl.ports import extract_ports, generate_stub_testbench
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
-    from maker.hdl import icarus
+    from maker.hdl import icarus, jobs
     from maker.hdl.vcd import parse_vcd_for_plot
     from maker.hdl.ports import extract_ports, generate_stub_testbench
 
@@ -271,6 +271,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.current_timestamps = None
         self.current_signals_data = None
         self.current_signal_types = None
+
+        # Async run state: the in-flight compile/sim worker thread and its
+        # cancel token (None when idle). See _start_job / cancel_running_job.
+        self._active_job = None
+        self._active_cancel = None
+        self._busy_buttons = []
 
         self.init_ui()
 
@@ -698,7 +704,14 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_simulate = QtWidgets.QPushButton("Simulate")
         self.btn_simulate.clicked.connect(self.simulate_and_wave)
         controls_layout.addWidget(self.btn_simulate)
-        
+
+        # Shown only while a compile/sim runs on the worker thread; clicking it
+        # kills the underlying iverilog/vvp process via the active CancelToken.
+        self.btn_cancel = QtWidgets.QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.cancel_running_job)
+        self.btn_cancel.setVisible(False)
+        controls_layout.addWidget(self.btn_cancel)
+
         self.btn_export_csv = QtWidgets.QPushButton("Export CSV")
         self.btn_export_csv.clicked.connect(self.export_csv)
         self.btn_export_csv.setEnabled(False)
@@ -1356,8 +1369,64 @@ class VerilogVerifier(QtWidgets.QWidget):
             sources.append((safe_name, widget.toPlainText()))
         return sources
 
+    # ------------------------------------------------------------------ #
+    #  Async job plumbing (compile/sim run off the GUI thread)
+    # ------------------------------------------------------------------ #
+    def _job_running(self):
+        return self._active_job is not None and self._active_job.isRunning()
+
+    def _start_job(self, work, on_done, on_fail, cancel, busy):
+        """Run ``work()`` on a worker thread; deliver its result to ``on_done``
+        (or its error to ``on_fail``) back on the GUI thread. ``busy`` buttons
+        are disabled and a Cancel button shown for the duration; ``cancel`` is
+        the token ``work`` threads into the backend so Cancel can kill it."""
+        self._active_cancel = cancel
+        self._busy_buttons = busy
+        for b in busy:
+            b.setEnabled(False)
+        self.btn_cancel.setVisible(True)
+        self.btn_cancel.setEnabled(True)
+
+        job = jobs.BackgroundJob(work, parent=self)
+        self._active_job = job
+
+        def finish():
+            self._active_job = None
+            self._active_cancel = None
+            for b in busy:
+                b.setEnabled(True)
+            self.btn_cancel.setVisible(False)
+
+        def ok(result):
+            finish()
+            on_done(result)
+
+        def err(msg):
+            finish()
+            on_fail(msg)
+
+        job.succeeded.connect(ok)
+        job.failed.connect(err)
+        job.finished.connect(job.deleteLater)
+        job.start()
+
+    def cancel_running_job(self):
+        if self._active_cancel is not None:
+            self.log("Cancelling...")
+            self.btn_cancel.setEnabled(False)
+            self._active_cancel.cancel()
+
+    def closeEvent(self, event):
+        # Don't let a worker thread outlive the widget.
+        if self._job_running():
+            if self._active_cancel is not None:
+                self._active_cancel.cancel()
+            self._active_job.wait(3000)
+        super().closeEvent(event)
+
     def check_syntax(self):
-        self.btn_syntax.setEnabled(False)
+        if self._job_running():
+            return
         self.log("\n--- Checking Syntax ---")
 
         # Clear previous error highlights
@@ -1367,13 +1436,11 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         if not self.design_views:
             self.log("Error: No design modules found.")
-            self.btn_syntax.setEnabled(True)
             return
 
         iverilog = self.find_iverilog()
         if not iverilog:
             self.log("Error: 'iverilog' was not found. Please install it or specify the path.")
-            self.btn_syntax.setEnabled(True)
             return
 
         self.log(f"--- Using compiler at: {iverilog} ---")
@@ -1383,17 +1450,33 @@ class VerilogVerifier(QtWidgets.QWidget):
         if tb_code and tb_code.strip():
             sources.append(("tb_design.v", tb_code))
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            res = icarus.compile_design(
-                iverilog, sources, tmpdir, std="-g2012", warnings=True)
-            if res.ok:
-                self.log("Syntax OK (compiled successfully with iverilog)")
-            else:
-                self.log("Syntax errors found:")
-                self.log(res.stderr)
-                self.highlight_errors_from_log(res.stderr)
+        tmpdir = tempfile.mkdtemp()
+        cancel = icarus.CancelToken()
 
-        self.btn_syntax.setEnabled(True)
+        def work():
+            return icarus.compile_design(
+                iverilog, sources, tmpdir, std="-g2012", warnings=True,
+                cancel=cancel)
+
+        def done(res):
+            try:
+                if cancel.cancelled:
+                    self.log("Syntax check cancelled.")
+                elif res.ok:
+                    self.log("Syntax OK (compiled successfully with iverilog)")
+                else:
+                    self.log("Syntax errors found:")
+                    self.log(res.stderr)
+                    self.highlight_errors_from_log(res.stderr)
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+
+        def fail(msg):
+            self.log(f"Syntax check error: {msg}")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        self._start_job(work, done, fail, cancel,
+                        busy=[self.btn_syntax, self.btn_simulate])
 
     def auto_generate_tb(self):
         """Generate a testbench stub for the last-active design tab.
@@ -1446,81 +1529,93 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_stub.setEnabled(True)
 
     def simulate_and_wave(self):
-        self.btn_simulate.setEnabled(False)
+        if self._job_running():
+            return
         self.log("\n--- Starting Simulation ---")
-        
+
         design_code = self.get_design_code()
         if not design_code or not design_code.strip():
             self.log("Error: Design editor is empty.")
-            self.btn_simulate.setEnabled(True)
             return
-            
+
         tb_code = self.get_tb_code()
         if not tb_code or not tb_code.strip():
             self.log("Error: Testbench editor is empty. Use Auto-Generate first.")
-            self.btn_simulate.setEnabled(True)
             return
-            
+
         iverilog = self.find_iverilog()
         vvp = self.find_vvp()
         if not iverilog or not vvp:
             self.log("Error: 'iverilog' or 'vvp' binaries were not found on the system.")
-            self.btn_simulate.setEnabled(True)
             return
-            
+
+        # Each design tab is written under its own tab-label filename (via
+        # _design_sources) so iverilog error output references the tab the user
+        # sees and highlight_errors_from_log can find it.
+        sources = self._design_sources() + [("tb_design.v", tb_code)]
+        self.log(f"Compiling {len(sources) - 1} module(s) + testbench...")
+
         tmpdir = tempfile.mkdtemp()
-        try:
-            # Each design tab is written under its own tab-label filename (via
-            # _design_sources) so iverilog error output references the tab the
-            # user sees and highlight_errors_from_log can find it.
-            sources = self._design_sources() + [("tb_design.v", tb_code)]
+        cancel = icarus.CancelToken()
+        libdir = CosimConfig.iverilog_libdir()
 
-            self.log(f"Compiling {len(sources) - 1} module(s) + testbench...")
-            res_compile = icarus.compile_design(
-                iverilog, sources, tmpdir, std="-g2012", out_name="sim.out")
-            if not res_compile.ok:
-                self.log("Compilation Failed:")
-                self.log(res_compile.stderr)
-                self.highlight_errors_from_log(res_compile.stderr)
-                return
+        def work():
+            return icarus.build_and_simulate(
+                iverilog, vvp, sources, tmpdir, libdir=libdir, cancel=cancel)
 
-            self.log("Running simulation...")
-            res_sim = icarus.simulate(
-                vvp, res_compile.out_path, tmpdir,
-                env=icarus.vvp_env(vvp, libdir=CosimConfig.iverilog_libdir()))
+        def done(run):
+            try:
+                self._render_sim_result(run, cancelled=cancel.cancelled)
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
-            self.log("Simulation console output:")
-            if res_sim.stdout:
-                self.log(res_sim.stdout)
-            if res_sim.stderr:
-                self.log(res_sim.stderr)
-
-            if not res_sim.ok:
-                self.log(f"Error: vvp crashed or failed with exit code {res_sim.returncode}")
-                if res_sim.returncode in [3221225781, -1073741515]:
-                    self.log("IT LOOKS LIKE A MISSING DLL ERROR (0xC0000135).")
-                    self.log("Please try to reinstall Icarus Verilog and ensure the "
-                             "'Install MinGW Dependencies (DLL Files)' option is CHECKED.")
-
-            if res_sim.vcd_path:
-                self.log("Parsing VCD file...")
-                with open(res_sim.vcd_path, "r", encoding="utf-8") as f:
-                    vcd_content = f.read()
-                try:
-                    timestamps, signals_data, signal_types, raw_signals, timescale = parse_vcd_for_plot(vcd_content)
-                    self.current_raw_signals_data = raw_signals
-                    self.current_timescale = timescale
-                    self.render_waveform(timestamps, signals_data, signal_types, popup=True)
-                    self.log("Simulation completed and waveform rendered successfully.")
-                except Exception as ex:
-                    self.log(f"Error parsing VCD file: {ex}")
-            else:
-                self.log("Error: No VCD file produced. Make sure your testbench contains "
-                         '$dumpfile("sim_out.vcd") and $dumpvars(0, ...).')
-        finally:
-            # Always clean up the temp directory, even if an exception occurred
+        def fail(msg):
+            self.log(f"Simulation error: {msg}")
             shutil.rmtree(tmpdir, ignore_errors=True)
-            self.btn_simulate.setEnabled(True)
+
+        self._start_job(work, done, fail, cancel,
+                        busy=[self.btn_simulate, self.btn_syntax])
+
+    def _render_sim_result(self, run, cancelled=False):
+        """Log/highlight/plot the outcome of build_and_simulate, on the GUI
+        thread. Mirrors the old inline simulate_and_wave reporting exactly."""
+        if cancelled:
+            self.log("Simulation cancelled.")
+            return
+
+        if not run.compile.ok:
+            self.log("Compilation Failed:")
+            self.log(run.compile.stderr)
+            self.highlight_errors_from_log(run.compile.stderr)
+            return
+
+        sim = run.sim
+        self.log("Simulation console output:")
+        if sim.stdout:
+            self.log(sim.stdout)
+        if sim.stderr:
+            self.log(sim.stderr)
+
+        if not sim.ok:
+            self.log(f"Error: vvp crashed or failed with exit code {sim.returncode}")
+            if sim.returncode in [3221225781, -1073741515]:
+                self.log("IT LOOKS LIKE A MISSING DLL ERROR (0xC0000135).")
+                self.log("Please try to reinstall Icarus Verilog and ensure the "
+                         "'Install MinGW Dependencies (DLL Files)' option is CHECKED.")
+
+        if run.vcd_content:
+            self.log("Parsing VCD file...")
+            try:
+                timestamps, signals_data, signal_types, raw_signals, timescale = parse_vcd_for_plot(run.vcd_content)
+                self.current_raw_signals_data = raw_signals
+                self.current_timescale = timescale
+                self.render_waveform(timestamps, signals_data, signal_types, popup=True)
+                self.log("Simulation completed and waveform rendered successfully.")
+            except Exception as ex:
+                self.log(f"Error parsing VCD file: {ex}")
+        else:
+            self.log("Error: No VCD file produced. Make sure your testbench contains "
+                     '$dumpfile("sim_out.vcd") and $dumpvars(0, ...).')
 
     def send_to_makerchip(self):
         self.btn_send.setEnabled(False)
