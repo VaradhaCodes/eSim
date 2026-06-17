@@ -77,7 +77,9 @@ def parse_vcd_for_plot(vcd_content):
                     name = parts[4]
                     vars_map[symbol] = {'name': name, 'size': size, 'type': var_type}
                     symbol_to_val[symbol] = 'x'
-            elif line.startswith('$enddefinitions') or line.startswith('$dumpvars') or line.startswith('$dumpall'):
+            elif (line.startswith('$enddefinitions')
+                  or line.startswith('$dumpvars')
+                  or line.startswith('$dumpall')):
                 in_header = False
 
         if not in_header or line.startswith('#') or (line and line[0] in '01zZxXbB'):

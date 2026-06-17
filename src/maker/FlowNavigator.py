@@ -18,8 +18,6 @@
 #
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # =========================================================================
-import os
-
 from PyQt6 import QtCore, QtWidgets
 
 from . import Maker
