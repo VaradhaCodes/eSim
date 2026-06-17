@@ -36,6 +36,7 @@ from configuration import Appconfig
 
 from . import createkicad
 from . import CosimConfig
+from .hdl import icarus
 from .CosimLogger import CosimLog
 import hdlparse.verilog_parser as vlog
 
@@ -403,23 +404,25 @@ class ModelGeneration(QtWidgets.QWidget):
             log.info("$ " + " ".join(shlex.quote(c) for c in cmd))
             start = time.monotonic()
             try:
-                proc = subprocess.run(
-                    cmd, cwd=os.path.abspath(self.modelpath),
-                    capture_output=True, text=True, timeout=300)
+                # Same iverilog invocation path as the Verilog Simulator IDE
+                # (hdl.icarus), so both features stay byte-for-byte consistent.
+                res = icarus.run_iverilog(
+                    iverilog, [compile_src], out,
+                    cwd=os.path.abspath(self.modelpath), timeout=300)
             finally:
                 if tmp_src and os.path.isfile(tmp_src):
                     os.remove(tmp_src)
             elapsed = time.monotonic() - start
-            log.output(proc.stdout, 'stdout')
-            log.output(proc.stderr, 'stderr')
+            log.output(res.stdout, 'stdout')
+            log.output(res.stderr, 'stderr')
             log.info("iverilog exited rc=%d in %.2fs"
-                     % (proc.returncode, elapsed))
+                     % (res.returncode, elapsed))
 
             # ----- [4/4] Verify artifact -----
             log.phase("[4/4] Verify artifact")
-            if proc.returncode != 0 or not os.path.isfile(out):
+            if not res.ok:
                 log.error("d_cosim model build FAILED (rc=%d)."
-                          % proc.returncode)
+                          % res.returncode)
                 log.fix("Check the compiler errors above (syntax, missing "
                         "module, or a construct Icarus -g2012 rejects).")
                 return "Error"

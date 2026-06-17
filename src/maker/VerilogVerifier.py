@@ -2,7 +2,6 @@ import os
 import re
 import shutil
 import tempfile
-import subprocess
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 # eSim is PyQt6-only. These aliases keep the call sites below terse.
@@ -22,10 +21,12 @@ from ngspiceSimulation.plot_window import plotWindow
 # instead of maintaining a second, PATH-only locator that misses prefix builds.
 try:
     from . import CosimConfig
+    from .hdl import icarus
     from .hdl.vcd import parse_vcd_for_plot
     from .hdl.ports import extract_ports, generate_stub_testbench
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
+    from maker.hdl import icarus
     from maker.hdl.vcd import parse_vcd_for_plot
     from maker.hdl.ports import extract_ports, generate_stub_testbench
 
@@ -1340,6 +1341,21 @@ class VerilogVerifier(QtWidgets.QWidget):
         return self.tb_view.toPlainText()
 
     # Button Event Handlers
+    def _design_sources(self):
+        """Ordered (filename, code) for each design tab, named by its tab label
+        so iverilog diagnostics reference the tab the user actually sees. The
+        name always ends in .v/.sv so highlight_errors_from_log can match it."""
+        sources = []
+        for i in range(self.editor_tabs.count()):
+            widget = self.editor_tabs.widget(i)
+            if widget not in getattr(self, 'design_views', []):
+                continue
+            tab_name = self.editor_tabs.tabText(i)
+            safe_name = tab_name if tab_name.endswith(('.v', '.sv')) \
+                else tab_name + '.v'
+            sources.append((safe_name, widget.toPlainText()))
+        return sources
+
     def check_syntax(self):
         self.btn_syntax.setEnabled(False)
         self.log("\n--- Checking Syntax ---")
@@ -1362,34 +1378,15 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         self.log(f"--- Using compiler at: {iverilog} ---")
 
+        sources = self._design_sources()
+        tb_code = self.get_tb_code()
+        if tb_code and tb_code.strip():
+            sources.append(("tb_design.v", tb_code))
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Write each module as its own named file (matching simulate_and_wave)
-            # so iverilog error messages reference the actual tab filename.
-            design_file_paths = []
-            for i in range(self.editor_tabs.count()):
-                widget = self.editor_tabs.widget(i)
-                if widget not in self.design_views:
-                    continue
-                tab_name = self.editor_tabs.tabText(i)
-                safe_name = tab_name if tab_name.endswith(('.v', '.sv')) else tab_name + '.v'
-                module_path = os.path.join(tmpdir, safe_name)
-                with open(module_path, "w", encoding="utf-8") as f:
-                    f.write(widget.toPlainText())
-                design_file_paths.append(module_path)
-
-            cmd = [iverilog, "-g2012", "-Wall", "-o", os.path.join(tmpdir, "out.bin")] + design_file_paths
-
-            # If testbench has code, check it alongside the design
-            tb_code = self.get_tb_code()
-            if tb_code and tb_code.strip():
-                tb_filepath = os.path.join(tmpdir, "tb_design.v")
-                with open(tb_filepath, "w", encoding="utf-8") as f:
-                    f.write(tb_code)
-                cmd.append(tb_filepath)
-
-            res = subprocess.run(cmd, capture_output=True, text=True)
-
-            if res.returncode == 0:
+            res = icarus.compile_design(
+                iverilog, sources, tmpdir, std="-g2012", warnings=True)
+            if res.ok:
                 self.log("Syntax OK (compiled successfully with iverilog)")
             else:
                 self.log("Syntax errors found:")
@@ -1473,52 +1470,24 @@ class VerilogVerifier(QtWidgets.QWidget):
             
         tmpdir = tempfile.mkdtemp()
         try:
-            # Write each design module as its own file named exactly by its tab label.
-            # This ensures iverilog error output contains the actual tab filename
-            # (e.g. alu.v:3:) so highlight_errors_from_log can find the right tab.
-            design_file_paths = []
-            for i in range(self.editor_tabs.count()):
-                widget = self.editor_tabs.widget(i)
-                if widget not in getattr(self, 'design_views', []):
-                    continue
-                tab_name = self.editor_tabs.tabText(i)
-                # Guard: ensure the filename always ends in .v so iverilog's
-                # error output matches the highlight_errors regex (*.v|*.sv)
-                safe_name = tab_name if tab_name.endswith(('.v', '.sv')) else tab_name + '.v'
-                module_path = os.path.join(tmpdir, safe_name)
-                with open(module_path, "w", encoding="utf-8") as f:
-                    f.write(widget.toPlainText())
-                design_file_paths.append(module_path)
+            # Each design tab is written under its own tab-label filename (via
+            # _design_sources) so iverilog error output references the tab the
+            # user sees and highlight_errors_from_log can find it.
+            sources = self._design_sources() + [("tb_design.v", tb_code)]
 
-            tb_path = os.path.join(tmpdir, "tb_design.v")
-            out_path = os.path.join(tmpdir, "sim.out")
-
-            with open(tb_path, "w", encoding="utf-8") as f:
-                f.write(tb_code)
-
-            self.log(f"Compiling {len(design_file_paths)} module(s) + testbench...")
-            cmd_compile = [iverilog, "-g2012", "-o", out_path] + design_file_paths + [tb_path]
-            res_compile = subprocess.run(cmd_compile, capture_output=True, text=True)
-
-            if res_compile.returncode != 0:
+            self.log(f"Compiling {len(sources) - 1} module(s) + testbench...")
+            res_compile = icarus.compile_design(
+                iverilog, sources, tmpdir, std="-g2012", out_name="sim.out")
+            if not res_compile.ok:
                 self.log("Compilation Failed:")
                 self.log(res_compile.stderr)
                 self.highlight_errors_from_log(res_compile.stderr)
                 return
 
             self.log("Running simulation...")
-            if not os.path.exists(out_path):
-                self.log(f"Fatal: iverilog returned 0 but {out_path} was not created!")
-                return
-
-            # Fix Windows DLL resolution for vvp if it's not in global PATH
-            env = os.environ.copy()
-            if os.name == 'nt':
-                vvp_dir = os.path.dirname(os.path.abspath(vvp))
-                env["PATH"] = vvp_dir + os.pathsep + env.get("PATH", "")
-
-            cmd_sim = [vvp, out_path]
-            res_sim = subprocess.run(cmd_sim, cwd=tmpdir, env=env, capture_output=True, text=True)
+            res_sim = icarus.simulate(
+                vvp, res_compile.out_path, tmpdir,
+                env=icarus.vvp_env(vvp, libdir=CosimConfig.iverilog_libdir()))
 
             self.log("Simulation console output:")
             if res_sim.stdout:
@@ -1526,17 +1495,16 @@ class VerilogVerifier(QtWidgets.QWidget):
             if res_sim.stderr:
                 self.log(res_sim.stderr)
 
-            if res_sim.returncode != 0:
+            if not res_sim.ok:
                 self.log(f"Error: vvp crashed or failed with exit code {res_sim.returncode}")
                 if res_sim.returncode in [3221225781, -1073741515]:
                     self.log("IT LOOKS LIKE A MISSING DLL ERROR (0xC0000135).")
                     self.log("Please try to reinstall Icarus Verilog and ensure the "
                              "'Install MinGW Dependencies (DLL Files)' option is CHECKED.")
 
-            vcd_file = os.path.join(tmpdir, "sim_out.vcd")
-            if os.path.exists(vcd_file):
+            if res_sim.vcd_path:
                 self.log("Parsing VCD file...")
-                with open(vcd_file, "r", encoding="utf-8") as f:
+                with open(res_sim.vcd_path, "r", encoding="utf-8") as f:
                     vcd_content = f.read()
                 try:
                     timestamps, signals_data, signal_types, raw_signals, timescale = parse_vcd_for_plot(vcd_content)
