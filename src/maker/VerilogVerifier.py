@@ -484,11 +484,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.current_timestamps = None
         self.current_signals_data = None
         self.current_signal_types = None
-        
-        self.settings = QtCore.QSettings("FOSSEE", "eSim_VerilogVerifier")
-        self.manual_iverilog_path = self.settings.value("manual_iverilog_path", None)
-        self.manual_vvp_path = self.settings.value("manual_vvp_path", None)
-        
+
         self.init_ui()
 
     def prompt_install_or_path(self, tool_name):
@@ -524,95 +520,55 @@ class VerilogVerifier(QtWidgets.QWidget):
         return None
 
     def silent_find_iverilog(self):
-        if self.manual_iverilog_path and os.path.exists(self.manual_iverilog_path):
-            return self.manual_iverilog_path
-            
-        # Shared with d_cosim: env / config.ini path the installer recorded.
-        # Catches prefix builds (e.g. ~/iverilog/bin) that are not on PATH.
-        try:
-            cosim_path = CosimConfig.iverilog_binary()
-            if cosim_path and os.path.exists(cosim_path):
-                return cosim_path
-        except Exception:
-            pass
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        exe_ext = ".exe" if os.name == 'nt' else ""
-        bundled_path = os.path.join(app_dir, "library", "bin", "iverilog", "bin", f"iverilog{exe_ext}")
-        if os.path.exists(bundled_path): return bundled_path
-
-        path = shutil.which("iverilog")
-        if path: return path
-        
-        for p in [r"C:\Program Files\iverilog\bin\iverilog.exe", r"C:\Program Files (x86)\iverilog\bin\iverilog.exe", r"C:\iverilog\bin\iverilog.exe"]:
-            if os.path.exists(p): return p
-        return None
+        # Single source of truth: CosimConfig resolves env -> ~/.nghdl/config.ini
+        # [COSIM] -> bundled library/bin -> PATH -> platform default. Shared with
+        # the d_cosim build so both features find the same iverilog, including
+        # prefix builds that are not on PATH.
+        return CosimConfig.iverilog_binary()
 
     def silent_find_vvp(self):
-        if self.manual_vvp_path and os.path.exists(self.manual_vvp_path):
-            return self.manual_vvp_path
-            
-        # vvp lives next to the iverilog the shared resolver found.
-        try:
-            cosim_iv = CosimConfig.iverilog_binary()
-            if cosim_iv:
-                exe_ext = ".exe" if os.name == 'nt' else ""
-                cosim_vvp = os.path.join(os.path.dirname(cosim_iv), f"vvp{exe_ext}")
-                if os.path.exists(cosim_vvp):
-                    return cosim_vvp
-        except Exception:
-            pass
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        exe_ext = ".exe" if os.name == 'nt' else ""
-        bundled_path = os.path.join(app_dir, "library", "bin", "iverilog", "bin", f"vvp{exe_ext}")
-        if os.path.exists(bundled_path): return bundled_path
-
-        path = shutil.which("vvp")
-        if path: return path
-        
-        for p in [r"C:\Program Files\iverilog\bin\vvp.exe", r"C:\Program Files (x86)\iverilog\bin\vvp.exe", r"C:\iverilog\bin\vvp.exe"]:
-            if os.path.exists(p): return p
-        return None
+        return CosimConfig.vvp_binary()
 
     def find_iverilog(self):
         path = self.silent_find_iverilog()
-        if path: return path
-            
+        if path:
+            return path
+
         path = self.prompt_install_or_path("iverilog")
         if path:
-            self.manual_iverilog_path = path
-            self.settings.setValue("manual_iverilog_path", path)
+            # Persist into config.ini (not private QSettings) so the d_cosim
+            # build sees the manually-located compiler too.
+            CosimConfig.set_manual_paths(iverilog_path=path)
             self.check_iverilog_lock()
             return path
         return None
 
     def find_vvp(self):
         path = self.silent_find_vvp()
-        if path: return path
-            
+        if path:
+            return path
+
         path = self.prompt_install_or_path("vvp")
         if path:
-            self.manual_vvp_path = path
-            self.settings.setValue("manual_vvp_path", path)
+            CosimConfig.set_manual_paths(vvp_path=path)
             return path
         return None
-        
+
     def attempt_manual_unlock(self):
         # Try to automatically detect first in case it was just installed
         path = self.silent_find_iverilog()
-        
+
         if not path:
             path = self.prompt_install_or_path("iverilog")
-            
+
         if path:
-            self.manual_iverilog_path = path
-            self.settings.setValue("manual_iverilog_path", path)
-            # auto-set vvp if in same dir
-            vvp_path = os.path.join(os.path.dirname(path), "vvp.exe" if os.name == 'nt' else "vvp")
-            if os.path.exists(vvp_path):
-                self.manual_vvp_path = vvp_path
-                self.settings.setValue("manual_vvp_path", vvp_path)
+            # Auto-pair vvp from the same dir and persist both in config.ini so
+            # d_cosim shares the manually-located toolchain.
+            vvp_path = os.path.join(
+                os.path.dirname(path), "vvp.exe" if os.name == 'nt' else "vvp")
+            CosimConfig.set_manual_paths(
+                iverilog_path=path,
+                vvp_path=vvp_path if os.path.exists(vvp_path) else None)
             self.check_iverilog_lock()
 
     def check_iverilog_lock(self):

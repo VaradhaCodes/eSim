@@ -100,15 +100,104 @@ def cosim_vvp_path(model_name):
 # --------------------------------------------------------------------------- #
 #  iverilog (with libvvp)
 # --------------------------------------------------------------------------- #
-def iverilog_binary():
-    """Resolve the iverilog compiler, or None if not installed."""
-    env = os.environ.get('ESIM_IVERILOG')
+def _repo_root():
+    """eSim repo root (this file lives at <root>/src/maker/CosimConfig.py)."""
+    return os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _bundled_tool(name):
+    """Path to a bundled Icarus tool under library/bin, or None."""
+    cand = os.path.join(_repo_root(), 'library', 'bin', 'iverilog', 'bin',
+                        name + _EXE)
+    return cand if os.path.isfile(cand) else None
+
+
+# Standard Windows install locations to probe after PATH (iverilog installer
+# defaults). Empty/irrelevant on POSIX.
+_WIN_TOOL_DIRS = (
+    r"C:\Program Files\iverilog\bin",
+    r"C:\Program Files (x86)\iverilog\bin",
+    r"C:\iverilog\bin",
+)
+
+
+def _win_fallback(name):
+    if not _WIN:
+        return None
+    for d in _WIN_TOOL_DIRS:
+        cand = os.path.join(d, name + _EXE)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _resolve_tool(name, env_var, cfg_key):
+    """Resolve an Icarus tool: explicit env override -> config.ini [COSIM] ->
+    bundled (library/bin) -> PATH -> platform-standard install dir -> None.
+    Single, shared resolution order for every caller (verifier + d_cosim)."""
+    env = os.environ.get(env_var)
     if env and os.path.isfile(env):
         return env
-    cfg = _cfg_get('COSIM', 'IVERILOG')
+    cfg = _cfg_get('COSIM', cfg_key)
     if cfg and os.path.isfile(cfg):
         return cfg
-    return shutil.which('iverilog')
+    bundled = _bundled_tool(name)
+    if bundled:
+        return bundled
+    return shutil.which(name) or _win_fallback(name)
+
+
+def iverilog_binary():
+    """Resolve the iverilog compiler, or None if not installed."""
+    return _resolve_tool('iverilog', 'ESIM_IVERILOG', 'IVERILOG')
+
+
+def vvp_binary():
+    """Resolve the vvp runtime, or None. After explicit env/config overrides,
+    prefer the vvp sitting next to the resolved iverilog (matches prefix
+    builds) before the generic bundled/PATH search."""
+    env = os.environ.get('ESIM_VVP')
+    if env and os.path.isfile(env):
+        return env
+    cfg = _cfg_get('COSIM', 'VVP')
+    if cfg and os.path.isfile(cfg):
+        return cfg
+    iv = iverilog_binary()
+    if iv:
+        cand = os.path.join(os.path.dirname(iv), 'vvp' + _EXE)
+        if os.path.isfile(cand):
+            return cand
+    bundled = _bundled_tool('vvp')
+    if bundled:
+        return bundled
+    return shutil.which('vvp') or _win_fallback('vvp')
+
+
+def set_manual_paths(iverilog_path=None, vvp_path=None):
+    """Persist manually-located tool paths into ~/.nghdl/config.ini [COSIM] so
+    BOTH the verifier and the d_cosim build share them (replacing the verifier's
+    private QSettings). Also records IVERILOG_LIB from the iverilog prefix so
+    has_iverilog() can find libvvp. Best-effort; returns True on success."""
+    parser = ConfigParser()
+    cfg = _config_path()
+    try:
+        parser.read(cfg)
+        if not parser.has_section('COSIM'):
+            parser.add_section('COSIM')
+        if iverilog_path:
+            parser.set('COSIM', 'IVERILOG', iverilog_path)
+            libdir = os.path.join(_prefix_of(iverilog_path), 'lib')
+            if os.path.isdir(libdir):
+                parser.set('COSIM', 'IVERILOG_LIB', libdir)
+        if vvp_path:
+            parser.set('COSIM', 'VVP', vvp_path)
+        os.makedirs(os.path.dirname(cfg), exist_ok=True)
+        with open(cfg, 'w') as fh:
+            parser.write(fh)
+        return True
+    except (OSError, ConfigError):
+        return False
 
 
 def iverilog_libdir():
