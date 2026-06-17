@@ -37,6 +37,7 @@ class FlowNavigator(QtWidgets.QWidget):
         super().__init__(parent)
         self.filecount = filecount
         self._built = {}        # stage id -> True once its widget is realised
+        self._complete = set()  # stages the user has finished (rail check-mark)
         self.obj_Maker = None
         self.obj_NgVeri = None
         self.obj_Verifier = None
@@ -64,12 +65,16 @@ class FlowNavigator(QtWidgets.QWidget):
                                          font-weight:bold; }
             QListWidget::item:hover:!selected { background:#e3e8ee; }
         """)
-        for n, (label, hint) in enumerate([
-                ("1  ·  Author", "Write / load your HDL module(s)"),
-                ("2  ·  Verify", "Compile and simulate (Icarus); view waveform"),
-                ("3  ·  Convert", "Build an ngspice code-model + KiCad symbol"),
-                ("VHDL  ·  NGHDL", "VHDL path: author → simulate → model (GHDL)"),
-                ("4  ·  Place", "Drop the generated block in your schematic")]):
+        self._stage_labels = [
+            "1  ·  Author", "2  ·  Verify", "3  ·  Convert",
+            "VHDL  ·  NGHDL", "4  ·  Place"]
+        hints = [
+            "Write / load your HDL module(s)",
+            "Compile and simulate (Icarus); view waveform",
+            "Build an ngspice code-model + KiCad symbol",
+            "VHDL path: author → simulate → model (GHDL)",
+            "Drop the generated block in your schematic"]
+        for label, hint in zip(self._stage_labels, hints):
             item = QtWidgets.QListWidgetItem(label)
             item.setToolTip(hint)
             self.rail.addItem(item)
@@ -79,12 +84,25 @@ class FlowNavigator(QtWidgets.QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
 
+        header_bar = QtWidgets.QWidget()
+        header_bar.setStyleSheet(
+            "QWidget { background:#ffffff; border-bottom:1px solid #e0e4e8; }")
+        hb = QtWidgets.QHBoxLayout(header_bar)
+        hb.setContentsMargins(14, 6, 10, 6)
         self.header = QtWidgets.QLabel()
-        self.header.setStyleSheet(
-            "QLabel { background:#ffffff; border-bottom:1px solid #e0e4e8;"
-            " padding:8px 14px; font-size:13px; color:#5a6570; }")
+        self.header.setStyleSheet("color:#5a6570; font-size:13px;")
         self.header.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        right.addWidget(self.header)
+        hb.addWidget(self.header)
+        hb.addStretch(1)
+        # One primary action per stage: advance the flow.
+        self.btn_next = QtWidgets.QPushButton("Next  ▸")
+        self.btn_next.setStyleSheet(
+            "QPushButton { background:#1565c0; color:white; border:none;"
+            " border-radius:5px; padding:5px 14px; font-weight:bold; }"
+            " QPushButton:disabled { background:#c4ccd4; }")
+        self.btn_next.clicked.connect(self._go_next)
+        hb.addWidget(self.btn_next)
+        right.addWidget(header_bar)
 
         self.stack = QtWidgets.QStackedWidget()
         right.addWidget(self.stack, 1)
@@ -117,17 +135,58 @@ class FlowNavigator(QtWidgets.QWidget):
         if stage == AUTHOR and self.obj_Maker is not None:
             self.obj_Maker.refresh_change()
 
+    #: Linear common path (the VHDL/NGHDL branch sits outside it).
+    _LINEAR = (AUTHOR, VERIFY, CONVERT, PLACE)
+
+    def _next_stage(self, stage):
+        """The stage the Next button should advance to, or None at the end."""
+        if stage in self._LINEAR:
+            i = self._LINEAR.index(stage)
+            if i + 1 < len(self._LINEAR):
+                return self._LINEAR[i + 1]
+            return None
+        return PLACE   # from the NGHDL branch, rejoin at Place
+
+    def _go_next(self):
+        nxt = self._next_stage(self.rail.currentRow())
+        if nxt is not None:
+            self.rail.setCurrentRow(nxt)
+
     def _update_header(self, stage):
         crumbs = ["Author", "Verify", "Convert", "NGHDL (VHDL)", "Place"]
         parts = []
         for i, name in enumerate(crumbs):
             if i == stage:
                 parts.append(f"<b>{name}</b>")
+            elif i in self._complete:
+                parts.append(f"<span style='color:#2e7d32'>✓ {name}</span>")
             else:
                 parts.append(f"<span style='color:#9aa4ad'>{name}</span>")
         sep = " &nbsp;&rsaquo;&nbsp; "
         self.header.setText("Model Creation &nbsp;&mdash;&nbsp; " +
                             sep.join(parts))
+
+        # One primary action per stage: label/disable the Next button.
+        nxt = self._next_stage(stage)
+        if nxt is None:
+            self.btn_next.setText("Done")
+            self.btn_next.setEnabled(False)
+        else:
+            self.btn_next.setText("Next: %s  ▸" % crumbs[nxt])
+            self.btn_next.setEnabled(True)
+
+    def _mark_complete(self, stage):
+        """Flag a stage finished: a green ✓ in the rail + breadcrumb. Called
+        when Verify reports a clean simulation, so the user is steered to
+        Convert next (progressive disclosure)."""
+        if stage in self._complete:
+            self._update_header(self.rail.currentRow())
+            return
+        self._complete.add(stage)
+        item = self.rail.item(stage)
+        if item is not None and not item.text().startswith("✓"):
+            item.setText("✓  " + self._stage_labels[stage])
+        self._update_header(self.rail.currentRow())
 
     def _set_panel(self, stage, widget):
         holder = self._panels[stage]
@@ -183,6 +242,9 @@ class FlowNavigator(QtWidgets.QWidget):
         from .VerilogVerifier import VerilogVerifier
         self.obj_Verifier = VerilogVerifier()
         self.obj_Verifier.sendToNgVeri.connect(self._on_verified)
+        # A clean simulation marks Verify done and steers toward Convert.
+        self.obj_Verifier.simulationSucceeded.connect(
+            lambda: self._mark_complete(VERIFY))
         return self.obj_Verifier
 
     def _make_convert(self):
@@ -225,6 +287,7 @@ class FlowNavigator(QtWidgets.QWidget):
                 self.obj_Maker.load_verilog(filepath)
             except Exception:
                 pass
+        self._mark_complete(VERIFY)   # sending implies it verified
         self._ensure_stage(CONVERT)
         self.rail.setCurrentRow(CONVERT)
 

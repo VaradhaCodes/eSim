@@ -221,6 +221,9 @@ class ConsoleEdit(QtWidgets.QTextEdit):
 
 class VerilogVerifier(QtWidgets.QWidget):
     sendToNgVeri = QtCore.pyqtSignal(str)
+    #: emitted after a compile+simulate run finishes cleanly, so the host
+    #: (Flow Navigator) can mark Verify complete and nudge toward Convert.
+    simulationSucceeded = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1520,6 +1523,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         else:
             self.log("Error: No VCD file produced. Make sure your testbench contains "
                      '$dumpfile("sim_out.vcd") and $dumpvars(0, ...).')
+
+        # Compile + simulate both succeeded: let the host advance the flow.
+        if run.ok:
+            self.simulationSucceeded.emit()
 
     def send_to_makerchip(self):
         self.btn_send.setEnabled(False)
