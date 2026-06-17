@@ -1,4 +1,5 @@
 from PyQt6 import QtWidgets
+from configuration import Dialogs
 from projManagement.Validation import Validation
 from projManagement.projectPaths import resolve_stem
 from configuration.Appconfig import Appconfig
@@ -43,7 +44,7 @@ class convertSub(QtWidgets.QWidget):
                 var2 = "sub"
                 self.obj_dockarea.kicadToNgspiceEditor(var1, var2)
             else:
-                self.msg = QtWidgets.QErrorMessage()
+                self.msg = Dialogs.make_error_message(self)
                 self.msg.setModal(True)
                 self.msg.setWindowTitle("Error Message")
                 self.msg.showMessage(
@@ -52,7 +53,7 @@ class convertSub(QtWidgets.QWidget):
                 )
                 self.msg.exec()
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(

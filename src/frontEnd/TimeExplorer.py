@@ -3,6 +3,7 @@ import re
 import shutil
 import json
 from PyQt6 import QtWidgets
+from configuration import Dialogs
 
 class TimeExplorer(QtWidgets.QWidget):
 
@@ -93,25 +94,25 @@ class TimeExplorer(QtWidgets.QWidget):
             snapshot_filename = f"{file_name}({timestamp})"
             snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
 
-            confirm = QtWidgets.QMessageBox.question(
+            confirm = Dialogs.question(
                 self, "Confirm Deletion",
                 f"Are you sure you want to delete this snapshot?\n\n{file_name}",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                Dialogs.Button.Yes | Dialogs.Button.No
             )
 
-            if confirm == QtWidgets.QMessageBox.Yes:
+            if confirm == Dialogs.Button.Yes:
                 try:
                     os.remove(snapshot_path)
                     self.treewidget.takeTopLevelItem(self.treewidget.indexOfTopLevelItem(item))
                 except Exception as e:
-                    QtWidgets.QMessageBox.warning(self, "Error", f"Could not delete snapshot:\n{e}")
+                    Dialogs.warning(self, "Error", f"Could not delete snapshot:\n{e}")
         else:
-            confirm = QtWidgets.QMessageBox.question(
+            confirm = Dialogs.question(
                 self, "Clear All Snapshots",
                 f"No file selected.\nDo you want to delete ALL snapshots for '{project_name}'?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                Dialogs.Button.Yes | Dialogs.Button.No
             )
-            if confirm == QtWidgets.QMessageBox.Yes:
+            if confirm == Dialogs.Button.Yes:
                 deleted = 0
                 for filename in os.listdir(snapshot_dir):
                     path = os.path.join(snapshot_dir, filename)
@@ -121,7 +122,7 @@ class TimeExplorer(QtWidgets.QWidget):
                     except Exception as e:
                         print(f"Error deleting {filename}: {e}")
                 self.treewidget.clear()
-                QtWidgets.QMessageBox.information(self, "Deleted", f"{deleted} snapshots deleted.")
+                Dialogs.information(self, "Deleted", f"{deleted} snapshots deleted.")
 
     def restore_snapshots(self):
         selected_items = self.treewidget.selectedItems()
@@ -132,7 +133,7 @@ class TimeExplorer(QtWidgets.QWidget):
         snapshot_dir = os.path.join(self.user_home, ".esim", "history", project_name)
 
         if not os.path.exists(snapshot_dir):
-            QtWidgets.QMessageBox.warning(self, "No Snapshots", "No snapshots found for this project.")
+            Dialogs.warning(self, "No Snapshots", "No snapshots found for this project.")
             return
 
         if selected_items:
@@ -144,13 +145,13 @@ class TimeExplorer(QtWidgets.QWidget):
             snapshot_path = os.path.join(snapshot_dir, snapshot_filename)
             destination_path = os.path.join(self.current_project_path["ProjectPath"], file_name)
 
-            confirm = QtWidgets.QMessageBox.question(
+            confirm = Dialogs.question(
                 self, "Confirm Restore",
                 f"Do you want to restore this snapshot?\n\n{file_name}",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                Dialogs.Button.Yes | Dialogs.Button.No
             )
 
-            if confirm == QtWidgets.QMessageBox.Yes:
+            if confirm == Dialogs.Button.Yes:
                 try:
                     if os.path.exists(destination_path):
                         os.remove(destination_path)
@@ -158,17 +159,17 @@ class TimeExplorer(QtWidgets.QWidget):
                     if os.path.exists(snapshot_path):
                         os.remove(snapshot_path)
                     self.treewidget.takeTopLevelItem(self.treewidget.indexOfTopLevelItem(item))
-                    QtWidgets.QMessageBox.information(self, "Restored", f"{file_name} has been restored.")
+                    Dialogs.information(self, "Restored", f"{file_name} has been restored.")
                 except Exception as e:
-                    QtWidgets.QMessageBox.warning(self, "Error", f"Could not restore:\n{e}")
+                    Dialogs.warning(self, "Error", f"Could not restore:\n{e}")
 
         else:
-            confirm = QtWidgets.QMessageBox.question(
+            confirm = Dialogs.question(
                 self, "Restore All Snapshots",
                 "No file selected.\nDo you want to restore ALL snapshot files?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                Dialogs.Button.Yes | Dialogs.Button.No
             )
-            if confirm == QtWidgets.QMessageBox.Yes:
+            if confirm == Dialogs.Button.Yes:
                 restored = 0
                 for filename in os.listdir(snapshot_dir):
                     match = re.match(r"(.+)\((\d{1,2}\.\d{2} [APM]{2} \d{2}-\d{2}-\d{4})\)$", filename)
@@ -189,4 +190,4 @@ class TimeExplorer(QtWidgets.QWidget):
 
                 self.treewidget.clear()
 
-                QtWidgets.QMessageBox.information(self, "Restored", f"{restored} snapshot(s) restored.")
+                Dialogs.information(self, "Restored", f"{restored} snapshot(s) restored.")

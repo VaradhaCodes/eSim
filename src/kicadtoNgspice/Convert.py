@@ -2,7 +2,7 @@ import os
 import shutil
 from xml.etree import ElementTree as ET
 
-from PyQt6 import QtWidgets
+from configuration import Dialogs
 
 from . import TrackWidget
 from maker import CosimConfig
@@ -836,7 +836,7 @@ sky130_fd_pr__model__r+c.model.spice
 
         if len(self.obj_track.subcircuitList) != len(
                 self.obj_track.subcircuitTrack):
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(None)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(

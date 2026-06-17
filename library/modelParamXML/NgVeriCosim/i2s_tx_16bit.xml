@@ -1,0 +1,1 @@
+<model><name>i2s_tx_16bit</name><type>NgVeriCosim</type><node_number>2</node_number><title>Add parameters for i2s_tx_16bit</title><split>34-V:2-V</split><param><instance_id default="1">Enter Instance ID (Between 0-99)</instance_id></param></model>

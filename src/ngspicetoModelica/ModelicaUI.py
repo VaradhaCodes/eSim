@@ -2,6 +2,7 @@ import os
 import glob
 import traceback
 from PyQt6 import QtWidgets, QtCore
+from configuration import Dialogs
 from configuration.Appconfig import Appconfig
 from projManagement import Worker
 from projManagement.Validation import Validation
@@ -211,7 +212,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
 
             os.chdir(cwd)
 
-            self.msg = QtWidgets.QMessageBox()
+            self.msg = Dialogs.make_message_box(self)
             self.msg.setText(
                 "Ngspice netlist successfully converted to OpenModelica " +
                 "netlist"
@@ -225,7 +226,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
         except BaseException as e:
             traceback.print_exc()
             print("================")
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Conversion Error")
             self.msg.showMessage(
@@ -246,7 +247,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
             self.obj_appconfig.print_info("OMEdit called")
 
         except BaseException:
-            self.msg = QtWidgets.QMessageBox()
+            self.msg = Dialogs.make_message_box(self)
             self.msgContent = (
                 "There was an error while opening OMEdit.<br/>"
                 "Please make sure OpenModelica is installed in your"

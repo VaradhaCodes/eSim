@@ -17,9 +17,10 @@
 # =========================================================================
 
 from PyQt6 import QtWidgets, QtCore
+from configuration import Dialogs
 from .Validation import Validation
 from .projectPaths import find_anchors, resolve_stem, \
-    main_schematic, stem_from_file
+    main_schematic, stem_from_file, canonical_path
 from configuration.Appconfig import Appconfig
 import os
 import json
@@ -62,12 +63,19 @@ class OpenProjectInfo(QtWidgets.QWidget):
             # folder's name (see projectPaths.resolve_stem).
             self.projDir = QtCore.QDir.toNativeSeparators(
                 QtWidgets.QFileDialog.getExistingDirectory(
-                    self, "Open Project", self.openDir
+                    Dialogs.resolve_parent(self), "Open Project", self.openDir
                 )
             )
         if not self.projDir:
             self.obj_Appconfig.print_info('No Project opened')
             return None, None
+
+        # Canonicalise to the project's identity key the moment we have a path:
+        # everything downstream (current_project, project_explorer keys, the
+        # tree node) must use this one form so the same folder -- reached via a
+        # symlink, a '..' path, a trailing slash or a case variant -- is never
+        # registered twice. See projectPaths.canonical_path.
+        self.projDir = canonical_path(self.projDir)
 
         proj_files = find_anchors(self.projDir, 'proj')
 
@@ -99,8 +107,8 @@ class OpenProjectInfo(QtWidgets.QWidget):
         has_cir = os.path.exists(
             os.path.join(self.projDir, str(stem) + ".cir"))
         if not os.path.exists(schematic) and not has_cir:
-            QtWidgets.QMessageBox.warning(
-                None, "Incomplete Project",
+            Dialogs.warning(
+                self, "Incomplete Project",
                 "<b>Warning: this folder has a project (.proj) file but no "
                 "schematic ({0}.kicad_sch / {0}.sch) or netlist "
                 "({0}.cir).</b><br/>The project will open, but some operations "
@@ -135,7 +143,7 @@ class OpenProjectInfo(QtWidgets.QWidget):
         """
         stems = [stem_from_file(p) for p in proj_files]
         choice, ok = QtWidgets.QInputDialog.getItem(
-            self, "Select Project",
+            Dialogs.resolve_parent(self), "Select Project",
             "This folder contains multiple eSim projects.\n"
             "Choose one to open:",
             stems, 0, False
@@ -153,8 +161,8 @@ class OpenProjectInfo(QtWidgets.QWidget):
             "No eSim project (.proj) file found in the selected folder. "
             "Please select a folder that contains an eSim project."
         )
-        reply = QtWidgets.QMessageBox.critical(
-            None, "Error Message",
+        reply = Dialogs.critical(
+            self, "Error Message",
             "<b>Error: No eSim project (.proj) file found in this folder."
             "</b><br/><b>Please select a folder that contains an eSim project "
             "(a .proj file), or cancel.</b>",

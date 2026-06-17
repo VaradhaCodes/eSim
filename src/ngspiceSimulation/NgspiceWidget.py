@@ -4,6 +4,7 @@ import codecs
 import logging
 from typing import List, Optional
 from PyQt6 import QtWidgets, QtCore
+from configuration import Dialogs
 from PyQt6.QtCore import pyqtSignal, pyqtSlot
 from configuration.Appconfig import Appconfig
 from frontEnd import TerminalUi
@@ -145,7 +146,7 @@ class NgspiceWidget(QtWidgets.QWidget):
     def _start_process(self) -> None:
         if self.uses_dcosim:
             if not CosimConfig.has_dcosim():
-                QtWidgets.QMessageBox.warning(
+                Dialogs.warning(
                     self, "d_cosim unavailable",
                     CosimConfig.missing_reason() or
                     "This ngspice build cannot run d_cosim co-simulation.")
@@ -375,7 +376,7 @@ class NgspiceWidget(QtWidgets.QWidget):
                 and exit_code == 0)
 
     def _show_cancellation_message(self) -> None:
-        message_dialog = QtWidgets.QMessageBox()
+        message_dialog = Dialogs.make_message_box(self)
         message_dialog.setModal(True)
         message_dialog.setIcon(QtWidgets.QMessageBox.Icon.Warning)
         message_dialog.setWindowTitle("Warning Message")
@@ -392,7 +393,7 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.terminal_ui.simulationConsole.append(failure_message)
 
         error_message = self._get_error_message(error_type)
-        error_dialog = QtWidgets.QErrorMessage()
+        error_dialog = Dialogs.make_error_message(self)
         error_dialog.setModal(True)
         error_dialog.setWindowTitle("Error Message")
         error_dialog.showMessage(error_message)

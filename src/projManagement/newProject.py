@@ -18,6 +18,7 @@
 
 from PyQt6 import QtWidgets
 from .Validation import Validation
+from .projectPaths import canonical_path
 from configuration.Appconfig import Appconfig
 import os
 import json
@@ -101,7 +102,12 @@ class NewProjectInfo(QtWidgets.QWidget):
             f.write("schematicFile " + self.projName + ".kicad_sch\n")
             f.close()
 
-            # Now Change the current working project
+            # Now Change the current working project. Canonicalise the folder
+            # to its identity key (see projectPaths.canonical_path) before it
+            # becomes the project_explorer/current_project key, so a project is
+            # registered under one form -- matching what openProject and the
+            # project tree compare against.
+            self.projDir = canonical_path(self.projDir)
             newprojlist = []
             # self.obj_appconfig = Appconfig()
             self.obj_appconfig.current_project['ProjectName'] = self.projDir

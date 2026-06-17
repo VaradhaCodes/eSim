@@ -2,6 +2,7 @@ import os
 import subprocess
 import shutil
 from PyQt6.QtWidgets import QMessageBox
+from configuration import Dialogs
 from frontEnd import ProjectExplorer
 
 class PspiceConverter:
@@ -50,7 +51,7 @@ class PspiceConverter:
             try:
                 subprocess.run(command, check=True)
                 # Message box with the conversion success message
-                msg_box = QMessageBox()
+                msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Information)
                 msg_box.setWindowTitle("Conversion Successful")
                 newFile = str(conPath + "/" + filename)
@@ -72,7 +73,7 @@ class PspiceConverter:
         else:
             print("File is empty. Cannot perform conversion.")
             # A message box indicating that the file is empty
-            msg_box = QMessageBox()
+            msg_box = Dialogs.make_message_box(self.parent)
             msg_box.setIcon(QMessageBox.Icon.Warning)
             msg_box.setWindowTitle("Empty File")
             msg_box.setText("The selected file is empty. Conversion cannot be performed.")
@@ -84,7 +85,7 @@ class PspiceConverter:
             # Check if the file path contains spaces
             if ' ' in file_path:
                 # Show a message box indicating that spaces are not allowed
-                msg_box = QMessageBox()
+                msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Warning)
                 msg_box.setWindowTitle("Invalid File Path")
                 msg_box.setText("Spaces are not allowed in the file path.")
@@ -96,7 +97,7 @@ class PspiceConverter:
                 print(file_path)
                 self.convert(file_path)
             else:
-                msg_box = QMessageBox()
+                msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Warning)
                 msg_box.setWindowTitle("Invalid File Path")
                 msg_box.setText("Only .sch file can be converted.")
@@ -108,7 +109,7 @@ class PspiceConverter:
             print("No file selected.")
 
             # Message box indicating that no file is selected
-            msg_box = QMessageBox()
+            msg_box = Dialogs.make_message_box(self.parent)
             msg_box.setIcon(QMessageBox.Icon.Warning)
             msg_box.setWindowTitle("No File Selected")
             msg_box.setText("Please select a file before uploading.")

@@ -33,6 +33,7 @@ import os
 import tempfile
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
+from configuration import Dialogs
 
 
 # ── Robust S-expression helpers for the shared eSim_Ngveri.kicad_sym lib ──
@@ -166,7 +167,7 @@ class AutoSchematic:
 
         elif (xmlFound == os.path.join(self.xml_loc, 'Ngveri')):
             print('Library already exists...')
-            ret = QtWidgets.QMessageBox.warning(
+            ret = Dialogs.warning(
                 None, "Warning", '''<b>Library files for this model''' +
                 ''' already exist. Do you want to overwrite it?</b><br/>
                 If yes press ok, else cancel it and ''' +
@@ -194,7 +195,7 @@ class AutoSchematic:
                 # Same name currently a d_cosim block. One name = one backend,
                 # so offer to switch instead of erroring: drop the d_cosim
                 # version, then build the NgVeri code model. Latest wins.
-                ret = QtWidgets.QMessageBox.question(
+                ret = Dialogs.question(
                     None, "Model already exists",
                     "<b>'" + str(self.modelname) + "' already exists as a "
                     "d_cosim block (Icarus Verilog).</b><br/>"
@@ -216,7 +217,7 @@ class AutoSchematic:
                 return "No Error"
             # A built-in / NgHDL / standard library primitive — not ours to
             # replace. The user must rename their module.
-            QtWidgets.QMessageBox.critical(
+            Dialogs.critical(
                 None, "Error",
                 "<b>A model named '" + str(self.modelname) + "' already "
                 "exists in the eSim '" + found + "' library.</b><br/>"

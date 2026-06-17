@@ -29,12 +29,14 @@
 
 # importing the files and libraries
 from PyQt6 import QtCore, QtWidgets
+from configuration import Dialogs
 from . import Maker
 from . import ModelGeneration
 from . import createkicad
 from . import createkicadCosim
 from . import CosimConfig
 from .CosimLogger import CosimLog
+from .RemoveItemsDialog import RemoveItemsDialog
 import os
 import shutil
 from configuration.Appconfig import Appconfig
@@ -128,8 +130,8 @@ class NgVeri(QtWidgets.QWidget):
         # b=Maker.Maker(self)
         print(Maker.verilogFile)
         if Maker.verilogFile[self.filecount] == "":
-            reply = QtWidgets.QMessageBox.critical(
-                None,
+            reply = Dialogs.critical(
+                self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
                 Please choose a verilog file in Makerchip Tab</b>",
@@ -150,12 +152,13 @@ class NgVeri(QtWidgets.QWidget):
         # declined switch aborts the build.
         if not self._switch_backends_if_needed("ngveri", file):
             return
-        if self.entry_var[1].findText(file) == -1:
-            self.entry_var[1].addItem(file)
+        # The remove-model dialog reads modpath.lst fresh each time it opens, so
+        # a successful build (model.modpathlst()) is what makes this model show
+        # up there -- no combo to pre-register into anymore.
 
         if not Maker.makerchipTOSAccepted(True):
-            QtWidgets.QMessageBox.warning(
-                None, "Warning Message",
+            Dialogs.warning(
+                self, "Warning Message",
                 "Please accept the Makerchip Terms of Service "
                 "to proceed further.",
                 QtWidgets.QMessageBox.StandardButton.Ok
@@ -251,8 +254,8 @@ class NgVeri(QtWidgets.QWidget):
             Makerchip). Gated on the d_cosim toolchain being present.
         '''
         if not CosimConfig.has_iverilog():
-            QtWidgets.QMessageBox.warning(
-                None, "d_cosim unavailable",
+            Dialogs.warning(
+                self, "d_cosim unavailable",
                 "<b>" + (CosimConfig.missing_reason() or
                          "Icarus Verilog (with libvvp) not found.") + "</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
@@ -260,8 +263,8 @@ class NgVeri(QtWidgets.QWidget):
 
         if len(Maker.verilogFile) < (self.filecount + 1) or \
                 Maker.verilogFile[self.filecount] == "":
-            QtWidgets.QMessageBox.critical(
-                None, "Error Message",
+            Dialogs.critical(
+                self, "Error Message",
                 "<b>Error: No Verilog File Chosen. Please choose a "
                 "verilog file in Makerchip Tab</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
@@ -296,14 +299,9 @@ class NgVeri(QtWidgets.QWidget):
                 schematicLib = createkicadCosim.CosimSchematic()
                 schematicLib.init(modelname, model.modelpath, "icarus", sim_lib)
                 if schematicLib.createKicadSymbol() != "Error":
-                    # Register in the remove-picker ONLY after the model really
-                    # exists, tagged so its deletion runs the d_cosim teardown.
-                    combo = self.entry_var[1]
-                    if combo.findText(modelname) == -1:
-                        combo.addItem(modelname)
-                        combo.setItemData(
-                            combo.count() - 1, "cosim",
-                            QtCore.Qt.ItemDataRole.UserRole)
+                    # The model now exists on disk as NgVeriCosim/<name>.xml,
+                    # which is what the remove-model dialog scans -- nothing to
+                    # register in a combo anymore.
                     model.clog.ok(
                         'd_cosim model "' + modelname + '" created (Icarus). '
                         'Place it from the eSim_NgVeriCosim library.')
@@ -325,8 +323,8 @@ class NgVeri(QtWidgets.QWidget):
             by the verilog top module
         '''
         if len(Maker.verilogFile) < (self.filecount + 1):
-            reply = QtWidgets.QMessageBox.critical(
-                None,
+            reply = Dialogs.critical(
+                self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
                 Please choose a verilog file in Makerchip Tab</b>",
@@ -348,8 +346,8 @@ class NgVeri(QtWidgets.QWidget):
             by the verilog top module.
         '''
         if len(Maker.verilogFile) < (self.filecount + 1):
-            reply = QtWidgets.QMessageBox.critical(
-                None,
+            reply = Dialogs.critical(
+                self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
                 Please choose a verilog file in Makerchip Tab</b>",
@@ -425,54 +423,81 @@ class NgVeri(QtWidgets.QWidget):
 
         return self.optionsbox
 
-    def edit_modlst(self, text):
+    def _list_models(self):
         '''
-            Remove-model handler for the picker combo. Dispatches to the right
-            backend teardown -- legacy NgVeri (Verilator -> Ngveri.cm) vs
-            d_cosim (Icarus -> eSim_NgVeriCosim) -- since the two share nothing
-            on disk and the wrong teardown silently leaves a model behind.
+            Scan disk for every removable model and tag each with its backend.
+            Disk is the single source of truth (survives restarts and backend
+            switches): legacy NgVeri models are lines in modpath.lst; d_cosim
+            models are NgVeriCosim/<name>.xml files (never in modpath.lst).
+
+            Returns (names, badges) where badges maps each name to
+            "NgVeri"/"d_cosim". modpath.lst is created on demand so a fresh
+            install lists cleanly.
         '''
-        if text == "Remove Verilog Models":
+        badges = {}
+
+        modpath_file = self.digital_home + '/modpath.lst'
+        if not os.path.exists(modpath_file):
+            os.makedirs(self.digital_home, exist_ok=True)
+            open(modpath_file, 'w').close()
+        with open(modpath_file) as fh:
+            for line in fh:
+                name = line.strip()
+                if name:
+                    badges[name] = "NgVeri"
+
+        cosim_dir = os.path.join(self._xml_loc, 'NgVeriCosim')
+        if os.path.isdir(cosim_dir):
+            for fname in sorted(os.listdir(cosim_dir)):
+                if fname.endswith('.xml'):
+                    name = fname[:-4]
+                    # d_cosim wins the badge: a name present in both flows is
+                    # torn down by _model_backend below, which trusts the xml.
+                    badges[name] = "d_cosim"
+
+        return list(badges.keys()), badges
+
+    def open_remove_models(self):
+        '''
+            Open the searchable, multi-select dialog and tear down whatever the
+            user picks. Dispatches each name to the right backend teardown --
+            legacy NgVeri (Verilator -> Ngveri.cm) vs d_cosim (Icarus ->
+            eSim_NgVeriCosim) -- since the two share nothing on disk and the
+            wrong teardown silently leaves a model behind.
+        '''
+        names, badges = self._list_models()
+        if not names:
+            Dialogs.information(
+                self, "Remove Verilog Models",
+                "There are no Verilog models to remove.",
+                QtWidgets.QMessageBox.StandardButton.Ok)
             return
-        # A blank/whitespace selection must never reach the teardown helpers:
-        # os.path.join(base, "") collapses to "base/" and rmtree would wipe the
-        # entire models directory. (Defence in depth -- the helpers guard too.)
-        if not text or not str(text).strip():
-            return
-        combo = self.entry_var[1]
-        index = combo.findText(text)
-        # Which backend owns this model: the on-disk modelParamXML layout is
-        # the source of truth (it survives a backend switch, after which a
-        # stale per-item UserRole tag would point at the old engine and
-        # silently leave the model behind). The tag is only a fallback for a
-        # name not yet on disk.
-        backend = self._model_backend(text) \
-            or combo.itemData(index, QtCore.Qt.ItemDataRole.UserRole)
 
-        ret = QtWidgets.QMessageBox.warning(
-            None, "Warning",
-            '''<b>Do you want to remove the model: ''' + text,
-            QtWidgets.QMessageBox.StandardButton.Ok,
-            QtWidgets.QMessageBox.StandardButton.Cancel)
-
-        # Reset the picker back to the sentinel with signals blocked. Mutating
-        # the combo re-fires currentTextChanged synchronously, which would
-        # re-enter this slot for the item the selection lands on -> a confirm
-        # popup for EVERY model. Blocking signals means only the user's pick is
-        # ever handled, and a cancelled remove leaves the list untouched.
-        combo.blockSignals(True)
-        if ret == QtWidgets.QMessageBox.StandardButton.Ok:
-            combo.removeItem(index)
-        combo.setCurrentIndex(0)
-        combo.blockSignals(False)
-
-        if ret != QtWidgets.QMessageBox.StandardButton.Ok:
+        dlg = RemoveItemsDialog(
+            "Remove Verilog Models", names, badges=badges,
+            item_noun="model", parent=self)
+        if not dlg.exec():
             return
 
-        if backend == "cosim":
-            self._remove_cosim_model(text)
-        else:
-            self._remove_ngveri_model(text)
+        log = CosimLog(self.entry_var[0])
+        rebuilt_needed = False
+        for name in dlg.selected_items():
+            # Belt-and-braces: a blank name must never reach the teardown
+            # helpers (os.path.join(base, "") -> "base/" -> rmtree wipes all
+            # models). The helpers guard too; this is defence in depth.
+            if not name or not name.strip():
+                continue
+            # On-disk layout is the source of truth for which engine owns it.
+            if self._model_backend(name) == "cosim":
+                self._remove_cosim_model(name)
+            else:
+                # Defer the (expensive) Ngveri.cm rebuild to one pass after
+                # every model is gone, not once per model.
+                self._remove_ngveri_model(name, rebuild=False)
+                rebuilt_needed = True
+
+        if rebuilt_needed:
+            self._rebuild_ngveri_cm(log)
 
     def _model_backend(self, name):
         '''
@@ -561,12 +586,16 @@ class NgVeri(QtWidgets.QWidget):
             log.info('Dropped "' + str(text) + '" from modpath.lst')
         return True
 
-    def _remove_ngveri_model(self, text):
+    def _remove_ngveri_model(self, text, rebuild=True):
         '''
             Tear down a legacy NgVeri (Verilator) model: drop it from
             modpath.lst, remove its eSim_Ngveri symbol + param XML, delete the
             per-model build dir, then rebuild/reinstall Ngveri.cm so ngspice
             truly unlinks it.
+
+            Pass rebuild=False when removing several models in one pass; the
+            caller then runs a single _rebuild_ngveri_cm() at the end rather
+            than rebuilding the code model once per model.
         '''
         log = CosimLog(self.entry_var[0])
         log.phase('REMOVE NgVeri model "' + str(text) + '"')
@@ -610,11 +639,21 @@ class NgVeri(QtWidgets.QWidget):
                 log.warn("Could not remove " + label + " dir '" +
                          model_dir + "': " + str(err))
 
+        log.ok('NgVeri model "' + str(text) + '" files removed.')
+        if rebuild:
+            self._rebuild_ngveri_cm(log)
+
+    def _rebuild_ngveri_cm(self, log):
+        '''
+            Rebuild and reinstall the Ngveri.cm code model so ngspice unlinks
+            every model already stripped from modpath.lst. Run once after a
+            batch removal. prune_modpathlst() first sweeps any unrelated ghost
+            entries so the rebuild can't fail on a dead line left by something
+            else.
+        '''
         self.fname = Maker.verilogFile[self.filecount]
         model = ModelGeneration.ModelGeneration(
             self.fname, self.entry_var[0])
-        # Sweep any other ghosts before rebuilding, so this removal can't fail
-        # on an unrelated dead entry.
         model.prune_modpathlst()
 
         try:
@@ -632,14 +671,14 @@ class NgVeri(QtWidgets.QWidget):
                     "the ngspice code-model rebuild returned a "
                     "non-zero exit status")
         except Exception as err:
-            QtWidgets.QMessageBox.critical(
-                None, "Error Message",
-                "The verilog model '" + str(text) +
-                "' could not be removed: " + str(err),
+            Dialogs.critical(
+                self, "Error Message",
+                "The ngspice code model could not be rebuilt after removal: " +
+                str(err),
                 QtWidgets.QMessageBox.StandardButton.Ok
             )
         else:
-            log.ok('NgVeri model "' + str(text) + '" removed.')
+            log.ok("Ngveri.cm rebuilt.")
 
     # ------------------------------------------------------------------ #
     #  Backend switching (d_cosim <-> legacy NgVeri for the same model)
@@ -651,15 +690,6 @@ class NgVeri(QtWidgets.QWidget):
                 return any(ln.strip() == str(name) for ln in f)
         except OSError:
             return False
-
-    def _drop_picker_item(self, name):
-        '''Remove `name` from the remove-model combo, signal-safe.'''
-        combo = self.entry_var[1]
-        idx = combo.findText(str(name))
-        if idx != -1:
-            combo.blockSignals(True)
-            combo.removeItem(idx)
-            combo.blockSignals(False)
 
     def _purge_legacy_registration(self, name, log):
         '''
@@ -700,8 +730,8 @@ class NgVeri(QtWidgets.QWidget):
             Yes/No dialog shown before replacing an existing model's backend.
             Returns True if the user agreed to switch.
         '''
-        ret = QtWidgets.QMessageBox.question(
-            None, "Switch model backend?",
+        ret = Dialogs.question(
+            self, "Switch model backend?",
             '<b>"' + str(name) + '"</b> already exists as a <b>' +
             from_backend + '</b> model.<br><br>Rebuild it as a <b>' +
             to_backend + '</b> model instead?<br>'
@@ -736,7 +766,6 @@ class NgVeri(QtWidgets.QWidget):
             log.phase('SWITCH backend: d_cosim -> NgVeri for "' + low + '"')
             log.info("Removing existing d_cosim version first.")
             self._remove_cosim_model(low)
-            self._drop_picker_item(low)
             return True
         elif target == "cosim":
             if not (self._legacy_registered(name) or
@@ -752,68 +781,65 @@ class NgVeri(QtWidgets.QWidget):
             log.info("Removing existing NgVeri version first "
                      "(no Ngveri.cm rebuild).")
             self._purge_legacy_registration(reg, log)
-            self._drop_picker_item(reg)
             return True
         return True
 
-    def lint_off_edit(self, text):
-        '''
-          This is to remove lint_off comments needed by the verilator warnings.
-          This function writes to the lint_off.txt in the library/tlv folder.
-        '''
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
+    def _lint_off_path(self):
+        '''Path to library/tlv/lint_off.txt (cwd-relative, like the rest).'''
+        init_path = '' if os.name == 'nt' else '../../'
+        return os.path.join(init_path, "library/tlv/lint_off.txt")
 
-        if text == "Remove lint_off":
+    def _list_lint_off(self):
+        '''Current lint_off entries (one per non-blank line), in file order.'''
+        try:
+            with open(self._lint_off_path()) as fh:
+                return [ln.strip() for ln in fh if ln.strip()]
+        except OSError:
+            return []
+
+    def open_remove_lint_off(self):
+        '''
+            Open the searchable, multi-select dialog and drop the chosen
+            lint_off entries from library/tlv/lint_off.txt in one pass.
+        '''
+        entries = self._list_lint_off()
+        if not entries:
+            Dialogs.information(
+                self, "Remove lint_off",
+                "There are no lint_off entries to remove.",
+                QtWidgets.QMessageBox.StandardButton.Ok)
             return
-        # Same re-entrancy guard as edit_modlst: removeItem/setCurrentIndex
-        # re-fire currentTextChanged synchronously, which without blockSignals
-        # pops a confirm dialog for every remaining entry, not the picked one.
-        combo = self.entry_var[2]
-        combo.blockSignals(True)
-        combo.removeItem(combo.findText(text))
-        combo.setCurrentIndex(0)
-        combo.blockSignals(False)
-        ret = QtWidgets.QMessageBox.warning(
-            None,
-            "Warning",
-            '''<b>Do you want to remove the lint off error: ''' +
-            text,
-            QtWidgets.QMessageBox.StandardButton.Ok,
-            QtWidgets.QMessageBox.StandardButton.Cancel)
 
-        if ret == QtWidgets.QMessageBox.StandardButton.Ok:
-            try: 
-                file_path = os.path.join(init_path, "library/tlv/lint_off.txt")
-                with open(file_path, 'r') as file:
-                    data = file.readlines()
-                data = [line for line in data if line.strip() != text]
-                with open(file_path, 'w') as file:
-                    file.writelines(data)
-                    
-            except Exception as e:
-                QtWidgets.QMessageBox.warning(
-                    None,
-                    "Warning",
-                    f"Could not remove lint_off entry '{text}'",
-                    QtWidgets.QMessageBox.StandardButton.Ok
-                )
+        dlg = RemoveItemsDialog(
+            "Remove lint_off", entries, item_noun="lint_off entry",
+            parent=self)
+        if not dlg.exec():
+            return
+
+        doomed = set(dlg.selected_items())
+        try:
+            kept = [e for e in self._list_lint_off() if e not in doomed]
+            with open(self._lint_off_path(), 'w') as fh:
+                fh.write("\n".join(kept) + ("\n" if kept else ""))
+        except OSError as err:
+            Dialogs.warning(
+                self, "Warning",
+                "Could not update lint_off.txt: " + str(err),
+                QtWidgets.QMessageBox.StandardButton.Ok)
 
     def add_lint_off(self):
         '''
             This is to add lint_off comments needed by the verilator warnings.
             This function writes to the lint_off.txt in the library/tlv folder.
         '''
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
+        text = self.entry_var[3].text().strip()
+        if not text:
+            return
 
-        text = self.entry_var[3].text()
-
-        if self.entry_var[2].findText(text) == -1:
-            self.entry_var[2].addItem(text)
-            with open(init_path + "library/tlv/lint_off.txt", 'a+') as fh:
+        # Dedup against the file (the picker is now a dialog read fresh each
+        # time, so there is no combo to query for an existing entry).
+        if text not in self._list_lint_off():
+            with open(self._lint_off_path(), 'a+') as fh:
                 fh.write(text + "\n")
         self.entry_var[3].setText("")
 
@@ -839,47 +865,17 @@ class NgVeri(QtWidgets.QWidget):
         self.entry_var[self.count].setMaximumHeight(1000)
         self.count += 1
 
-        self.entry_var[self.count] = QtWidgets.QComboBox()
-        self.entry_var[self.count].addItem("Remove Verilog Models")
-        modpath_file = self.digital_home + '/modpath.lst'
-        if not os.path.exists(modpath_file):
-            os.makedirs(self.digital_home, exist_ok=True)
-            open(modpath_file, 'w').close()
-        with open(modpath_file, 'r') as fh:
-            self.data = fh.readlines()
-        combo = self.entry_var[self.count]
-        for item in self.data:
-            if item != "\n":
-                combo.addItem(item.strip())
-                combo.setItemData(combo.count() - 1, "ngveri",
-                                  QtCore.Qt.ItemDataRole.UserRole)
-        # Also list d_cosim (Icarus) models so they can be removed too. They
-        # live only under modelParamXML/NgVeriCosim (never modpath.lst), so
-        # loading from there is what makes them deletable across restarts.
-        cosim_dir = os.path.join(self._xml_loc, 'NgVeriCosim')
-        if os.path.isdir(cosim_dir):
-            for fname in sorted(os.listdir(cosim_dir)):
-                if fname.endswith('.xml'):
-                    name = fname[:-4]
-                    if combo.findText(name) == -1:
-                        combo.addItem(name)
-                        combo.setItemData(combo.count() - 1, "cosim",
-                                          QtCore.Qt.ItemDataRole.UserRole)
-        combo.currentTextChanged.connect(self.edit_modlst)
-        self.trgrid.addWidget(combo, 1, 4, 1, 2)
+        # Remove Verilog models. A button opens a searchable, multi-select
+        # dialog instead of the old giant QComboBox -- whose popup, crippled by
+        # the groupbox stylesheet, listed every model with no scrollbar and let
+        # you delete only one at a time by picking it.
+        self.entry_var[self.count] = QtWidgets.QPushButton(
+            "Remove Verilog Models")
+        self.entry_var[self.count].clicked.connect(self.open_remove_models)
+        self.trgrid.addWidget(self.entry_var[self.count], 1, 4, 1, 2)
         self.count += 1
-        self.entry_var[self.count] = QtWidgets.QComboBox()
-        self.entry_var[self.count].addItem("Remove lint_off")
-
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-        with open(init_path + "library/tlv/lint_off.txt", 'r') as fh:
-            self.data = fh.readlines()
-        for item in self.data:
-            if item != "\n":
-                self.entry_var[self.count].addItem(item.strip())
-        self.entry_var[self.count].currentTextChanged.connect(self.lint_off_edit)
+        self.entry_var[self.count] = QtWidgets.QPushButton("Remove lint_off")
+        self.entry_var[self.count].clicked.connect(self.open_remove_lint_off)
         self.trgrid.addWidget(self.entry_var[self.count], 2, 4, 1, 2)
         self.count += 1
         self.entry_var[self.count] = QtWidgets.QLineEdit(self)

@@ -1,4 +1,5 @@
 from PyQt6 import QtCore, QtWidgets
+from configuration import Dialogs
 from ngspiceSimulation import plotWindow
 from ngspiceSimulation.NgspiceWidget import NgspiceWidget
 from configuration.Appconfig import Appconfig
@@ -83,6 +84,75 @@ class DockArea(QtWidgets.QMainWindow):
         else:
             main_view.restore_console_area()
 
+    def apply_fullscreen_feature(self, dock_widget, original_widget):
+        """Wraps a dock's inner widget with a Fullscreen pop-out button."""
+        title = dock_widget.windowTitle()
+        wrapper = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        top_bar = QtWidgets.QHBoxLayout()
+        top_bar.addStretch()
+        fs_btn = QtWidgets.QPushButton("\U0001f5d7 Fullscreen")
+        fs_btn.setStyleSheet("""
+            QPushButton {
+                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-weight: 600;
+                color: #495057;
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 6px;
+                padding: 4px 12px;
+                margin: 2px 5px;
+            }
+            QPushButton:hover {
+                background-color: #e9ecef;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+            QPushButton:pressed {
+                background-color: #dee2e6;
+            }
+        """)
+        top_bar.addWidget(fs_btn)
+
+        layout.addLayout(top_bar)
+        layout.addWidget(original_widget)
+
+        dock_widget.setWidget(wrapper)
+
+        popout_state = {"win": None}
+
+        def toggle_popout():
+            if not popout_state["win"]:
+                win = QtWidgets.QDialog(self.window())
+                win.setWindowTitle(title)
+                win.setWindowFlags(
+                    win.windowFlags()
+                    | QtCore.Qt.WindowType.WindowMaximizeButtonHint
+                    | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
+
+                win_layout = QtWidgets.QVBoxLayout(win)
+                win_layout.setContentsMargins(0, 0, 0, 0)
+                win_layout.addWidget(wrapper)
+
+                fs_btn.setText("\U0001f86e Dock to eSim")
+
+                def on_close(event):
+                    dock_widget.setWidget(wrapper)
+                    fs_btn.setText("\U0001f5d7 Fullscreen")
+                    popout_state["win"] = None
+                    event.accept()
+
+                win.closeEvent = on_close
+                popout_state["win"] = win
+                win.resize(1000, 700)
+                win.showMaximized()
+            else:
+                popout_state["win"].close()
+
+        fs_btn.clicked.connect(toggle_popout)
+
     def createTestEditor(self):
         """This function create widget for Library Editor"""
         global count
@@ -96,7 +166,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.testWidget.setLayout(self.testLayout)
         dock['Tips-' + str(count)] = \
             QtWidgets.QDockWidget('Tips-' + str(count))
-        dock['Tips-' + str(count)].setWidget(self.testWidget)
+        self.apply_fullscreen_feature(
+            dock['Tips-' + str(count)], self.testWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock['Tips-' + str(count)])
         self.tabifyDockWidget(
@@ -133,8 +204,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)
              ] = QtWidgets.QDockWidget(dockName
                                        + str(count))
-        dock[dockName + str(count)] \
-            .setWidget(self.plottingWidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.plottingWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -181,8 +252,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)
              ] = QtWidgets.QDockWidget(dockName
                                        + str(count))
-        dock[dockName + str(count)] \
-            .setWidget(self.ngspiceWidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.ngspiceWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -325,7 +396,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.eConWidget.setLayout(self.eConLayout)
 
         dock[dockName + str(count)] = QtWidgets.QDockWidget(dockName + str(count))
-        dock[dockName + str(count)].setWidget(self.eConWidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.eConWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'], dock[dockName + str(count)])
 
@@ -350,7 +422,7 @@ class DockArea(QtWidgets.QMainWindow):
         if projDir is None:
             """ when projDir is None that is clicking on subcircuit icon
                 without any project selection """
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(
@@ -373,8 +445,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName +
              str(count)] = QtWidgets.QDockWidget(dockName
                                                  + str(count))
-        dock[dockName + str(count)] \
-            .setWidget(self.modelwidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.modelwidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -392,11 +464,42 @@ class DockArea(QtWidgets.QMainWindow):
 
         count = count + 1
 
+    def _closeExistingConverters(self):
+        """Tear down any open KiCad-to-Ngspice converter dock.
+
+        The converter uses module-level globals and class-level TrackWidget
+        state as its data bus, so two live converter docks would clobber each
+        other -- silently writing one project's circuit into another's
+        .cir.out. Enforce the single-consumer invariant the converter was
+        written against by destroying any existing converter dock before
+        opening a new one. Also stops the module `dock` dict from leaking a
+        fresh entry on every open.
+        """
+        for key in [k for k in dock if k.startswith('Netlist-')]:
+            d = dock.pop(key, None)
+            if d is None:
+                continue
+            # Drop it from per-project bookkeeping so closing the project
+            # later cannot double-free an already-deleted dock.
+            for docks in self.obj_appconfig.dock_dict.values():
+                if d in docks:
+                    docks.remove(d)
+            try:
+                self.removeDockWidget(d)
+                d.setParent(None)
+                d.deleteLater()
+            except RuntimeError:
+                # Already deleted on the Qt side; nothing to do.
+                pass
+
     def kicadToNgspiceEditor(self, clarg1, clarg2=None):
         """
         This function is creating Editor UI for Kicad to Ngspice conversion.
         """
         global count
+
+        # Keep at most one converter live; see _closeExistingConverters.
+        self._closeExistingConverters()
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
         projName = os.path.basename(projDir)
@@ -409,8 +512,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.kicadToNgspiceWidget.setLayout(self.kicadToNgspiceLayout)
         dock[dockName + str(count)] = \
             QtWidgets.QDockWidget(dockName + str(count))
-        dock[dockName +
-             str(count)].setWidget(self.kicadToNgspiceWidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.kicadToNgspiceWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -455,8 +558,8 @@ class DockArea(QtWidgets.QMainWindow):
             dock[dockName +
                 str(count)] = QtWidgets.QDockWidget(dockName
                                                     + str(count))
-            dock[dockName + str(count)] \
-                .setWidget(self.subcktWidget)
+            self.apply_fullscreen_feature(
+                dock[dockName + str(count)], self.subcktWidget)
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                             dock[dockName + str(count)])
             self.tabifyDockWidget(dock['Welcome'],
@@ -477,7 +580,7 @@ class DockArea(QtWidgets.QMainWindow):
         else:
             """ when projDir is None that is clicking on subcircuit icon
                 without any project selection """
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(
@@ -494,7 +597,7 @@ class DockArea(QtWidgets.QMainWindow):
         if projDir is None:
             """ when projDir is None that is clicking on subcircuit icon
                 without any project selection """
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(
@@ -514,7 +617,8 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName +
              str(count)] = QtWidgets.QDockWidget(dockName
                                                  + str(count))
-        dock[dockName + str(count)].setWidget(self.makerWidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.makerWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -542,7 +646,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.usermanualWidget.setLayout(self.usermanualLayout)
         dock['User Manual-' +
              str(count)] = QtWidgets.QDockWidget('User Manual-' + str(count))
-        dock['User Manual-' + str(count)].setWidget(self.usermanualWidget)
+        self.apply_fullscreen_feature(
+            dock['User Manual-' + str(count)], self.usermanualWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock['User Manual-' + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
@@ -574,8 +679,8 @@ class DockArea(QtWidgets.QMainWindow):
         self.modelicaWidget.setLayout(self.modelicaLayout)
         dock[dockName + str(count)
              ] = QtWidgets.QDockWidget(dockName + str(count))
-        dock[dockName + str(count)] \
-            .setWidget(self.modelicaWidget)
+        self.apply_fullscreen_feature(
+            dock[dockName + str(count)], self.modelicaWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            dock[dockName
                                 + str(count)])

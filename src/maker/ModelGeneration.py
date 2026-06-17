@@ -30,6 +30,7 @@
 import re
 import os
 from PyQt6 import QtCore, QtWidgets
+from configuration import Dialogs
 from configparser import ConfigParser
 from configuration import Appconfig
 
@@ -239,7 +240,7 @@ class ModelGeneration(QtWidgets.QWidget):
                                 p.name, p.mode, p.port_number))
                     break
         if m.name.lower() != self.fname.split(".")[0]:
-            QtWidgets.QMessageBox.critical(
+            Dialogs.critical(
                 None,
                 "Error Message",
                 "<b>Error: File name and module \
@@ -1208,12 +1209,12 @@ and set the load for input ports */
 
         includefile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
-                self,
+                Dialogs.resolve_parent(self),
                 "Open adding other necessary files to be included",
                 init_path + "home")[0])
 
         if includefile == "":
-            reply = QtWidgets.QMessageBox.critical(
+            reply = Dialogs.critical(
                 None, "Error Message",
                 "<b>Error: No File Chosen. Please chose a file</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
@@ -1257,12 +1258,12 @@ and set the load for input ports */
 
         includefolder = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
-                self, "open", "home"
+                Dialogs.resolve_parent(self), "open", "home"
             )
         )
 
         if includefolder == "":
-            reply = QtWidgets.QMessageBox.critical(
+            reply = Dialogs.critical(
                 None, "Error Message",
                 "<b>Error: No Folder Chosen. Please chose a folder</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
@@ -1283,7 +1284,7 @@ and set the load for input ports */
         self.modelpath = self.digital_home + \
             "/" + self.fname.split('.')[0] + "/"
 
-        reply = QtWidgets.QMessageBox.question(
+        reply = Dialogs.question(
             None, "Message",
             '''<b>If you want only the contents\
              of the folder to be added press "Yes".\
@@ -1382,7 +1383,7 @@ and set the load for input ports */
     #            )[0]
     #         )
     #     if includefile=="":
-    #         reply=QtWidgets.QMessageBox.critical(
+    #         reply=Dialogs.critical(
     #                 None, "Error Message",
     #                 "<b>Error: No File Chosen. Please chose a file</b>",
     #                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel

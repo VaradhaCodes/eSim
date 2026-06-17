@@ -27,9 +27,21 @@
 # =========================================================================
 
 # importing the files and libraries
-from PyQt6 import QtWidgets
+import os
+import sys
+from PyQt6 import QtCore, QtWidgets
 from . import Maker
 from . import NgVeri
+
+# The NGHDL GUI lives in-repo at <repo>/nghdl/src and uses flat imports, just
+# like its standalone `nghdl` entry point. Put that directory on sys.path so it
+# can be imported and embedded as a tab. Mutating sys.path is acceptable here
+# because the names it exposes (ngspice_ghdl, Appconfig, model_generation,
+# createKicadLibrary) do not collide with any eSim module.
+_NGHDL_SRC = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'nghdl', 'src'))
+if os.path.isdir(_NGHDL_SRC) and _NGHDL_SRC not in sys.path:
+    sys.path.append(_NGHDL_SRC)
 
 # filecount is used to count thenumber of objects created
 filecount = 0
@@ -82,6 +94,17 @@ class makerchip(QtWidgets.QWidget):
         self.tabWidget = QtWidgets.QTabWidget()
         self.tabWidget.addTab(self.MakerTab, "Makerchip")
         self.tabWidget.addTab(self.NgVeriTab, "NgVeri")
+
+        # NGHDL (VHDL -> ngspice digital model) tab. Wrapped in a QScrollArea
+        # exactly like the other two tabs and built lazily + guarded, so a
+        # missing/broken NGHDL install degrades to a placeholder and can never
+        # take down the Makerchip dock.
+        self.NgHdlTab = QtWidgets.QScrollArea()
+        self.NgHdlTab.setWidgetResizable(True)
+        self._nghdl_built = False
+        self.nghdl_index = self.tabWidget.addTab(self.NgHdlTab, "NGHDL")
+        self.tabWidget.currentChanged.connect(self.buildNgHdlTab)
+
         # The object refresh gets destroyed when Ngspice\
         # to verilog converter is called
         # so calling refresh_change to start toggling of refresh again
@@ -93,3 +116,34 @@ class makerchip(QtWidgets.QWidget):
         # incrementing filecount for every new window
         filecount = filecount + 1
         return self.convertWindow
+
+    def buildNgHdlTab(self, index):
+        """Construct the embedded NGHDL widget the first time its tab is
+        selected. Any failure (NGHDL not installed, no config.ini, import
+        error) is contained here and shown as a placeholder."""
+        if index != self.nghdl_index or self._nghdl_built:
+            return
+        self._nghdl_built = True
+        try:
+            from ngspice_ghdl import Mainwindow
+            self.NgHdlTab.setWidget(Mainwindow(embedded=True))
+        except Exception as e:
+            print("NGHDL tab unavailable:", e)
+            self.NgHdlTab.setWidget(self.nghdlPlaceholder(str(e)))
+
+    def nghdlPlaceholder(self, reason):
+        """A friendly stand-in shown when NGHDL cannot be loaded, so the
+        Makerchip/NgVeri tabs keep working regardless."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout()
+        label = QtWidgets.QLabel(
+            "<b>NGHDL is not available.</b><br/><br/>"
+            "Make sure NGHDL is installed and configured "
+            "(<code>~/.nghdl/config.ini</code>), then reopen Makerchip."
+            "<br/><br/><small>Details: " + reason + "</small>")
+        label.setWordWrap(True)
+        label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        layout.addWidget(label)
+        layout.addStretch(1)
+        widget.setLayout(layout)
+        return widget

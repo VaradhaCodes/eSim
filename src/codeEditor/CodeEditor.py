@@ -36,16 +36,23 @@ class CodeEditor(QsciScintilla):
         QtCore.QRegularExpression.PatternOption.CaseInsensitiveOption,
     )
 
+    #: Pixels of breathing room to the LEFT of the line number digits
+    #: (numbers are right-aligned, so this is effectively a left inset).
+    _MARGIN_PAD_LEFT = 12
+    #: Width of the spacer margin (1) that sits between line numbers and the
+    #: fold column — gives digits breathing room on the right too.
+    _MARGIN_PAD_RIGHT = 8
+
     def __init__(self, file_path, parent=None):
         super().__init__(parent)
         self.file_path = file_path
         self.encoding = "utf-8"
         self._eol = QsciScintilla.EolMode.EolUnix
         self._lexer = None
-        self._reloading = False
+        self._saved_sig = None            # (mtime, size) of our last write
         self._matches = []
         self._current_range = None        # last "current match" indicator
-        self._margin_digits = 0
+        self._margin_width = -1
         self.oversize = False
 
         self._build_font()
@@ -53,6 +60,7 @@ class CodeEditor(QsciScintilla):
         self._load()
         self._apply_lexer()
         self._start_watch()
+        self._reset_view()
 
     # ------------------------------------------------------------------
     # public API
@@ -85,7 +93,6 @@ class CodeEditor(QsciScintilla):
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            self._reloading = True            # ignore our own change
             os.replace(tmp, self.file_path)
         except OSError:
             if os.path.exists(tmp):
@@ -94,7 +101,25 @@ class CodeEditor(QsciScintilla):
         finally:
             self._refresh_watch()
         self.setModified(False)
+        # Record what we just wrote so _on_disk_change can tell our own
+        # save from a later external regeneration (e.g. KiCad-to-Ngspice
+        # rewriting the .cir.out) and reload only on the latter.
+        self._saved_sig = self._sig()
         return True
+
+    def _sig(self):
+        """(mtime_ns, size) of the file on disk, or None if unreadable.
+
+        Used instead of a sticky "ignore next event" flag: that flag
+        leaked whenever an atomic save (temp + os.replace + re-arm watch)
+        produced no delivered watcher event, then silently ate the next
+        genuine external change.  Comparing signatures has no such state.
+        """
+        try:
+            st = os.stat(self.file_path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def reload(self):
         """Re-read the file from disk, discarding buffer edits.
@@ -167,6 +192,11 @@ class CodeEditor(QsciScintilla):
         self.setMarginType(0, QsciScintilla.MarginType.NumberMargin)
         self.setMarginLineNumbers(0, True)
         self._update_margin_width()
+        # Margin 1: silent spacer between line numbers and the fold column.
+        # SymbolMargin with no symbols and no sensitivity = invisible padding.
+        self.setMarginType(1, QsciScintilla.MarginType.SymbolMargin)
+        self.setMarginWidth(1, self._MARGIN_PAD_RIGHT)
+        self.setMarginSensitivity(1, False)
         self.setCaretLineVisible(True)
         self.setBraceMatching(
             QsciScintilla.BraceMatch.SloppyBraceMatch)
@@ -175,17 +205,42 @@ class CodeEditor(QsciScintilla):
         self.setTabWidth(4)
         self.setIndentationGuides(True)
         self.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)
+        self.setMarginWidth(2, 12)   # tighter than the ~16px default
         # On-demand completion only (Ctrl+Space), never auto-pops.
         self.setAutoCompletionSource(
             QsciScintilla.AutoCompletionSource.AcsDocument)
         self.setAutoCompletionThreshold(-1)
         self.setAutoCompletionCaseSensitivity(False)
 
+        # Horizontal scrollbar tracks the real content width instead of
+        # Scintilla's fixed 2000px default, so small files (.cir, .txt)
+        # get no phantom scrollbar and only wide content (a zoomed-in
+        # netlist, or a long right-padded plot header) raises one.
+        self.SendScintilla(QsciScintilla.SCI_SETSCROLLWIDTH, 1)
+        self.SendScintilla(QsciScintilla.SCI_SETSCROLLWIDTHTRACKING, 1)
+
+        # Multiple selections so "select all matches" (Alt+Enter in the
+        # find bar) gives VS Code-style multi-cursor editing.
+        self.SendScintilla(QsciScintilla.SCI_SETMULTIPLESELECTION, 1)
+        self.SendScintilla(QsciScintilla.SCI_SETADDITIONALSELECTIONTYPING, 1)
+
+        # Disarm Ctrl+D at the Scintilla level too. The menu action is
+        # gone, but Scintilla keeps its own key table, so a stray Ctrl+D
+        # could still duplicate the line and silently wreck a netlist.
+        self.SendScintilla(
+            QsciScintilla.SCI_CLEARCMDKEY,
+            ord('D') | (QsciScintilla.SCMOD_CTRL << 16))
+
         QtGui.QShortcut(
             QtGui.QKeySequence("Ctrl+Space"), self,
             activated=self.autoCompleteFromAll)
 
         self.textChanged.connect(self._update_margin_width)
+        # Fires on EVERY zoom change, not only our menu actions: Ctrl+
+        # mouse-wheel and Ctrl+Keypad +/- zoom inside Scintilla and never
+        # reach EditorWindow, so the gutter only stays correct if it
+        # tracks the notification itself.
+        self.SCN_ZOOM.connect(self._update_margin_width)
 
     def _apply_lexer(self):
         if self.oversize:
@@ -199,8 +254,6 @@ class CodeEditor(QsciScintilla):
         self._lexer = lexers.make_lexer(self.file_path, self._mono, self)
         self.setLexer(self._lexer)
         theme.apply(self, self._lexer, self._mono)
-        if self.is_generated():
-            self.setReadOnly(True)
 
     # ------------------------------------------------------------------
     # find highlighting (driven by the FindBar)
@@ -267,6 +320,24 @@ class CodeEditor(QsciScintilla):
         self.setSelection(line1, col1, line2, col2)
         self.ensureLineVisible(line1)
 
+    def select_all_matches(self):
+        """Make every find match a Scintilla selection (multi-cursor).
+
+        Mirrors VS Code's Alt+Enter: each match becomes an editable
+        caret so a single keystroke edits all of them at once.
+        """
+        if not self._matches:
+            return
+        self.SendScintilla(QsciScintilla.SCI_CLEARSELECTIONS)
+        for i, (start, end) in enumerate(self._matches):
+            if i == 0:
+                self.SendScintilla(
+                    QsciScintilla.SCI_SETSELECTION, end, start)
+            else:
+                self.SendScintilla(
+                    QsciScintilla.SCI_ADDSELECTION, end, start)
+        self.setFocus()
+
     def replace_all_matches(self, replacement):
         """Replace every highlighted match with *replacement* (literal).
 
@@ -287,11 +358,23 @@ class CodeEditor(QsciScintilla):
         return count
 
     def _update_margin_width(self):
+        """Size the line-number margin to the digit count *and* zoom.
+
+        Width is measured in the line-number style font, which Scintilla
+        scales with the zoom level, so the numbers stay fully visible at
+        any zoom instead of being clipped when zoomed in or stranded in a
+        wide empty gutter when zoomed out.  Recomputed on every text
+        change (line count grows) and on every zoom step.
+        """
         digits = max(2, len(str(max(1, self.lines()))))
-        if digits == self._margin_digits:
+        text_px = self.SendScintilla(
+            QsciScintilla.SCI_TEXTWIDTH,
+            QsciScintilla.STYLE_LINENUMBER, b"9" * digits)
+        width = text_px + self._MARGIN_PAD_LEFT
+        if width == self._margin_width:
             return
-        self._margin_digits = digits
-        self.setMarginWidth(0, "0" * (digits + 1))
+        self._margin_width = width
+        self.setMarginWidth(0, width)
 
     # ------------------------------------------------------------------
     # disk I/O
@@ -307,6 +390,22 @@ class CodeEditor(QsciScintilla):
         self.setEolMode(self._eol)
         self.setText(text)
         self.convertEols(self._eol)
+        # Loading text dirties the buffer; a freshly opened file must
+        # read as unmodified so closing it never prompts to save.
+        self.setModified(False)
+        # Buffer now matches disk; baseline the signature so the next
+        # watcher event is judged against what we actually hold.
+        self._saved_sig = self._sig()
+
+    def _reset_view(self):
+        """Park the view at the top-left after the initial load.
+
+        Plot dumps right-pad their title onto line 1, which used to open
+        the file scrolled to the far right; always start at column 0.
+        """
+        self.setCursorPosition(0, 0)
+        self.SendScintilla(QsciScintilla.SCI_SETFIRSTVISIBLELINE, 0)
+        self.SendScintilla(QsciScintilla.SCI_SETXOFFSET, 0)
 
     def _read_bytes(self):
         with open(self.file_path, "rb") as handle:
@@ -348,8 +447,10 @@ class CodeEditor(QsciScintilla):
         # Editors that re-create the file (write+rename) drop the watch;
         # re-arm it and tell the host so it can prompt for a reload.
         QtCore.QTimer.singleShot(150, self._refresh_watch)
-        if self._reloading:
-            self._reloading = False
+        # If disk still matches our last write, this event is our own
+        # save echoing back -- ignore it.  Otherwise it's an external
+        # change (e.g. a fresh KiCad-to-Ngspice convert): tell the host.
+        if self._sig() == self._saved_sig:
             return
         self.fileChangedOnDisk.emit()
 

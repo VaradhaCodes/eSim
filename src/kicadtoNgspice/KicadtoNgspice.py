@@ -22,6 +22,7 @@ import sys
 from xml.etree import ElementTree as ET
 
 from PyQt6 import QtWidgets
+from configuration import Dialogs
 
 from . import Analysis
 from . import Convert
@@ -95,8 +96,6 @@ class MainWindow(QtWidgets.QWidget):
         print("==================================")
         print("Kicad to Ngspice netlist converter")
         print("==================================")
-        global kicadNetlist, schematicInfo
-        global infoline, optionInfo
         self.kicadFile = clarg1
         self.clarg1 = clarg1
         self.clarg2 = clarg2
@@ -105,41 +104,76 @@ class MainWindow(QtWidgets.QWidget):
         # Track the dynamically created widget of KicadtoNgspice Window
         self.obj_track = TrackWidget.TrackWidget()
 
+        # Validity of the parsed-in-memory model and the mtime of the .cir it
+        # came from. callConvert uses these to detect a schematic re-export
+        # under an open window and reload instead of serializing stale data.
+        self._netlistValid = False
+        self._netlist_mtime = None
+
+        # Parse the .cir off disk into the module globals the tabs read from.
+        if self._loadNetlist():
+            return
+
+        self.createMainWindow()
+
+    def _loadNetlist(self):
+        """(Re)parse the .cir into the module globals the tabs read from.
+
+        Returns True if an unknown/duplicate model aborted the load (no UI
+        should be built), else False.
+        """
+        global kicadNetlist, schematicInfo, infoline, optionInfo
+        global sourcelist, sourcelisttrack
+        global modelList, outputOption, unknownModelList, multipleModelList
+        global plotText, microcontrollerList
+
         # Reset all shared class-level state for this conversion run
         TrackWidget.TrackWidget.reset()
+
+        # A (re)load starts invalid and is marked valid only once it completes
+        # without an aborting model error, so callConvert can refuse to
+        # serialize a half-parsed netlist. Stamp the source mtime now -- even
+        # on a failed parse -- so a stale snapshot can never look "current".
+        self._netlistValid = False
+        try:
+            self._netlist_mtime = os.path.getmtime(self.kicadFile)
+        except OSError:
+            self._netlist_mtime = None
 
         # Object of Processing
         obj_proc = PrcocessNetlist()
 
         # Read the netlist, ie the .cir file
         kicadNetlist = obj_proc.readNetlist(self.kicadFile)
-        # print("=============================================================")
-        # print("Given Kicad Schematic Netlist Info :", kicadNetlist)
+
+        # An empty or comment-only .cir has no usable lines; bail out with a
+        # clear message instead of letting preprocessNetlist index off the end.
+        if not kicadNetlist:
+            self.msg = Dialogs.make_error_message(self)
+            self.msg.setModal(True)
+            self.msg.setWindowTitle("Empty netlist")
+            self.msg.showMessage(
+                "The netlist file is empty. Open Kicad to Ngspice again to "
+                "regenerate it from the schematic before converting.")
+            self.msg.exec()
+            return True
 
         # Construct parameter information
         param = obj_proc.readParamInfo(kicadNetlist)
 
         # Replace parameter with values
         netlist, infoline = obj_proc.preprocessNetlist(kicadNetlist, param)
-        # print("=============================================================")
-        # print("Schematic Info after processing Kicad Netlist: ", netlist)
 
         # Separate option and schematic information
         optionInfo, schematicInfo = obj_proc.separateNetlistInfo(netlist)
-        # print("=============================================================")
-        # print("OPTIONINFO in the Netlist", optionInfo)
 
         # List for storing source and its value
-        global sourcelist, sourcelisttrack
         sourcelist = []
         sourcelisttrack = []
         schematicInfo, sourcelist = obj_proc.insertSpecialSourceParam(
             schematicInfo, sourcelist)
 
         # List storing model detail
-        global modelList, outputOption, unknownModelList, multipleModelList, \
-            plotText, microcontrollerList
-
         modelList = []
         microcontrollerList = []
         outputOption = []
@@ -167,16 +201,17 @@ class MainWindow(QtWidgets.QWidget):
         """
         if unknownModelList:
             print("Unknown Model List is : ", unknownModelList)
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Unknown Models")
             self.content = "Your schematic contain unknown model " + \
                            ', '.join(unknownModelList)
             self.msg.showMessage(self.content)
             self.msg.exec()
+            return True
 
         elif multipleModelList:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Multiple Models")
             self.mcontent = "Look like you have duplicate model in \
@@ -184,9 +219,10 @@ class MainWindow(QtWidgets.QWidget):
                             ', '.join(multipleModelList[0])
             self.msg.showMessage(self.mcontent)
             self.msg.exec()
+            return True
 
-        else:
-            self.createMainWindow()
+        self._netlistValid = True
+        return False
 
     def createMainWindow(self):
         """
@@ -196,12 +232,20 @@ class MainWindow(QtWidgets.QWidget):
             - Convert button => callConvert
         """
         self.vbox = QtWidgets.QVBoxLayout()
+
+        # The tab widget lives in its own container layout so reloadNetlist()
+        # can swap in freshly-built tabs when the source .cir changes, without
+        # touching the persistent Convert button below it.
+        self.convertContainer = QtWidgets.QVBoxLayout()
+        self.convertContainer.addWidget(self.createcreateConvertWidget())
+
         self.hbox = QtWidgets.QHBoxLayout()
         self.hbox.addStretch(1)
         self.convertbtn = QtWidgets.QPushButton("Convert")
         self.convertbtn.clicked.connect(self.callConvert)
         self.hbox.addWidget(self.convertbtn)
-        self.vbox.addWidget(self.createcreateConvertWidget())
+
+        self.vbox.addLayout(self.convertContainer)
         self.vbox.addLayout(self.hbox)
 
         self.setLayout(self.vbox)
@@ -286,6 +330,44 @@ class MainWindow(QtWidgets.QWidget):
 
         return self.convertWindow
 
+    def _sourceChangedOnDisk(self):
+        """True if the .cir was re-exported since this window last parsed it.
+
+        The converter parses the netlist once and caches it in the module
+        globals the tabs read from; this mtime check is the cache-invalidation
+        signal that tells callConvert the cache is dirty.
+        """
+        try:
+            return os.path.getmtime(self.kicadFile) != self._netlist_mtime
+        except OSError:
+            return False
+
+    def reloadNetlist(self):
+        """Re-parse the .cir and rebuild the converter tabs in place.
+
+        Called when the source schematic changed under an open window so the
+        UI and the in-memory model both reflect the current netlist before any
+        conversion. Field values that still apply are restored from
+        *_Previous_Values.xml by the rebuilt tabs.
+
+        Returns True if the reload aborted (unknown/duplicate/empty model), in
+        which case the old tabs have already been torn down and the model is
+        marked invalid.
+        """
+        # Drop the existing tab widget (and its child tabs) before reparsing.
+        item = self.convertContainer.takeAt(0)
+        if item is not None:
+            old = item.widget()
+            if old is not None:
+                old.setParent(None)
+                old.deleteLater()
+
+        if self._loadNetlist():
+            return True
+
+        self.convertContainer.addWidget(self.createcreateConvertWidget())
+        return False
+
     def callConvert(self):
         """
         - This function called when convert button clicked
@@ -294,9 +376,30 @@ class MainWindow(QtWidgets.QWidget):
         - Written to a ..._Previous_Values.xml file in the projDirectory
         - Finally, call createNetListFile, with the converted schematic
         """
-        global schematicInfo
+        # analysisoutput is published as a module global for downstream
+        # consumers; schematicInfo is only read here (snapshotted below).
         global analysisoutput
-        global kicad
+
+        # If the schematic was re-exported while this window stayed open, the
+        # parse-once globals are stale. Reload from disk (rebuilding the tabs)
+        # rather than serializing the old snapshot, then let the user review
+        # the refreshed fields and convert again. This is the root-cause fix
+        # for "convert only works the first time in a tab".
+        if self._sourceChangedOnDisk():
+            if not self.reloadNetlist():
+                Dialogs.information(
+                    self, "Netlist refreshed",
+                    "The schematic changed since this converter window was "
+                    "opened, so it has been refreshed from the new netlist. "
+                    "Review the fields and click Convert again.",
+                    QtWidgets.QMessageBox.StandardButton.Ok
+                )
+            return
+
+        # A reload may have aborted on a broken netlist; never serialize one.
+        if not self._netlistValid:
+            return
+
         store_schematicInfo = list(schematicInfo)
         (projpath, filename) = os.path.split(self.kicadFile)
         # Stem comes from the .cir handed in, not the folder name.
@@ -818,7 +921,7 @@ class MainWindow(QtWidgets.QWidget):
 
             self.msg = "The KiCad to Ngspice conversion completed "
             self.msg += "successfully!"
-            QtWidgets.QMessageBox.information(
+            Dialogs.information(
                 self, "Information", self.msg, QtWidgets.QMessageBox.StandardButton.Ok
             )
         except Exception as e:
@@ -852,6 +955,11 @@ class MainWindow(QtWidgets.QWidget):
 
         # To avoid writing optionInfo twice in final netlist
         store_optionInfo = list(optionInfo)
+        # Work on a copy of the output options too: appending to the global
+        # accumulated duplicate .save/.print/.plot lines on every reconvert in
+        # the same window. createNetlistFile must stay a pure function of its
+        # inputs.
+        store_outputOption = list(outputOption)
 
         # checking if analysis files is present
         (projpath, filename) = os.path.split(self.kicadFile)
@@ -901,7 +1009,7 @@ class MainWindow(QtWidgets.QWidget):
             elif (option == '.save' or option == '.print' or option ==
                   '.plot' or option == '.four'):
                 eachline = eachline.strip('.')
-                outputOption.append(eachline + '\n')
+                store_outputOption.append(eachline + '\n')
             elif (option == '.nodeset' or option == '.ic'):
                 initialCondOption.append(eachline + '\n')
             elif option == '.option':
@@ -953,7 +1061,7 @@ class MainWindow(QtWidgets.QWidget):
                 out.writelines(line.strip().lstrip('.') + '\n')
         else:
             out.writelines('run\n')
-        # out.writelines(outputOption)
+        # out.writelines(store_outputOption)
         out.writelines('print allv > plot_data_v.txt\n')
         out.writelines('print alli > plot_data_i.txt\n')
         # `print allv` truncates column names to ~15 chars, so distinct long

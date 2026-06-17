@@ -12,8 +12,10 @@ project explorer.
 import os
 
 from PyQt6 import QtCore, QtGui, QtWidgets
+from configuration import Dialogs
 
 from codeEditor.FindBar import FindBar
+from codeEditor.InfoBar import InfoBar
 from codeEditor.PlainEditor import PlainEditor
 
 try:
@@ -47,11 +49,14 @@ QTabBar::tab:hover { background: #F6F8FA; }
 QStatusBar { background: #F6F8FA; border-top: 1px solid #E1E4E8;
              color: #57606A; }
 QStatusBar QLabel { color: #57606A; padding: 0 8px; }
-#findBar { background: #F6F8FA; border-top: 1px solid #E1E4E8; }
+#findBar { background: #F6F8FA; border: 1px solid #C7CDD4;
+           border-radius: 8px; }
 #findBar QLineEdit { border: 1px solid #D0D7DE; border-radius: 6px;
                      padding: 4px 8px; background: #FFFFFF;
                      selection-background-color: #CFE3FB; }
 #findBar QLineEdit:focus { border: 1px solid #0366D6; }
+#findBar QLineEdit[noMatch="true"] { border: 1px solid #E1604D;
+                     background: #FDF1F0; }
 #findCount { color: #57606A; }
 QToolButton#findToggle, QToolButton#findTool {
     border: 1px solid transparent; border-radius: 6px;
@@ -61,10 +66,12 @@ QToolButton#findToggle:hover, QToolButton#findTool:hover {
 QToolButton#findToggle:checked {
     background: #DDEBFB; border: 1px solid #9CC4F0; color: #0366D6; }
 QToolButton#findClose:hover { background: #FBD2D0; color: #B71C1C; }
-QToolButton#findExpand { border: none; border-radius: 6px;
-    color: #57606A; font-size: 16px; font-weight: 700; padding: 0 5px; }
+QToolButton#findExpand { border: 1px solid #D0D7DE; border-radius: 6px;
+    background: #FFFFFF; color: #57606A; font-size: 15px;
+    font-weight: 700; padding: 0 6px; }
 QToolButton#findExpand:hover { background: #E7ECF1; }
-QToolButton#findExpand:checked { color: #0366D6; }
+QToolButton#findExpand:checked { color: #0366D6; background: #DDEBFB;
+    border: 1px solid #9CC4F0; }
 #findBar QPushButton { border: 1px solid #D0D7DE; border-radius: 6px;
                        padding: 4px 12px; background: #FFFFFF; }
 #findBar QPushButton:hover { background: #EEF1F4; }
@@ -72,6 +79,16 @@ QToolButton#tabClose { border: none; border-radius: 9px;
                        color: #8A9199; font-size: 14px;
                        padding: 0; }
 QToolButton#tabClose:hover { background: #E1604D; color: #FFFFFF; }
+#infoBar { background: #FCE5C0; border-bottom: 1px solid #E5C97A; }
+QLabel#infoTitle { color: #5C4405; font-weight: 700; background: transparent; }
+QLabel#infoMessage { color: #6B5410; background: transparent; }
+QPushButton#infoAction { border: 1px solid #C9A227; border-radius: 6px;
+    padding: 5px 14px; background: #F6D88A; color: #4D3A05;
+    font-weight: 600; }
+QPushButton#infoAction:hover { background: #F0CD6E; }
+QToolButton#infoClose { border: none; border-radius: 6px; padding: 2px 6px;
+    color: #6B5410; font-size: 14px; }
+QToolButton#infoClose:hover { background: #E7C766; color: #4D3A05; }
 """
 
 
@@ -122,7 +139,7 @@ class EditorWindow(QtWidgets.QMainWindow):
         self._open_tabs = {}              # normalised path -> editor
 
         self._settings = QtCore.QSettings("eSim", "CodeEditor")
-        self._zoom = int(self._settings.value("zoom", 0))
+        self._zoom_level = int(self._settings.value("zoom", 0))
         self._wrap = self._settings.value("wrap", False, type=bool)
         self._ws = self._settings.value("whitespace", False, type=bool)
         _OPEN_WINDOWS.add(self)
@@ -138,16 +155,22 @@ class EditorWindow(QtWidgets.QMainWindow):
         tab_bar.customContextMenuRequested.connect(self._tab_menu)
         tab_bar.installEventFilter(self)      # middle-click to close
 
-        self.find_bar = FindBar(self)
-
         central = QtWidgets.QWidget()
         central.setObjectName("editorCentral")
         layout = QtWidgets.QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.tabs, 1)
-        layout.addWidget(self.find_bar)
         self.setCentralWidget(central)
+
+        # Find/replace is a floating overlay pinned to the editor's
+        # top-right (VS Code style), not a row that steals layout space.
+        self.find_bar = FindBar(central, host=self)
+        shadow = QtWidgets.QGraphicsDropShadowEffect(self.find_bar)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 70))
+        self.find_bar.setGraphicsEffect(shadow)
 
         self._build_menu()
         self._build_status_bar()
@@ -163,9 +186,24 @@ class EditorWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     def open(self, file_path):
         """Open *file_path* in a tab (focusing it if already open)."""
+        # Re-arm the flush registry: a window hidden after its last tab
+        # closed was discarded on closeEvent, but ProjectExplorer reuses
+        # the same instance, so it must rejoin or its dirty buffers stop
+        # being flushed before a simulation run.
+        _OPEN_WINDOWS.add(self)
         key = os.path.normcase(os.path.abspath(file_path))
         if key in self._open_tabs:
-            self.tabs.setCurrentWidget(self._open_tabs[key])
+            existing = self._open_tabs[key]
+            # The file may have been regenerated on disk (e.g. the converter
+            # rebuilds <proj>.cir) while this tab sat open. The watcher can
+            # miss write+rename saves, so reload here unless the user has
+            # unsaved edits of their own.
+            if not existing.isModified():
+                try:
+                    existing.reload()
+                except OSError:
+                    pass
+            self.tabs.setCurrentWidget(existing)
             self._raise()
             return
 
@@ -199,7 +237,7 @@ class EditorWindow(QtWidgets.QMainWindow):
         if not _is_scintilla(editor):
             return
         from PyQt6.Qsci import QsciScintilla
-        editor.zoomTo(self._zoom)
+        editor.zoomTo(self._zoom_level)
         editor.setWrapMode(
             QsciScintilla.WrapMode.WrapWord if self._wrap
             else QsciScintilla.WrapMode.WrapNone)
@@ -233,8 +271,6 @@ class EditorWindow(QtWidgets.QMainWindow):
         self._action(edit_menu, "Select &All", "Ctrl+A",
                      self._line_cmd("SCI_SELECTALL"))
         edit_menu.addSeparator()
-        self._action(edit_menu, "&Duplicate Line", "Ctrl+D",
-                     self._line_cmd("SCI_LINEDUPLICATE"))
         self._action(edit_menu, "Move Line &Up", "Alt+Up",
                      self._line_cmd("SCI_MOVESELECTEDLINESUP"))
         self._action(edit_menu, "Move Line Dow&n", "Alt+Down",
@@ -356,7 +392,7 @@ class EditorWindow(QtWidgets.QMainWindow):
         try:
             editor.save()
         except OSError as err:
-            QtWidgets.QMessageBox.critical(
+            Dialogs.critical(
                 self, "Save failed",
                 "Could not save %s:\n%s"
                 % (os.path.basename(editor.file_path), err))
@@ -396,7 +432,7 @@ class EditorWindow(QtWidgets.QMainWindow):
         if editor is None or not editor.isModified():
             return
         name = os.path.basename(editor.file_path)
-        reply = QtWidgets.QMessageBox.question(
+        reply = Dialogs.question(
             self, "Revert", "Discard unsaved changes to %s?" % name,
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No)
@@ -407,11 +443,11 @@ class EditorWindow(QtWidgets.QMainWindow):
     def _zoom(self, delta):
         # Zoom is a window-wide preference: apply to every tab and
         # remember it across sessions.
-        self._zoom = 0 if delta == 0 else self._zoom + delta
+        self._zoom_level = 0 if delta == 0 else self._zoom_level + delta
         for editor in self._all_editors():
             if _is_scintilla(editor):
-                editor.zoomTo(self._zoom)
-        self._settings.setValue("zoom", self._zoom)
+                editor.zoomTo(self._zoom_level)
+        self._settings.setValue("zoom", self._zoom_level)
 
     def _toggle_wrap(self, checked):
         from PyQt6.Qsci import QsciScintilla
@@ -508,22 +544,23 @@ class EditorWindow(QtWidgets.QMainWindow):
         return [self.tabs.widget(i) for i in range(self.tabs.count())]
 
     def _on_disk_change(self, editor):
-        index = self.tabs.indexOf(editor)
         name = os.path.basename(editor.file_path)
+        # No local edits at risk: silently pick up the new on-disk copy
+        # (e.g. a fresh KiCad-to-Ngspice convert) -- nothing to confront
+        # the user with.
         if not editor.isModified():
             editor.reload()
             self.statusBar().showMessage("Reloaded %s" % name, 2000)
             return
-        reply = QtWidgets.QMessageBox.question(
-            self, "File changed on disk",
-            "%s changed on disk but has unsaved edits.\n"
-            "Reload and lose your changes?" % name,
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.No)
-        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            editor.reload()
-        if index >= 0:
-            self.tabs.setCurrentIndex(index)
+        # Unsaved edits would be lost on reload: show a GNOME-style inline
+        # bar in the tab instead of a focus-stealing modal, so the user
+        # can keep editing and decide when (or whether) to reload.
+        InfoBar(
+            editor,
+            "File Has Changed on Disk",
+            "The file has been changed by another program.",
+            "Discard Changes and Reload",
+            editor.reload)
 
     def _close_current(self):
         editor = self._current()
@@ -539,12 +576,17 @@ class EditorWindow(QtWidgets.QMainWindow):
         if index >= 0:
             self.tabs.removeTab(index)
         editor.deleteLater()
+        # An editor with no tabs is just empty chrome; close (hide) it.
+        # ProjectExplorer caches the instance, so opening a file later
+        # re-shows it via open()/_raise().
+        if self.tabs.count() == 0:
+            self.close()
 
     def _confirm_discard(self, editor):
         if not editor.isModified():
             return True
         name = os.path.basename(editor.file_path)
-        reply = QtWidgets.QMessageBox.question(
+        reply = Dialogs.question(
             self, "Unsaved changes", "Save changes to %s?" % name,
             QtWidgets.QMessageBox.StandardButton.Save
             | QtWidgets.QMessageBox.StandardButton.Discard
@@ -554,6 +596,25 @@ class EditorWindow(QtWidgets.QMainWindow):
         if reply == QtWidgets.QMessageBox.StandardButton.Save:
             return self._save_editor(editor)
         return True
+
+    def _position_find_bar(self):
+        """Pin the find overlay to the editor's top-right corner."""
+        # Bound late: FindBar can call this from its own constructor,
+        # before ``self.find_bar`` is assigned.
+        bar = getattr(self, "find_bar", None)
+        if bar is None or not bar.isVisible():
+            return
+        bar.adjustSize()
+        parent = bar.parentWidget()
+        margin = 14
+        x = parent.width() - bar.width() - margin
+        y = self.tabs.tabBar().height() + 6
+        bar.move(max(margin, x), y)
+        bar.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_find_bar()
 
     def closeEvent(self, event):
         for index in range(self.tabs.count()):

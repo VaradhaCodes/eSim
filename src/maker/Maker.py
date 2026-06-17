@@ -29,6 +29,7 @@
 # importing the files and libraries
 import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtWidgets
+from configuration import Dialogs
 from PyQt6.QtCore import QThread, pyqtSignal
 from configuration.Appconfig import Appconfig
 import os
@@ -50,7 +51,7 @@ toggle_flag = []
 def makerchipTOSAccepted(display=True):
     if not os.path.isfile(home + "/.makerchip_accepted"):
         if display:
-            reply = QtWidgets.QMessageBox.warning(
+            reply = Dialogs.warning(
                 None, "Terms of Service", "Please review the Makerchip \
                        Terms of Service \
                        (<a href='https://www.makerchip.com/terms/'>\
@@ -98,6 +99,13 @@ class Maker(QtWidgets.QWidget):
 
     def _stop_current_toggle(self):
         global toggle_flag
+        # Stop observer first and wait for it to fully exit.  This ensures any
+        # in-flight on_modified callback (which re-adds toggle_flag and re-starts
+        # the toggle thread) has run to completion before we try to clear both.
+        if hasattr(self, 'observer') and self.observer.is_alive():
+            self.observer.stop()
+            self.observer.join(timeout=2)
+        # on_modified may have re-added the flag / re-started the toggle; clear both.
         if self.refreshoption in toggle_flag:
             toggle_flag.remove(self.refreshoption)
         if hasattr(self, 'event_handler') and self.event_handler.toggle.isRunning():
@@ -129,8 +137,8 @@ class Maker(QtWidgets.QWidget):
             self.verilogfile = self.entry_var[0].text()
 
         if self.verilogfile == "":
-            reply = QtWidgets.QMessageBox.critical(
-                None,
+            reply = Dialogs.critical(
+                self,
                 "Error Message",
                 "<b>No Verilog File Chosen. \
                 Please choose a verilog file.</b>",
@@ -171,6 +179,27 @@ class Maker(QtWidgets.QWidget):
         # self.notify=notify(self.verilogfile,self.refreshoption)
         # self.notify.start()
         # open("filepath.txt","w").write(self.verilogfile)
+
+    def load_verilog(self, filepath):
+        self.verilogfile = filepath
+        self.text = open(self.verilogfile).read()
+        self.entry_var[0].setText(self.verilogfile)
+        self.entry_var[1].setText(self.text)
+        global verilogFile
+        verilogFile[self.filecount] = self.verilogfile
+        self._stop_current_toggle()
+
+        self.observer = watchdog.observers.Observer()
+        self.event_handler = Handler(
+            self.verilogfile,
+            self.refreshoption,
+            self.observer)
+
+        self.observer.schedule(
+            self.event_handler,
+            path=self.verilogfile,
+            recursive=True)
+        self.observer.start()
 
     # This function is used to call refresh while
     # running Ngspice to Verilog Converter
@@ -236,8 +265,8 @@ class Maker(QtWidgets.QWidget):
             # self.file.close()
             filename = self.verilogfile
             if self.verilogfile.split('.')[-1] != "tlv":
-                reply = QtWidgets.QMessageBox.warning(
-                    None,
+                reply = Dialogs.warning(
+                    self,
                     "Do you want to automate the top module? ",
                     "<b>Click on YES button if you want the top module \
                     to be added automatically. A .tlv file will be created \
@@ -275,8 +304,8 @@ class Maker(QtWidgets.QWidget):
                             module = m
                             break
                     if module is None:
-                        QtWidgets.QMessageBox.critical(
-                            None,
+                        Dialogs.critical(
+                            self,
                             "Error Message",
                             "<b>Error: File name and module \
                             name are not same. Please \
@@ -350,8 +379,8 @@ Add \\TLV here if desired\
 
             makerchip_bin = shutil.which('makerchip')
             if makerchip_bin is None:
-                QtWidgets.QMessageBox.critical(
-                    None, "Error Message",
+                Dialogs.critical(
+                    self, "Error Message",
                     "<b>Makerchip was not found on your system.</b><br/>"
                     "Install it with <i>pip install makerchip-app</i> and "
                     "make sure it is on your PATH, then try again.",
@@ -415,6 +444,14 @@ Please check if verilog file is chosen.")
         # self.optionsbox2.setTitle("Note: Please save the file once edited")
         # self.optionsgrid2 = QtWidgets.QGridLayout()
         self.optionsgroupbtn = QtWidgets.QButtonGroup()
+
+        self.verifier_btn = QtWidgets.QPushButton("Verilog Simulator IDE")
+        self.verifier_btn.setStyleSheet(
+            "background-color: #2e7d32; color: white; font-weight: bold;")
+        self.optionsgroupbtn.addButton(self.verifier_btn)
+        self.verifier_btn.clicked.connect(self.open_verifier)
+        self.optionsgrid.addWidget(self.verifier_btn, 0, 0)
+
         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
         self.optionsgroupbtn.addButton(self.addoptions)
         self.addoptions.clicked.connect(self.addverilog)
@@ -452,6 +489,29 @@ Please check if verilog file is chosen.")
             # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         self.optionsbox.setLayout(self.optionsgrid)
         return self.optionsbox
+
+    def open_verifier(self):
+        if not hasattr(self, 'verifier_win'):
+            from .VerilogVerifier import VerilogVerifier
+            self.verifier_win = QtWidgets.QDialog(self.window())
+            self.verifier_win.setWindowTitle("eSim-Verilog Simulator IDE")
+            self.verifier_win.setWindowFlags(
+                self.verifier_win.windowFlags()
+                | QtCore.Qt.WindowType.WindowMaximizeButtonHint
+                | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
+            layout = QtWidgets.QVBoxLayout(self.verifier_win)
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.obj_VerilogVerifier = VerilogVerifier()
+
+            # Connect the signal directly to load_verilog
+            self.obj_VerilogVerifier.sendToNgVeri.connect(self.load_verilog)
+
+            layout.addWidget(self.obj_VerilogVerifier)
+            self.verifier_win.resize(1000, 700)
+
+        self.verifier_win.show()
+        self.verifier_win.raise_()
+        self.verifier_win.activateWindow()
 
     # This function adds the other parts of widget like text box
     def creategroup(self):
@@ -523,7 +583,7 @@ class Handler(watchdog.events.PatternMatchingEventHandler):
         self._notifier.modified.connect(self._show_modified_dialog)
 
     def _show_modified_dialog(self, verilogfile):
-        msg = QtWidgets.QErrorMessage()
+        msg = Dialogs.make_error_message(None)
         msg.setWindowTitle("eSim Message")
         msg.showMessage(
             "NgVeri File: " + verilogfile + " modified. Please click on Refresh")
@@ -566,7 +626,7 @@ class Handler(watchdog.events.PatternMatchingEventHandler):
 #             if event!=None:
 #                 print(event)
 #                 if "IN_CLOSE_WRITE" in event[1] :
-#                         msg = QtWidgets.QErrorMessage()
+#                         msg = Dialogs.make_error_message(self)
 #                         msg.setModal(True)
 #                         msg.setWindowTitle("eSim Message")
 #                         msg.showMessage(

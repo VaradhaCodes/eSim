@@ -32,7 +32,7 @@ class UploadSub(QtWidgets.QWidget):
 
         editfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
-                None, "Upload Subcircuit File",
+                self, "Upload Subcircuit File",
                 os.path.expanduser("~"), "*.sub"
             )[0]
         )

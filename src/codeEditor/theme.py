@@ -25,10 +25,12 @@ PREPROC = "#AF00DB"
 OPERATOR = "#6E7781"
 INSTANCE = "#C2410C"
 EXPRESSION = "#9A3FB6"
+NODE = "#0E7490"
 
 # chrome
 MARGIN_FG = "#9DA5B4"
 MARGIN_BG = "#F3F4F6"
+MARGIN_SEP = "#DFE1E6"    # slightly darker stripe between numbers and fold
 CARET_LINE = "#F5F8FF"
 SELECTION = "#CFE3FB"
 BRACE_FG = "#0033B3"
@@ -66,6 +68,8 @@ def _classify(desc):
         return COMMENT, False, True
     if "instance" in d or "device" in d:
         return INSTANCE, True, False
+    if "node" in d or "net" in d:
+        return NODE, False, False
     if any(k in d for k in (
             "keyword", "command", "directive", "system task")):
         return KEYWORD, True, False
@@ -116,6 +120,12 @@ def _apply_chrome(editor, font):
     editor.setMarginsFont(font)
     editor.setMarginsForegroundColor(QColor(MARGIN_FG))
     editor.setMarginsBackgroundColor(QColor(MARGIN_BG))
+    # Margin 1 is the spacer between line numbers and the fold column.
+    # Paint it slightly darker so it reads as a subtle separator stripe.
+    # SCI_SETMARGINBACKN (2190): wParam=margin index, lParam=BBGGRR colour.
+    sep = QColor(MARGIN_SEP)
+    sep_packed = (sep.blue() << 16) | (sep.green() << 8) | sep.red()
+    editor.SendScintilla(2190, 1, sep_packed)
     editor.setCaretLineBackgroundColor(QColor(CARET_LINE))
     editor.setCaretForegroundColor(QColor(CARET))
     editor.setCaretWidth(2)
@@ -131,12 +141,22 @@ def _apply_chrome(editor, font):
     # a touch of line spacing for readability
     editor.setExtraAscent(2)
     editor.setExtraDescent(2)
-    # search highlight indicators: all matches + current match
+    # Search highlights are translucent boxes (StraightBox = fill +
+    # outline) with a low fill alpha, so the matched glyphs stay
+    # readable underneath -- a solid fill made single letters like "a"
+    # vanish into the highlight.  The current match gets a stronger
+    # fill and a solid outline so it still stands out from the rest.
     editor.indicatorDefine(
-        QsciScintilla.IndicatorStyle.RoundBoxIndicator, SEARCH_INDICATOR)
-    editor.setIndicatorForegroundColor(
-        QColor(SEARCH_HL), SEARCH_INDICATOR)
+        QsciScintilla.IndicatorStyle.StraightBoxIndicator, SEARCH_INDICATOR)
+    editor.setIndicatorForegroundColor(QColor(SEARCH_HL), SEARCH_INDICATOR)
+    editor.SendScintilla(
+        QsciScintilla.SCI_INDICSETALPHA, SEARCH_INDICATOR, 90)
+    editor.SendScintilla(
+        QsciScintilla.SCI_INDICSETOUTLINEALPHA, SEARCH_INDICATOR, 150)
     editor.indicatorDefine(
-        QsciScintilla.IndicatorStyle.FullBoxIndicator, CURRENT_INDICATOR)
-    editor.setIndicatorForegroundColor(
-        QColor(CURRENT_HL), CURRENT_INDICATOR)
+        QsciScintilla.IndicatorStyle.StraightBoxIndicator, CURRENT_INDICATOR)
+    editor.setIndicatorForegroundColor(QColor(CURRENT_HL), CURRENT_INDICATOR)
+    editor.SendScintilla(
+        QsciScintilla.SCI_INDICSETALPHA, CURRENT_INDICATOR, 120)
+    editor.SendScintilla(
+        QsciScintilla.SCI_INDICSETOUTLINEALPHA, CURRENT_INDICATOR, 255)

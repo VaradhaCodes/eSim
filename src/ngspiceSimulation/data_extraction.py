@@ -56,7 +56,7 @@ import os
 import logging
 import numpy as np
 from typing import List, Tuple, Optional
-from PyQt6 import QtWidgets
+from configuration import Dialogs
 from configuration.Appconfig import Appconfig
 
 logger = logging.getLogger(__name__)
@@ -362,7 +362,7 @@ class DataExtraction:
             logger.error(f"openFile failed: {e}", exc_info=True)
             self.obj_appconfig.print_error(f'DataExtraction error: {e}')
             try:
-                msg = QtWidgets.QErrorMessage()
+                msg = Dialogs.make_error_message(None)
                 msg.setModal(True)
                 msg.setWindowTitle("Error Message")
                 msg.showMessage(f'Unable to open plot data files:\n{e}')

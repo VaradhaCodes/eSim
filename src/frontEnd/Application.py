@@ -31,6 +31,7 @@ else:
     init_path = '../../'
 
 from PyQt6 import QtGui, QtCore, QtWidgets
+from configuration import Dialogs
 from PyQt6.QtCore import QSize
 from configuration.Appconfig import Appconfig
 from frontEnd import ProjectExplorer
@@ -216,14 +217,12 @@ class Application(QtWidgets.QMainWindow):
         )
         self.subcircuit.triggered.connect(self.open_subcircuit)
 
-        self.nghdl = QtGui.QAction(
-            QtGui.QIcon(init_path + 'images/nghdl.png'), '<b>NGHDL</b>', self
-        )
-        self.nghdl.triggered.connect(self.open_nghdl)
-
+        # NGHDL is no longer a standalone toolbar button: it now lives as a
+        # tab inside the Makerchip dock (Makerchip / NgVeri / NGHDL), so model
+        # creation for both Verilog and VHDL is in one place.
         self.makerchip = QtGui.QAction(
             QtGui.QIcon(init_path + 'images/makerchip.png'),
-            '<b>Makerchip-NgVeri</b>', self
+            '<b>Model Creation (Verilog / VHDL)</b>', self
         )
         self.makerchip.triggered.connect(self.open_makerchip)
 
@@ -254,7 +253,6 @@ class Application(QtWidgets.QMainWindow):
         self.lefttoolbar.addAction(self.model)
         self.lefttoolbar.addAction(self.subcircuit)
         self.lefttoolbar.addAction(self.makerchip)
-        self.lefttoolbar.addAction(self.nghdl)
         self.lefttoolbar.addAction(self.omedit)
         self.lefttoolbar.addAction(self.omoptim)
         self.lefttoolbar.addAction(self.conToeSim)
@@ -302,7 +300,7 @@ class Application(QtWidgets.QMainWindow):
         '''
         exit_msg = "Are you sure you want to exit the program?"
         exit_msg += " All unsaved data will be lost."
-        reply = QtWidgets.QMessageBox.question(
+        reply = Dialogs.question(
             self, 'Message', exit_msg, QtWidgets.QMessageBox.StandardButton.Yes,
             QtWidgets.QMessageBox.StandardButton.No
         )
@@ -462,7 +460,7 @@ class Application(QtWidgets.QMainWindow):
             try:
                 self.obj_Mainview.obj_dockarea.plottingEditor()
             except Exception as e:
-                self.msg = QtWidgets.QErrorMessage()
+                self.msg = Dialogs.make_error_message(self)
                 self.msg.setModal(True)
                 self.msg.setWindowTitle("Error Message")
                 self.msg.showMessage(
@@ -493,7 +491,7 @@ class Application(QtWidgets.QMainWindow):
                 print(
                     "Netlist file (*.cir.out) not found."
                 )
-                self.msg = QtWidgets.QErrorMessage()
+                self.msg = Dialogs.make_error_message(self)
                 self.msg.setModal(True)
                 self.msg.setWindowTitle("Error Message")
                 self.msg.showMessage(
@@ -511,7 +509,7 @@ class Application(QtWidgets.QMainWindow):
             self.wrkspce.setEnabled(False)
 
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(
@@ -533,33 +531,6 @@ class Application(QtWidgets.QMainWindow):
         print("Function : Subcircuit editor")
         self.obj_appconfig.print_info('Subcircuit editor is called')
         self.obj_Mainview.obj_dockarea.subcircuiteditor()
-
-    def open_nghdl(self):
-        """
-        This function calls NGHDL option in left-tool-bar.
-        It uses validateTool() method from Validation.py:
-
-            - If 'nghdl' is present in executables list then
-              it passes command 'nghdl -e' to WorkerThread class of
-              Worker.py.
-            - If 'nghdl' is not present, then it shows error message.
-        """
-        print("Function : NGHDL")
-        self.obj_appconfig.print_info('NGHDL is called')
-
-        if self.obj_validation.validateTool('nghdl'):
-            self.cmd = 'nghdl -e'
-            self.obj_workThread = Worker.WorkerThread(self.cmd)
-            self.obj_workThread.start()
-        else:
-            self.msg = QtWidgets.QErrorMessage()
-            self.msg.setModal(True)
-            self.msg.setWindowTitle('NGHDL Error')
-            self.msg.showMessage('Error while opening NGHDL. ' +
-                                 'Please make sure it is installed')
-            self.obj_appconfig.print_error('Error while opening NGHDL. ' +
-                                           'Please make sure it is installed')
-            self.msg.exec()
 
     def open_makerchip(self):
         """
@@ -620,7 +591,7 @@ class Application(QtWidgets.QMainWindow):
                         self.obj_workThread2 = Worker.WorkerThread(self.cmd2)
                         self.obj_workThread2.start()
                     else:
-                        self.msg = QtWidgets.QMessageBox()
+                        self.msg = Dialogs.make_message_box(self)
                         self.msgContent = "There was an error while
                             opening OMEdit.<br/>\
                         Please make sure OpenModelica is installed in your\
@@ -640,7 +611,7 @@ class Application(QtWidgets.QMainWindow):
                         self.msg.exec()
 
                 except Exception as e:
-                    self.msg = QtWidgets.QErrorMessage()
+                    self.msg = Dialogs.make_error_message(self)
                     self.msg.setModal(True)
                     self.msg.setWindowTitle(
                         "Ngspice to Modelica conversion error")
@@ -654,7 +625,7 @@ class Application(QtWidgets.QMainWindow):
                 self.obj_Mainview.obj_dockarea.modelicaEditor(self.projDir)
 
             else:
-                self.msg = QtWidgets.QErrorMessage()
+                self.msg = Dialogs.make_error_message(self)
                 self.msg.setModal(True)
                 self.msg.setWindowTitle("Missing Ngspice Netlist")
                 self.msg.showMessage(
@@ -663,7 +634,7 @@ class Application(QtWidgets.QMainWindow):
                 )
                 self.msg.exec()
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(
@@ -690,7 +661,7 @@ class Application(QtWidgets.QMainWindow):
             self.obj_workThread = Worker.WorkerThread(self.cmd)
             self.obj_workThread.start()
         else:
-            self.msg = QtWidgets.QMessageBox()
+            self.msg = Dialogs.make_message_box(self)
             self.msgContent = (
                 "There was an error while opening OMOptim.<br/>"
                 "Please make sure OpenModelica is installed in your"

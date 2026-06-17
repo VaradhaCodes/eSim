@@ -12,9 +12,12 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 class FindBar(QtWidgets.QFrame):
     """Slim incremental find/replace bar bound to the active editor."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, host=None):
         super().__init__(parent)
         self.setObjectName("findBar")
+        # The window that owns the editor area; it repositions this
+        # floating overlay (see EditorWindow._position_find_bar).
+        self._host = host
         self._editor = None
         self._idx = -1
 
@@ -51,8 +54,10 @@ class FindBar(QtWidgets.QFrame):
         self._find_edit = QtWidgets.QLineEdit()
         self._find_edit.setPlaceholderText("Find")
         self._find_edit.setClearButtonEnabled(True)
+        self._find_edit.setMinimumWidth(240)
         self._find_edit.textChanged.connect(self._search_timer.start)
-        self._find_edit.returnPressed.connect(self.find_next)
+        # Enter = next, Shift+Enter = previous (VS Code).
+        self._find_edit.returnPressed.connect(self._on_find_return)
 
         self._count = QtWidgets.QLabel("")
         self._count.setObjectName("findCount")
@@ -61,9 +66,9 @@ class FindBar(QtWidgets.QFrame):
             QtCore.Qt.AlignmentFlag.AlignRight
             | QtCore.Qt.AlignmentFlag.AlignVCenter)
 
-        self._case = self._toggle("Aa", "Match case")
-        self._word = self._toggle("W", "Whole word")
-        self._regex = self._toggle(".*", "Regular expression")
+        self._case = self._toggle("Aa", "Match case (Alt+C)")
+        self._word = self._toggle("W", "Whole word (Alt+W)")
+        self._regex = self._toggle(".*", "Regular expression (Alt+R)")
         for box in (self._case, self._word, self._regex):
             box.toggled.connect(self._update)
 
@@ -76,12 +81,14 @@ class FindBar(QtWidgets.QFrame):
         self._replace_edit = QtWidgets.QLineEdit()
         self._replace_edit.setPlaceholderText("Replace")
         self._replace_edit.setClearButtonEnabled(True)
-        self._replace_edit.returnPressed.connect(self.replace_one)
+        self._replace_edit.setMinimumWidth(240)
+        # Enter = replace this match, Ctrl+Enter = replace all (VS Code).
+        self._replace_edit.returnPressed.connect(self._on_replace_return)
         self._rep_btn = QtWidgets.QPushButton("Replace")
-        self._rep_btn.setToolTip("Replace this match")
+        self._rep_btn.setToolTip("Replace this match (Enter)")
         self._rep_btn.clicked.connect(self.replace_one)
         self._rep_all_btn = QtWidgets.QPushButton("All")
-        self._rep_all_btn.setToolTip("Replace all matches")
+        self._rep_all_btn.setToolTip("Replace all matches (Ctrl+Enter)")
         self._rep_all_btn.clicked.connect(self.replace_all)
 
         # chevron spans both rows so it sits beside find + replace
@@ -102,6 +109,32 @@ class FindBar(QtWidgets.QFrame):
         self._replace_widgets = (
             self._replace_edit, self._rep_btn, self._rep_all_btn)
         self._set_replace_visible(False)        # collapsed by default
+
+        # Tab walks Find → Replace → option toggles, like VS Code.
+        self.setTabOrder(self._find_edit, self._replace_edit)
+        self.setTabOrder(self._replace_edit, self._case)
+        self.setTabOrder(self._case, self._word)
+        self.setTabOrder(self._word, self._regex)
+
+        # Option-toggle and select-all-matches accelerators (active only
+        # while the find bar has focus), matching VS Code's bindings.
+        self._shortcut("Alt+C", self._case.toggle)
+        self._shortcut("Alt+W", self._word.toggle)
+        self._shortcut("Alt+R", self._regex.toggle)
+        self._shortcut("Alt+Return", self._select_all_matches)
+        self._shortcut("Alt+Enter", self._select_all_matches)
+        # Down/Up step through matches too (the find field is one line,
+        # so the arrows are otherwise unused) -- discoverable nav next to
+        # Enter/Shift+Enter and F3/Shift+F3.
+        self._shortcut("Down", self.find_next)
+        self._shortcut("Up", self.find_prev)
+
+    def _shortcut(self, sequence, slot):
+        sc = QtGui.QShortcut(QtGui.QKeySequence(sequence), self)
+        sc.setContext(
+            QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc.activated.connect(slot)
+        return sc
 
     def _toggle(self, text, tip):
         btn = QtWidgets.QToolButton()
@@ -155,9 +188,15 @@ class FindBar(QtWidgets.QFrame):
         seed = self._selected_seed()
         if seed:
             self._find_edit.setText(seed)
+        self._reposition()
         self._find_edit.setFocus()
         self._find_edit.selectAll()
         self._update()
+
+    def _reposition(self):
+        """Ask the host to re-pin the overlay (size may have changed)."""
+        if self._host is not None:
+            self._host._position_find_bar()
 
     def _set_replace_visible(self, visible):
         self._expand.setText("⌄" if visible else "›")
@@ -165,6 +204,8 @@ class FindBar(QtWidgets.QFrame):
             self._expand.setChecked(visible)
         for widget in self._replace_widgets:
             widget.setVisible(visible)
+        # Height changed; re-pin so the overlay stays in the corner.
+        self._reposition()
 
     def _selected_seed(self):
         if self._editor is None or not self._editor.hasSelectedText():
@@ -191,13 +232,24 @@ class FindBar(QtWidgets.QFrame):
         if not query:
             self._idx = -1
             self._count.setText("")
+            self._set_no_match(False)
         elif count == 0:
             self._idx = -1
             self._count.setText("No results")
+            self._set_no_match(True)
         else:
             self._idx = self._editor.nearest_match_index()
             self._editor.select_match(self._idx)
             self._show_position()
+            self._set_no_match(False)
+
+    def _set_no_match(self, no_match):
+        """Flag the find box red when the query has no matches."""
+        if self._find_edit.property("noMatch") == no_match:
+            return
+        self._find_edit.setProperty("noMatch", no_match)
+        self._find_edit.style().unpolish(self._find_edit)
+        self._find_edit.style().polish(self._find_edit)
 
     def _show_position(self):
         total = self._editor.match_count()
@@ -219,6 +271,21 @@ class FindBar(QtWidgets.QFrame):
         self._idx = (self._idx + delta) % self._editor.match_count()
         self._editor.select_match(self._idx)
         self._show_position()
+
+    def _on_find_return(self):
+        shift = (QtWidgets.QApplication.keyboardModifiers()
+                 & QtCore.Qt.KeyboardModifier.ShiftModifier)
+        self.find_prev() if shift else self.find_next()
+
+    def _on_replace_return(self):
+        ctrl = (QtWidgets.QApplication.keyboardModifiers()
+                & QtCore.Qt.KeyboardModifier.ControlModifier)
+        self.replace_all() if ctrl else self.replace_one()
+
+    def _select_all_matches(self):
+        if self._active() is None or self._editor.match_count() == 0:
+            return
+        self._editor.select_all_matches()
 
     def replace_one(self):
         if self._active() is None or self._editor.isReadOnly():

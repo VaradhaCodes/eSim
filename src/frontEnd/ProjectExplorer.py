@@ -1,4 +1,5 @@
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
+from configuration import Dialogs
 import os
 import json
 import shutil
@@ -6,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from configuration.Appconfig import Appconfig
 from projManagement.Validation import Validation
-from projManagement.projectPaths import resolve_stem
+from projManagement.projectPaths import resolve_stem, canonical_path, \
+    same_project
 from codeEditor import EditorWindow
 
 
@@ -21,6 +23,13 @@ class ProjectExplorer(QtWidgets.QWidget):
         - for refreshing project.
         - for removing project.
     """
+
+    # Data roles stored on each top-level (project) item so identity and
+    # display stay decoupled: STEM_ROLE keeps the un-disambiguated base label
+    # (the project stem) so collisions can be re-resolved on every change;
+    # STALE_ROLE flags a project whose folder no longer exists on disk.
+    STEM_ROLE = QtCore.Qt.ItemDataRole.UserRole
+    STALE_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
 
     def __init__(self):
         """
@@ -64,19 +73,7 @@ class ProjectExplorer(QtWidgets.QWidget):
             image: url(" + init_path + "images/branch-open.png); } \
         ")
 
-        for parents, children in list(
-                self.obj_appconfig.project_explorer.items()):
-            os.path.join(parents)
-            if os.path.exists(parents):
-                pathlist = parents.split(os.sep)
-                parentnode = QtWidgets.QTreeWidgetItem(
-                    self.treewidget, [pathlist[-1], parents]
-                )
-                for files in children:
-                    QtWidgets.QTreeWidgetItem(
-                        parentnode, [files, os.path.join(parents, files)]
-                    )
-                self.fs_watcher.addPath(parents)
+        self.loadProjects()
         self.window.addWidget(self.treewidget)
         self.fs_watcher.directoryChanged.connect(self.handleDirectoryChanged)
         self.treewidget.expanded.connect(self.refreshInstant)
@@ -85,7 +82,61 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.treewidget.customContextMenuRequested.connect(self.openMenu)
         self.setLayout(self.window)
         self.show()
-    
+
+    def loadProjects(self):
+        """
+        Render the saved project list into the tree, collapsed.
+
+        Single entry point for *bulk* loading (first construction, workspace
+        open/switch). Idempotent: clears the tree, migrates persisted entries
+        to canonical identity keys -- collapsing any that point at the same
+        folder (legacy raw strings, symlink/'..'/case variants) so a project
+        appears exactly once -- builds each node collapsed, then refreshes
+        labels and persists once. Missing folders are kept but shown as stale
+        rather than silently dropped, so the user can see and remove them.
+
+        Distinct from addTreeNode, which is for the user *opening one*
+        project: that focuses and expands the single node it touches. Bulk
+        loading must never expand every project, so it does not go through
+        addTreeNode -- the active project (e.g. a restored last project) is
+        re-focused at the end instead.
+        """
+        # Rebuild project_explorer in place: it is a shared class-level dict
+        # that other Appconfig instances (openProject, newProject, Workspace)
+        # read and mutate. Replacing it with a new object would shadow it on
+        # this instance only and desync everyone else, so clear()+update()
+        # keeps the one shared dict's identity.
+        migrated = {}
+        for parents, children in list(
+                self.obj_appconfig.project_explorer.items()):
+            key = canonical_path(parents)
+            if key:
+                migrated[key] = children
+        self.obj_appconfig.project_explorer.clear()
+        self.obj_appconfig.project_explorer.update(migrated)
+
+        self.treewidget.clear()
+        for parents, children in migrated.items():
+            self._buildNode(parents, children)
+        self._refreshLabels()
+        self._persist()
+        self._focusCurrentProject()
+
+    def _focusCurrentProject(self):
+        """
+        After a bulk load, expand + select the active project so a restored
+        'last project' stays focused. No-op when nothing is open or the
+        active project is not in the current list (e.g. a different
+        workspace was opened).
+        """
+        proj = self.obj_appconfig.current_project.get('ProjectName')
+        if not proj:
+            return
+        node = self._findNode(proj)
+        if node is not None:
+            self.treewidget.setCurrentItem(node)
+            node.setExpanded(True)
+
     def handleDirectoryChanged(self, path):
         for i in range(self.treewidget.topLevelItemCount()):
             item = self.treewidget.topLevelItem(i)
@@ -101,15 +152,33 @@ class ProjectExplorer(QtWidgets.QWidget):
                 self.refreshProject(indexItem=index)
 
     def addTreeNode(self, parents, children):
-        os.path.join(parents)
-        pathlist = parents.split(os.sep)
-        parentnode = QtWidgets.QTreeWidgetItem(
-            self.treewidget, [pathlist[-1], parents]
-        )
-        for files in children:
-            QtWidgets.QTreeWidgetItem(
-                parentnode, [files, os.path.join(parents, files)]
-            )
+        """
+        Register a project in the explorer tree, keyed by its canonical path.
+
+        Idempotent: opening a project already present does NOT create a second
+        node -- it refreshes that project's file list and selects it. This is
+        what stops the same project being added over and over (open it 100
+        times, get one node), and what de-duplicates the same folder reached
+        via a symlink, a '..' path, a trailing slash or a different-case
+        spelling, since all collapse to the same canonical key.
+        """
+        key = canonical_path(parents)
+        if not key:
+            return
+
+        existing = self._findNode(key)
+        if existing is not None:
+            # Already open: refresh children to the current on-disk list and
+            # focus it instead of duplicating the node.
+            self._fillChildren(existing, key, children)
+        else:
+            existing = self._buildNode(key, children)
+        self.treewidget.setCurrentItem(existing)
+        existing.setExpanded(True)
+
+        self.obj_appconfig.project_explorer[key] = children
+        self._persist()
+        self._refreshLabels()
 
         # setdefault, not assignment: addTreeNode runs again on every refresh,
         # and clobbering these would drop the PIDs/docks already tracked for an
@@ -117,6 +186,109 @@ class ProjectExplorer(QtWidgets.QWidget):
         projName = self.obj_appconfig.current_project['ProjectName']
         self.obj_appconfig.proc_dict.setdefault(projName, [])
         self.obj_appconfig.dock_dict.setdefault(projName, [])
+
+    # ---- project-node helpers (identity, display, staleness) ---------------
+
+    def _projectLabel(self, path):
+        """Base display label for a project: its stem, else the folder name."""
+        stem, _status = resolve_stem(path, 'proj')
+        return stem or os.path.basename(os.path.normpath(path)) or path
+
+    def _buildNode(self, path, children):
+        """
+        Create a top-level project node for ``path`` (assumed canonical).
+        Fills children from the on-disk file list; if the folder is missing,
+        the node is created in the 'stale' state instead.
+        """
+        base = self._projectLabel(path)
+        node = QtWidgets.QTreeWidgetItem(self.treewidget, [base, path])
+        node.setData(0, self.STEM_ROLE, base)
+        self._fillChildren(node, path, children)
+        return node
+
+    def _fillChildren(self, node, path, children):
+        """Repopulate a project node's file rows, or mark it stale."""
+        node.takeChildren()
+        if os.path.exists(path):
+            node.setData(0, self.STALE_ROLE, False)
+            self._clearStale(node, path)
+            for files in children:
+                QtWidgets.QTreeWidgetItem(
+                    node, [files, os.path.join(path, files)]
+                )
+            if path not in self.fs_watcher.directories():
+                self.fs_watcher.addPath(path)
+        else:
+            self._markStale(node, path)
+
+    def _markStale(self, node, path):
+        """Style a project whose folder no longer exists on disk."""
+        node.setData(0, self.STALE_ROLE, True)
+        node.setForeground(0, QtGui.QBrush(QtGui.QColor('gray')))
+        font = node.font(0)
+        font.setItalic(True)
+        node.setFont(0, font)
+        node.setToolTip(
+            0, path + '  —  missing on disk '
+            '(right-click ▸ Remove Project)')
+        if path in self.fs_watcher.directories():
+            self.fs_watcher.removePath(path)
+
+    def _clearStale(self, node, path):
+        """Undo stale styling once a project's folder is back/refreshed."""
+        node.setForeground(0, QtGui.QBrush())
+        font = node.font(0)
+        font.setItalic(False)
+        node.setFont(0, font)
+        node.setToolTip(0, path)
+
+    def _findNode(self, path):
+        """Top-level item whose folder is the same project as ``path``."""
+        key = canonical_path(path)
+        for i in range(self.treewidget.topLevelItemCount()):
+            item = self.treewidget.topLevelItem(i)
+            if canonical_path(item.text(1)) == key:
+                return item
+        return None
+
+    def _locHint(self, path):
+        """Short parent-folder hint to disambiguate same-named projects."""
+        parent = os.path.dirname(path)
+        home = os.path.expanduser('~')
+        if parent == home or parent.startswith(home + os.sep):
+            parent = '~' + parent[len(home):]
+        return parent or os.sep
+
+    def _refreshLabels(self):
+        """
+        Resolve display labels for all projects. Projects with a unique stem
+        show just the stem; projects whose stems collide are disambiguated by
+        their parent folder so they are never indistinguishable. Stale projects
+        are suffixed '(missing)'. Full path is always in the tooltip.
+        """
+        groups = {}
+        for i in range(self.treewidget.topLevelItemCount()):
+            item = self.treewidget.topLevelItem(i)
+            base = item.data(0, self.STEM_ROLE) or item.text(0)
+            groups.setdefault(base, []).append(item)
+
+        for base, items in groups.items():
+            collide = len(items) > 1
+            for item in items:
+                label = base
+                if collide:
+                    label += '  (' + self._locHint(item.text(1)) + ')'
+                if item.data(0, self.STALE_ROLE):
+                    label += '  (missing)'
+                item.setText(0, label)
+
+    def _persist(self):
+        """Write the project list to disk; tolerate an unwritable workspace."""
+        try:
+            with open(self.obj_appconfig.dictPath["path"], 'w') as fh:
+                json.dump(self.obj_appconfig.project_explorer, fh)
+        except OSError as err:
+            print("Could not save project list:", err)
 
     def openMenu(self, position):
         indexes = self.treewidget.selectedIndexes()
@@ -210,12 +382,24 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.int = self.indexItem.row()
         self.treewidget.takeTopLevelItem(self.int)
 
-        if self.obj_appconfig.current_project["ProjectName"] == filePath:
+        key = canonical_path(filePath)
+        if same_project(
+                self.obj_appconfig.current_project["ProjectName"], key):
             self.obj_appconfig.set_current_project(None)
 
-        del self.obj_appconfig.project_explorer[filePath]
-        json.dump(self.obj_appconfig.project_explorer,
-                  open(self.obj_appconfig.dictPath["path"], 'w'))
+        if key in self.fs_watcher.directories():
+            self.fs_watcher.removePath(key)
+
+        # Drop the canonical key and any legacy alias resolving to the same
+        # project, so a removed project never lingers under a stale spelling.
+        for stored in [
+            k for k in self.obj_appconfig.project_explorer
+            if canonical_path(k) == key
+        ]:
+            self.obj_appconfig.project_explorer.pop(stored, None)
+
+        self._persist()
+        self._refreshLabels()
 
     def refreshProject(self, filePath=None, indexItem=None):
         """
@@ -247,12 +431,24 @@ class ProjectExplorer(QtWidgets.QWidget):
                     parentnode, [files, os.path.join(filePath, files)]
                 )
 
-            self.obj_appconfig.project_explorer[filePath] = filelistnew
-            json.dump(self.obj_appconfig.project_explorer,
-                      open(self.obj_appconfig.dictPath["path"], 'w'))
+            # Key by canonical identity and clear any prior stale state -- a
+            # refresh that succeeds means the folder is back/valid.
+            key = canonical_path(filePath)
+            self.obj_appconfig.project_explorer[key] = filelistnew
+            parentnode.setData(0, self.STALE_ROLE, False)
+            self._clearStale(parentnode, filePath)
+            self._refreshLabels()
+            self._persist()
             return True
 
         else:
+            # Folder vanished (moved/deleted/unmounted): keep the node but show
+            # it as stale so the user can locate or remove it, rather than
+            # silently losing the project.
+            node = self._findNode(filePath)
+            if node is not None:
+                self._markStale(node, canonical_path(filePath))
+                self._refreshLabels()
             print("Selected project not found")
             print("==================")
             msg = QtWidgets.QErrorMessage(self)
@@ -403,21 +599,35 @@ class ProjectExplorer(QtWidgets.QWidget):
                         msg.exec()
                         return
 
-                    # update project_explorer dictionary
+                    # update project_explorer dictionary (canonical key)
+                    updatedProjectPath = canonical_path(updatedProjectPath)
                     del self.obj_appconfig.project_explorer[projectPath]
                     self.obj_appconfig.project_explorer[updatedProjectPath] = \
                         updatedProjectFiles
 
-                    # save project_explorer dictionary on disk
-                    json.dump(self.obj_appconfig.project_explorer, open(
-                        self.obj_appconfig.dictPath["path"], 'w'))
+                    # Keep current_project pointing at the renamed folder if it
+                    # was the active project, so identity comparisons elsewhere
+                    # don't go stale against the old path.
+                    if same_project(
+                            self.obj_appconfig.current_project["ProjectName"],
+                            projectPath):
+                        self.obj_appconfig.set_current_project(
+                            updatedProjectPath)
 
-                    # recreate project explorer tree
+                    # remove the old folder from the watcher
+                    if projectPath in self.fs_watcher.directories():
+                        self.fs_watcher.removePath(projectPath)
+
+                    # save project_explorer dictionary on disk
+                    self._persist()
+
+                    # recreate project explorer tree (addTreeNode is idempotent
+                    # and renders missing folders as stale, not dropped)
                     self.treewidget.clear()
-                    for parent, children in \
-                            self.obj_appconfig.project_explorer.items():
-                        if os.path.exists(parent):
-                            self.addTreeNode(parent, children)
+                    # Snapshot: addTreeNode writes back into project_explorer.
+                    for parent, children in list(
+                            self.obj_appconfig.project_explorer.items()):
+                        self.addTreeNode(parent, children)
 
                 elif reply == "CHECKEXIST":
                     print("Project name already exists.")
@@ -453,7 +663,7 @@ class ProjectExplorer(QtWidgets.QWidget):
         file_name = os.path.basename(file_path)
 
         if not os.path.isfile(file_path):
-            QtWidgets.QMessageBox.warning(self, "Snapshot Failed", "Selected item is not a file.")
+            Dialogs.warning(self, "Snapshot Failed", "Selected item is not a file.")
             return
 
         project_path = self.obj_appconfig.current_project["ProjectName"]

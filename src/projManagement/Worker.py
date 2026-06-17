@@ -16,7 +16,8 @@
 #      REVISION: Sunday 16 August 2020
 # =========================================================================
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore
+from configuration import Dialogs
 import subprocess
 import shlex
 from configuration.Appconfig import Appconfig
@@ -101,7 +102,7 @@ class WorkerThread(QtCore.QThread):
         projDir = procThread.current_project["ProjectName"]
 
         if (projDir is None) and ('nghdl' not in command):
-            msg = QtWidgets.QErrorMessage()
+            msg = Dialogs.make_error_message(None)
             msg.setModal(True)
             msg.setWindowTitle("Error Message")
             msg.showMessage(

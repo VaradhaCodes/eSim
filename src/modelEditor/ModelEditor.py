@@ -1,4 +1,5 @@
 from PyQt6 import QtWidgets, QtCore
+from configuration import Dialogs
 from PyQt6.QtWidgets import QTableWidgetItem
 import xml.etree.ElementTree as ET
 from configuration.Appconfig import Appconfig
@@ -640,7 +641,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         txtfile.close()
 
         msg = "Model saved successfully!"
-        QtWidgets.QMessageBox.information(
+        Dialogs.information(
             self, "Information", msg, QtWidgets.QMessageBox.StandardButton.Ok
         )
 
@@ -699,7 +700,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         self.obj_appconfig.print_info('Updated library ' + libpath)
 
         msg = "Model saved successfully!"
-        QtWidgets.QMessageBox.information(
+        Dialogs.information(
             self, "Information", msg, QtWidgets.QMessageBox.StandardButton.Ok
         )
 

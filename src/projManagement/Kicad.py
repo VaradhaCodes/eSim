@@ -22,7 +22,7 @@ from . import Validation
 from .projectPaths import main_schematic
 from configuration.Appconfig import Appconfig
 from . import Worker
-from PyQt6 import QtWidgets
+from configuration import Dialogs
 
 
 class Kicad:
@@ -107,7 +107,7 @@ class Kicad:
             self.obj_workThread.start()
 
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(None)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(
@@ -145,7 +145,7 @@ class Kicad:
             self.obj_workThread.start()
 
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(None)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage('Please select the project first. You can'
@@ -178,7 +178,7 @@ class Kicad:
             self.obj_workThread.start()
 
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(None)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage('Please select the project first. You can'
@@ -247,7 +247,7 @@ class Kicad:
                 self.obj_dockarea.kicadToNgspiceEditor(var)
 
             else:
-                self.msg = QtWidgets.QErrorMessage()
+                self.msg = Dialogs.make_error_message(None)
                 self.msg.setModal(True)
                 self.msg.setWindowTitle("Error Message")
                 self.msg.showMessage(
@@ -259,7 +259,7 @@ class Kicad:
                 self.msg.exec()
 
         else:
-            self.msg = QtWidgets.QErrorMessage()
+            self.msg = Dialogs.make_error_message(None)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
             self.msg.showMessage(

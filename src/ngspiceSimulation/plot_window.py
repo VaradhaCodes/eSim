@@ -15,13 +15,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 from PyQt6 import QtGui, QtCore, QtWidgets
+from configuration import Dialogs
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton,
                              QCheckBox, QRadioButton, QButtonGroup,
                              QLabel, QLineEdit, QSlider, QDoubleSpinBox,
                              QFileDialog,
-                             QMessageBox, QStatusBar,
+                             QStatusBar,
                              QSplitter, QToolButton,
                              QSizePolicy, QScrollArea)
 from PyQt6.QtGui import (QColor, QKeySequence, QShortcut,
@@ -677,10 +678,10 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                             self.axes.set_ylim(results[5], results[6])
                     self.canvas.draw()
             else:
-                QMessageBox.information(self, "Figure Options", "Figure options are limited in this environment.\nYou can use the zoom and pan tools in the toolbar.")
+                Dialogs.information(self, "Figure Options", "Figure options are limited in this environment.\nYou can use the zoom and pan tools in the toolbar.")
         except Exception as e:
             logger.error(f"Error opening figure options: {e}")
-            QMessageBox.information(self, "Figure Options", "Basic figure editing is available through the toolbar.")
+            Dialogs.information(self, "Figure Options", "Basic figure editing is available through the toolbar.")
 
     def _update_mode_controls(self) -> None:
         stacked = self.radio_stacked.isChecked()
@@ -895,7 +896,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 self.status_bar.showMessage(f"Image exported to {file_name}", 3000)
             except Exception as e:
                 logger.error(f"Error exporting image: {e}")
-                QMessageBox.warning(self, "Export Error", f"Failed to export image: {str(e)}")
+                Dialogs.warning(self, "Export Error", f"Failed to export image: {str(e)}")
 
     def _collect_plot_data(self) -> Tuple[List[str], "np.ndarray"]:
         """Build a rectangular table of the whole simulation's data.
@@ -969,7 +970,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         try:
             header, matrix = self._collect_plot_data()
         except ValueError as e:
-            QMessageBox.information(self, "Export CSV", str(e))
+            Dialogs.information(self, "Export CSV", str(e))
             return
 
         file_name, _ = QFileDialog.getSaveFileName(
@@ -989,7 +990,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             self.status_bar.showMessage(f"CSV exported to {file_name}", 3000)
         except Exception as e:
             logger.error(f"Error exporting CSV: {e}")
-            QMessageBox.warning(self, "Export Error", f"Failed to export CSV: {str(e)}")
+            Dialogs.warning(self, "Export Error", f"Failed to export CSV: {str(e)}")
 
     def clear_plot(self) -> None:
         self.timing_annotations.clear()

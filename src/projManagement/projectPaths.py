@@ -21,7 +21,52 @@
 # =========================================================================
 
 import os
+import sys
 import glob
+
+
+def canonical_path(path):
+    """
+    Return the canonical identity key for a project folder.
+
+    Two path strings that point at the *same* folder on disk collapse to the
+    same key, so a project can be registered/opened exactly once. This is the
+    single source of truth for "is this the same project?" -- compare canonical
+    keys, never raw strings or basenames.
+
+    Normalisation applied:
+        - expand ``~`` and ``$ENV`` references
+        - make absolute (against the current working directory)
+        - resolve symlinks and collapse ``..`` / ``.`` segments (realpath)
+        - strip trailing separators
+        - case-fold ONLY on case-insensitive filesystems (Windows, macOS);
+          never on Linux, where ``Foo`` and ``foo`` are distinct directories.
+
+    The folded/resolved result is meant for *identity comparison and dict
+    keys*. Keep the original string for anything user-facing (use the project
+    stem or basename for display labels).
+
+    @params
+        :path   => any path string (raw, relative, symlinked, ...) or None
+
+    @return
+        the canonical key string, or '' when path is falsy
+    """
+    if not path:
+        return ''
+    p = os.path.expanduser(os.path.expandvars(str(path)))
+    p = os.path.realpath(os.path.abspath(p))
+    p = p.rstrip(os.sep) or os.sep
+    if os.name == 'nt':
+        p = os.path.normcase(p)
+    elif sys.platform == 'darwin':
+        p = p.lower()
+    return p
+
+
+def same_project(a, b):
+    """True when paths ``a`` and ``b`` resolve to the same project folder."""
+    return canonical_path(a) == canonical_path(b)
 
 
 def find_anchors(directory, ext='proj'):

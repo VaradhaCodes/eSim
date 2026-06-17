@@ -100,11 +100,7 @@ class Workspace(QtWidgets.QWidget):
             self.obj_appconfig.default_workspace["workspace"])
         self.close()
 
-        var_appView.obj_Mainview.obj_projectExplorer.treewidget.clear()
-        for parent, children in self.obj_appconfig.project_explorer.items():
-            var_appView.obj_Mainview.obj_projectExplorer.addTreeNode(
-                parent, children
-            )
+        var_appView.obj_Mainview.obj_projectExplorer.loadProjects()
 
         time.sleep(1.5)
         var_appView.splash.close()
@@ -164,11 +160,7 @@ class Workspace(QtWidgets.QWidget):
 
         Appconfig.project_explorer = self.obj_appconfig.project_explorer
 
-        var_appView.obj_Mainview.obj_projectExplorer.treewidget.clear()
-        for parent, children in self.obj_appconfig.project_explorer.items():
-            var_appView.obj_Mainview.obj_projectExplorer.addTreeNode(
-                parent, children
-            )
+        var_appView.obj_Mainview.obj_projectExplorer.loadProjects()
 
         time.sleep(1.5)
         var_appView.splash.close()

@@ -319,8 +319,17 @@ class AutoSchematic(QtWidgets.QWidget):
     #     )
 
     def createSym(self):
-        self.dist_port = 2.54
-        self.inc_size = 2.54
+        '''
+            creating the symbol
+            (pins snapped to KiCad grid)
+        '''
+        self.grid = 0.635
+        self.dist_port = 4 * self.grid      # Distance between two ports # 100 mil (= 2.54 mm)
+        self.inc_size = self.dist_port      # Increment size of a block
+
+        def snap(val):
+            snapped = round(float(val) / self.grid) * self.grid
+            return f"{snapped:.3f}"
 
         cwd = os.getcwd()
         os.chdir(self.lib_loc)
@@ -376,7 +385,7 @@ class AutoSchematic(QtWidgets.QWidget):
             "comp_name", f"{self.modelname}_0_1"
         ).split()
 
-        draw_pos[8] = str(
+        draw_pos[8] = snap(
             float(draw_pos[8]) + self.findBlockSize() * self.inc_size
         )
         draw_pos_rec = draw_pos[8]
@@ -391,6 +400,8 @@ class AutoSchematic(QtWidgets.QWidget):
         # -------------------------------
         input_port = tmpl["input_port"].split()
         output_port = tmpl["output_port"].split()
+        input_port[3] = snap(float(input_port[3]))
+        output_port[3] = snap(float(output_port[3]))
 
         inputs = self.char_sum(self.portInfo[:self.input_length])
         outputs = self.char_sum(self.portInfo[self.input_length:])
@@ -403,12 +414,12 @@ class AutoSchematic(QtWidgets.QWidget):
             if i < inputs:
                 input_port[9] = f"\"in{i+1}\""
                 input_port[13] = f"\"{i+1}\""
-                input_port[4] = str(float(input_port[4]) - self.dist_port)
+                input_port[4] = snap(float(input_port[4]) - self.dist_port)
                 symbol_block.append(" ".join(input_port))
             else:
                 output_port[9] = f"\"out{i-inputs+1}\""
                 output_port[13] = f"\"{i+1}\""
-                output_port[4] = str(float(output_port[4]) - self.dist_port)
+                output_port[4] = snap(float(output_port[4]) - self.dist_port)
                 symbol_block.append(" ".join(output_port))
 
         # end draw + end symbol

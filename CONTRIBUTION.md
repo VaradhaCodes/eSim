@@ -22,3 +22,13 @@ There should be only one commit per pull request.
   * After commit message, there should be a commit body where you can mention what you did in short or in detail.
 
 Please follow above method to file pull requests.
+
+#### Coding guidelines
+
+* **Message popups:** never construct `QMessageBox()` / `QErrorMessage()`
+  directly or call `QtWidgets.QMessageBox.warning/critical/information/question`
+  with a `None` parent. A parentless dialog has no owner window and gets stacked
+  *behind* the main window, making eSim look frozen. Route all popups through
+  `configuration.Dialogs` (e.g. `Dialogs.warning(self, title, text)`), which
+  always attaches a parent and works across X11/Wayland/Windows. The test
+  `src/configuration/tests/test_dialog_hygiene.py` enforces this in CI.

@@ -25,7 +25,7 @@ class openSub(QtWidgets.QWidget):
 
         self.editfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
-                None, "Open File", init_path + "library/SubcircuitLibrary"
+                self, "Open File", init_path + "library/SubcircuitLibrary"
             )
         )
 

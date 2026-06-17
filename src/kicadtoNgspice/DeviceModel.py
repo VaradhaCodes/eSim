@@ -1,4 +1,5 @@
 from PyQt6 import QtWidgets, QtCore
+from configuration import Dialogs
 import os
 from xml.etree import ElementTree as ET
 from . import TrackWidget
@@ -194,7 +195,7 @@ class DeviceModel(QtWidgets.QWidget):
 'x', 'v', 'i', 'a'\
                      can be used with SKY130 mode")
                 print("Please remove other components")
-                self.msg = QtWidgets.QErrorMessage()
+                self.msg = Dialogs.make_error_message(self)
                 self.msg.setModal(True)
                 self.msg.setWindowTitle("Invalid components")
                 self.content = "Only components with designators " + \
@@ -1267,7 +1268,7 @@ Converter developed at FOSSEE, IIT Bombay\n")
         print(
             '\n*************************************\
 ************************************\n')
-        self.msg = QtWidgets.QErrorMessage()
+        self.msg = Dialogs.make_error_message(self)
         self.msg.setModal(True)
         self.msg.setWindowTitle("Verilog File Generated")
         self.content = "The Verilog file has been successfully \

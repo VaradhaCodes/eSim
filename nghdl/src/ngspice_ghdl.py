@@ -15,9 +15,20 @@ from model_generation import ModelGeneration
 
 class Mainwindow(QtWidgets.QWidget):
 
-    def __init__(self):
-        # super(Mainwindow, self).__init__()
-        QtWidgets.QMainWindow.__init__(self)
+    def __init__(self, parent=None, embedded=False):
+        # NOTE: this class is a QWidget. Initialise it as one (the previous
+        # QtWidgets.QMainWindow.__init__ call worked only by accident).
+        super().__init__(parent)
+        # embedded=True  -> running as a tab inside eSim's Makerchip dock.
+        # embedded=False -> running standalone via the `nghdl`/`nghdl -e` CLI.
+        self.embedded = embedded
+        # When embedded, behave like `nghdl -e` so the KiCad schematic symbol
+        # is generated after a successful build.
+        if embedded:
+            Appconfig.esimFlag = 1
+        # Remember the host (eSim) working directory. The upload flow changes
+        # the CWD; this lets us always restore it and never strand eSim.
+        self._home_cwd = os.getcwd()
         print("Initializing..........")
 
         if os.name == 'nt':
@@ -25,7 +36,9 @@ class Mainwindow(QtWidgets.QWidget):
         else:
             self.home = os.path.expanduser('~')
 
-        # Reading all variables from config.ini
+        # Reading all variables from config.ini. A missing/empty config raises
+        # here; when embedded the caller catches it and shows a placeholder
+        # instead of letting NGHDL break the Makerchip dock.
         self.parser = ConfigParser()
         self.parser.read(
             os.path.join(self.home, os.path.join('.nghdl', 'config.ini'))
@@ -34,10 +47,12 @@ class Mainwindow(QtWidgets.QWidget):
         self.release_dir = self.parser.get('NGHDL', 'RELEASE')
         self.src_home = self.parser.get('SRC', 'SRC_HOME')
         self.licensefile = self.parser.get('SRC', 'LICENSE')
-        # Printing LICENCE file on terminal
-        fileopen = open(self.licensefile, 'r')
-        print(fileopen.read())
-        fileopen.close()
+        # Printing LICENCE file on terminal (non-fatal if it is missing)
+        try:
+            with open(self.licensefile, 'r') as fileopen:
+                print(fileopen.read())
+        except OSError as e:
+            print("Could not read NGHDL license file:", e)
         self.file_list = []       # to keep the supporting files
         self.filename = ''
         self.errorFlag = False    # to keep the check of "make install" errors
@@ -46,6 +61,8 @@ class Mainwindow(QtWidgets.QWidget):
     def initUI(self):
         self.uploadbtn = QtWidgets.QPushButton('Upload')
         self.uploadbtn.clicked.connect(self.uploadModel)
+        self.uploadbtn.setStyleSheet(
+            "background-color: #2e7d32; color: white; font-weight: bold;")
         self.exitbtn = QtWidgets.QPushButton('Exit')
         self.exitbtn.clicked.connect(self.closeWindow)
         self.browsebtn = QtWidgets.QPushButton('Browse')
@@ -55,6 +72,7 @@ class Mainwindow(QtWidgets.QWidget):
         self.removebtn = QtWidgets.QPushButton('Remove Files')
         self.removebtn.clicked.connect(self.removeFiles)
         self.ledit = QtWidgets.QLineEdit(self)
+        self.ledit.setPlaceholderText("Path to .vhdl file")
         self.sedit = QtWidgets.QTextEdit(self)
         self.process = QtCore.QProcess(self)
         self.termedit = QtWidgets.QTextEdit(self)
@@ -65,23 +83,51 @@ class Mainwindow(QtWidgets.QWidget):
         self.termedit.setPalette(pal)
         self.termedit.setStyleSheet("QTextEdit {color:white}")
 
-        # Creating gridlayout
-        grid = QtWidgets.QGridLayout()
-        grid.setSpacing(5)
-        grid.addWidget(self.ledit, 1, 0)
-        grid.addWidget(self.browsebtn, 1, 1)
-        grid.addWidget(self.sedit, 2, 0, 4, 1)
-        grid.addWidget(self.addbtn, 2, 1)
-        grid.addWidget(self.removebtn, 3, 1)
-        grid.addWidget(self.termedit, 6, 0, 10, 1)
-        grid.addWidget(self.uploadbtn, 17, 0)
-        grid.addWidget(self.exitbtn, 17, 1)
+        # Option buttons grouped like the Maker tab's "Select Options" box.
+        optionsbox = QtWidgets.QGroupBox("Select Options")
+        optionsgrid = QtWidgets.QGridLayout()
+        optionsgrid.setSpacing(5)
+        optionsgrid.addWidget(self.ledit, 0, 0, 1, 3)
+        optionsgrid.addWidget(self.browsebtn, 0, 3)
+        optionsgrid.addWidget(self.addbtn, 1, 0)
+        optionsgrid.addWidget(self.removebtn, 1, 1)
+        optionsgrid.addWidget(self.uploadbtn, 1, 2)
+        # A tab has no business exiting the whole application, so the Exit
+        # button is only shown in the standalone window.
+        if not self.embedded:
+            optionsgrid.addWidget(self.exitbtn, 1, 3)
+        optionsbox.setLayout(optionsgrid)
 
+        filesbox = QtWidgets.QGroupBox("Supporting files")
+        fileslayout = QtWidgets.QVBoxLayout()
+        fileslayout.addWidget(self.sedit)
+        filesbox.setLayout(fileslayout)
+
+        consolebox = QtWidgets.QGroupBox("Console")
+        consolelayout = QtWidgets.QVBoxLayout()
+        consolelayout.addWidget(self.termedit)
+        consolebox.setLayout(consolelayout)
+
+        grid = QtWidgets.QVBoxLayout()
+        grid.setSpacing(5)
+        grid.addWidget(optionsbox)
+        grid.addWidget(filesbox)
+        grid.addWidget(consolebox)
         self.setLayout(grid)
-        self.setGeometry(300, 300, 600, 600)
-        self.setWindowTitle("Ngspice Digital Model Creator (from VHDL)")
-        # self.setWindowIcon(QtGui.QIcon('logo.png'))
-        self.show()
+
+        # Rounded group-box borders matching the other Makerchip dock tabs.
+        self.setStyleSheet(
+            "QGroupBox { border: 1px solid gray; border-radius: 9px; "
+            "margin-top: 0.5em; } "
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; "
+            "padding: 0 3px 0 3px; }")
+
+        # Standalone window chrome; skipped when embedded as a tab.
+        if not self.embedded:
+            self.setGeometry(300, 300, 600, 600)
+            self.setWindowTitle("Ngspice Digital Model Creator (from VHDL)")
+            # self.setWindowIcon(QtGui.QIcon('logo.png'))
+            self.show()
 
     def closeWindow(self):
         try:
@@ -89,7 +135,18 @@ class Mainwindow(QtWidgets.QWidget):
         except BaseException:
             pass
         print("Close button clicked")
-        sys.exit()
+        # Never exit the process when embedded - that would kill all of eSim.
+        if not self.embedded:
+            sys.exit()
+
+    def closeEvent(self, event):
+        # Kill any running build so closing the tab/eSim leaves no orphan.
+        try:
+            if self.process is not None:
+                self.process.kill()
+        except BaseException:
+            pass
+        super().closeEvent(event)
 
     def browseFile(self):
         print("Browse button clicked")
@@ -125,15 +182,18 @@ class Mainwindow(QtWidgets.QWidget):
             )
 
     def createModelDirectory(self):
+        """Create the model directory. Returns False if the user cancels an
+        overwrite (the upload is then aborted without touching eSim)."""
         print("Create Model Directory Called")
         self.digital_home = self.parser.get('NGHDL', 'DIGITAL_MODEL')
         self.digital_home = os.path.join(self.digital_home, "ghdl")
-        os.chdir(self.digital_home)
-        print("Current Working Directory Changed to", os.getcwd())
         self.modelname = os.path.basename(str(self.filename)).split('.')[0]
         print("Model to be created :", self.modelname)
+        # Work with an absolute path so we never have to chdir (chdir would
+        # change eSim's process-global CWD).
+        model_path = os.path.join(self.digital_home, self.modelname)
         # Looking if model directory is present or not
-        if os.path.isdir(self.modelname):
+        if os.path.isdir(model_path):
             print("Model Already present")
             ret = QtWidgets.QMessageBox.warning(
                 self, "Warning",
@@ -144,22 +204,15 @@ class Mainwindow(QtWidgets.QWidget):
             )
             if ret == QtWidgets.QMessageBox.StandardButton.Ok:
                 print("Overwriting existing model " + self.modelname)
-                if os.name == 'nt':
-                    cmd = "rmdir " + self.modelname + "/s /q"
-                else:
-                    cmd = "rm -rf " + self.modelname
-                # process = subprocess.Popen(
-                #     cmd, stdout=subprocess.PIPE,
-                #     stderr=subprocess.PIPE, shell=True
-                # )
-                subprocess.call(cmd, shell=True)
-                os.mkdir(self.modelname)
+                shutil.rmtree(model_path, ignore_errors=True)
+                os.mkdir(model_path)
             else:
-                print("Exiting application")
-                sys.exit()
+                print("Model creation cancelled by user")
+                return False
         else:
             print("Creating model " + self.modelname + " directory")
-            os.mkdir(self.modelname)
+            os.mkdir(model_path)
+        return True
 
     def addingModelInModpath(self):
         print("Adding Model " + self.modelname +
@@ -182,70 +235,78 @@ class Mainwindow(QtWidgets.QWidget):
 
     def createModelFiles(self):
         print("Create Model Files Called")
-        os.chdir(self.cur_dir)
-        print("Current Working directory changed to " + self.cur_dir)
+        # This method must chdir into the model dir for the relative file ops
+        # and compile script below. Wrap it so eSim's CWD is always restored,
+        # even on error.
+        try:
+            os.chdir(self.cur_dir)
+            print("Current Working directory changed to " + self.cur_dir)
 
-        # Generate model corresponding to the uploaded VHDL file
-        model = ModelGeneration(str(self.ledit.text()))
-        model.readPortInfo()
-        model.createCfuncModFile()
-        model.createIfSpecFile()
-        model.createTestbench()
-        model.createServerScript()
-        model.createSockScript()
+            # Generate model corresponding to the uploaded VHDL file
+            model = ModelGeneration(str(self.ledit.text()))
+            model.readPortInfo()
+            model.createCfuncModFile()
+            model.createIfSpecFile()
+            model.createTestbench()
+            model.createServerScript()
+            model.createSockScript()
 
-        # Moving file to model directory
-        path = os.path.join(self.digital_home, self.modelname)
-        shutil.move("cfunc.mod", path)
-        shutil.move("ifspec.ifs", path)
+            # Moving file to model directory
+            path = os.path.join(self.digital_home, self.modelname)
+            shutil.move("cfunc.mod", path)
+            shutil.move("ifspec.ifs", path)
 
-        # Creating directory inside model directoy
-        print("Creating DUT directory at " + os.path.join(path, "DUTghdl"))
-        os.mkdir(path + "/DUTghdl/")
-        print("Copying required file to DUTghdl directory")
-        shutil.move("connection_info.txt", path + "/DUTghdl/")
-        shutil.move("start_server.sh", path + "/DUTghdl/")
-        shutil.move("sock_pkg_create.sh", path + "/DUTghdl/")
-        shutil.move(self.modelname + "_tb.vhdl", path + "/DUTghdl/")
+            # Creating directory inside model directoy
+            print("Creating DUT directory at " + os.path.join(path, "DUTghdl"))
+            os.mkdir(path + "/DUTghdl/")
+            print("Copying required file to DUTghdl directory")
+            shutil.move("connection_info.txt", path + "/DUTghdl/")
+            shutil.move("start_server.sh", path + "/DUTghdl/")
+            shutil.move("sock_pkg_create.sh", path + "/DUTghdl/")
+            shutil.move(self.modelname + "_tb.vhdl", path + "/DUTghdl/")
 
-        shutil.copy(str(self.filename), path + "/DUTghdl/")
-        shutil.copy(os.path.join(self.home, self.src_home) +
-                    "/src/ghdlserver/compile.sh", path + "/DUTghdl/")
-        shutil.copy(os.path.join(self.home, self.src_home) +
-                    "/src/ghdlserver/uthash.h", path + "/DUTghdl/")
-        shutil.copy(os.path.join(self.home, self.src_home) +
-                    "/src/ghdlserver/ghdlserver.c", path + "/DUTghdl/")
-        shutil.copy(os.path.join(self.home, self.src_home) +
-                    "/src/ghdlserver/ghdlserver.h", path + "/DUTghdl/")
-        shutil.copy(os.path.join(self.home, self.src_home) +
-                    "/src/ghdlserver/Utility_Package.vhdl", path + "/DUTghdl/")
-        shutil.copy(os.path.join(self.home, self.src_home) +
-                    "/src/ghdlserver/Vhpi_Package.vhdl", path + "/DUTghdl/")
-
-        if os.name == 'nt':
+            shutil.copy(str(self.filename), path + "/DUTghdl/")
             shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/libws2_32.a", path + "/DUTghdl/")
+                        "/src/ghdlserver/compile.sh", path + "/DUTghdl/")
+            shutil.copy(os.path.join(self.home, self.src_home) +
+                        "/src/ghdlserver/uthash.h", path + "/DUTghdl/")
+            shutil.copy(os.path.join(self.home, self.src_home) +
+                        "/src/ghdlserver/ghdlserver.c", path + "/DUTghdl/")
+            shutil.copy(os.path.join(self.home, self.src_home) +
+                        "/src/ghdlserver/ghdlserver.h", path + "/DUTghdl/")
+            shutil.copy(os.path.join(self.home, self.src_home) +
+                        "/src/ghdlserver/Utility_Package.vhdl",
+                        path + "/DUTghdl/")
+            shutil.copy(os.path.join(self.home, self.src_home) +
+                        "/src/ghdlserver/Vhpi_Package.vhdl", path + "/DUTghdl/")
 
-        for file in self.file_list:
-            shutil.copy(str(file), path + "/DUTghdl/")
+            if os.name == 'nt':
+                shutil.copy(os.path.join(self.home, self.src_home) +
+                            "/src/ghdlserver/libws2_32.a", path + "/DUTghdl/")
 
-        os.chdir(path + "/DUTghdl")
-        if os.name == 'nt':
-            # path to msys bin directory where bash is located
-            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-            subprocess.call(self.msys_home + "/usr/bin/bash.exe " +
-                            path + "/DUTghdl/compile.sh", shell=True)
-            subprocess.call(self.msys_home + "/usr/bin/bash.exe -c " +
-                            "'chmod a+x start_server.sh'", shell=True)
-            subprocess.call(self.msys_home + "/usr/bin/bash.exe -c " +
-                            "'chmod a+x sock_pkg_create.sh'", shell=True)
-        else:
-            subprocess.call("bash " + path + "/DUTghdl/compile.sh", shell=True)
-            subprocess.call("chmod a+x start_server.sh", shell=True)
-            subprocess.call("chmod a+x sock_pkg_create.sh", shell=True)
+            for file in self.file_list:
+                shutil.copy(str(file), path + "/DUTghdl/")
 
-        os.remove("compile.sh")
-        # os.remove("ghdlserver.c")
+            os.chdir(path + "/DUTghdl")
+            if os.name == 'nt':
+                # path to msys bin directory where bash is located
+                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
+                subprocess.call(self.msys_home + "/usr/bin/bash.exe " +
+                                path + "/DUTghdl/compile.sh", shell=True)
+                subprocess.call(self.msys_home + "/usr/bin/bash.exe -c " +
+                                "'chmod a+x start_server.sh'", shell=True)
+                subprocess.call(self.msys_home + "/usr/bin/bash.exe -c " +
+                                "'chmod a+x sock_pkg_create.sh'", shell=True)
+            else:
+                subprocess.call("bash " + path + "/DUTghdl/compile.sh",
+                                shell=True)
+                subprocess.call("chmod a+x start_server.sh", shell=True)
+                subprocess.call("chmod a+x sock_pkg_create.sh", shell=True)
+
+            os.remove("compile.sh")
+            # os.remove("ghdlserver.c")
+        finally:
+            os.chdir(self.cur_dir)
 
     # Slot to redirect stdout and stderr to window console
     @QtCore.pyqtSlot()
@@ -264,8 +325,9 @@ class Mainwindow(QtWidgets.QWidget):
     def runMake(self):
         print("run Make Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
-        path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
+        # Keep the icm path so make/make install run there via QProcess's
+        # own working directory - we never chdir eSim's process into it.
+        self.path_icm = os.path.join(self.release_home, "src/xspice/icm")
 
         try:
             if os.name == 'nt':
@@ -274,8 +336,9 @@ class Mainwindow(QtWidgets.QWidget):
             else:
                 cmd = "make"
 
-            print("Running Make command in " + path_icm)
+            print("Running Make command in " + self.path_icm)
             self.process = QtCore.QProcess(self)
+            self.process.setWorkingDirectory(self.path_icm)
             self.process.readyReadStandardOutput.connect(self.readAllStandard)
             self.process.readyReadStandardError.connect(self.readAllStandard)
             if os.name == "nt":
@@ -287,7 +350,10 @@ class Mainwindow(QtWidgets.QWidget):
 
         except BaseException:
             print("There is error in 'make' ")
-            sys.exit()
+            if not self.embedded:
+                sys.exit()
+            self.uploadbtn.setEnabled(True)
+            self.exitbtn.setEnabled(True)
 
     def runMakeInstall(self):
         print("run Make Install Called")
@@ -302,15 +368,18 @@ class Mainwindow(QtWidgets.QWidget):
             print("Running Make Install")
 
             self.process = QtCore.QProcess(self)
+            self.process.setWorkingDirectory(self.path_icm)
             self.process.readyReadStandardOutput.connect(self.readAllStandard)
             self.process.readyReadStandardError.connect(self.readAllStandard)
             self.process.finished.connect(self.createSchematicLib)
             self.process.start(prog, args)
-            os.chdir(self.cur_dir)
 
         except BaseException:
             print("There is error in 'make install' ")
-            sys.exit()
+            if not self.embedded:
+                sys.exit()
+            self.uploadbtn.setEnabled(True)
+            self.exitbtn.setEnabled(True)
 
     def createSchematicLib(self):
         try:
@@ -327,7 +396,14 @@ class Mainwindow(QtWidgets.QWidget):
 
     def _createSchematicLib(self):
         if os.name == "nt":
-            shutil.copy("ghdl/ghdl.cm", "../../../../lib/ngspice/")
+            # This copy uses paths relative to the icm build dir; run it there
+            # without leaving eSim's CWD changed.
+            _cwd = os.getcwd()
+            try:
+                os.chdir(self.path_icm)
+                shutil.copy("ghdl/ghdl.cm", "../../../../lib/ngspice/")
+            finally:
+                os.chdir(_cwd)
 
         os.chdir(self.cur_dir)
         if Appconfig.esimFlag == 1:
@@ -371,7 +447,11 @@ class Mainwindow(QtWidgets.QWidget):
                 self.uploadbtn.setEnabled(False)
                 self.exitbtn.setEnabled(False)
                 self.termedit.append('<b style="color:yellow">Processing... do not close until Symbol Added dialog appears.</b>')
-                self.createModelDirectory()
+                if not self.createModelDirectory():
+                    # User cancelled an overwrite - abort cleanly.
+                    self.uploadbtn.setEnabled(True)
+                    self.exitbtn.setEnabled(True)
+                    return
                 self.addingModelInModpath()
                 self.createModelFiles()
                 self.runMake()
@@ -381,6 +461,14 @@ class Mainwindow(QtWidgets.QWidget):
                     '''<br/>This accepts only <b>.vhdl</b> file '''
                 )
         except Exception as e:
+            # Restore eSim's CWD and re-enable controls so a failed upload
+            # never leaves the host application or this tab in a bad state.
+            try:
+                os.chdir(self.cur_dir)
+            except BaseException:
+                pass
+            self.uploadbtn.setEnabled(True)
+            self.exitbtn.setEnabled(True)
             QtWidgets.QMessageBox.critical(self, 'Error', str(e))
 
 

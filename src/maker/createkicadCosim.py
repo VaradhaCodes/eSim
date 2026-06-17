@@ -17,6 +17,7 @@
 import os
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
+from configuration import Dialogs
 
 from . import createkicad
 
@@ -82,7 +83,7 @@ class CosimSchematic(createkicad.AutoSchematic):
             return "No Error"
 
         if xmlFound == target:
-            ret = QtWidgets.QMessageBox.warning(
+            ret = Dialogs.warning(
                 None, "Warning",
                 "<b>d_cosim library files for this model already exist. "
                 "Do you want to overwrite them?</b>",
@@ -101,7 +102,7 @@ class CosimSchematic(createkicad.AutoSchematic):
             # Same name currently a legacy NgVeri code model. One name = one
             # backend, so offer to switch instead of erroring: drop the NgVeri
             # version, then build the d_cosim block. Latest wins.
-            ret = QtWidgets.QMessageBox.question(
+            ret = Dialogs.question(
                 None, "Model already exists",
                 "<b>'" + str(self.modelname) + "' already exists as an "
                 "NgVeri Ngspice code model.</b><br/>"
@@ -121,7 +122,7 @@ class CosimSchematic(createkicad.AutoSchematic):
             return "No Error"
         # A built-in / NgHDL / standard library primitive — not ours to
         # replace. The user must rename their module.
-        QtWidgets.QMessageBox.critical(
+        Dialogs.critical(
             None, "Error",
             "<b>A model named '" + str(self.modelname) + "' already exists in "
             "the eSim '" + found + "' library.</b><br/>"
