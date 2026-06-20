@@ -16,8 +16,9 @@ from configuration import Dialogs
 # Backend badge colours (NgVeri tab). Kept here so the legend and the per-row
 # dots can never drift apart.
 BADGE_COLOURS = {
-    "NgVeri": "#2e7d32",    # green  -- legacy Verilator -> Ngveri.cm
-    "d_cosim": "#1565c0",   # blue   -- Icarus -> eSim_NgVeriCosim
+    "NgVeri": "#2e7d32",    # green   -- legacy Verilator -> Ngveri.cm
+    "d_cosim": "#1565c0",   # blue    -- Icarus -> eSim_NgVeriCosim
+    "Nghdl": "#e65100",     # orange  -- GHDL/NGHDL -> ghdl.cm
 }
 _DEFAULT_BADGE_COLOUR = "#616161"
 

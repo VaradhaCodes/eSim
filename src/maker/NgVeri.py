@@ -34,6 +34,10 @@ from . import Maker
 from . import ModelGeneration
 from . import createkicad
 from . import createkicadCosim
+from . import kicad_symlib
+from .model_teardown import (
+    _safe_model_subdir, _strip_modpath_line, _prune_modpath,
+    _resolve_backend, _nghdl_sym_path)
 from . import CosimConfig
 from .CosimLogger import CosimLog
 from .RemoveItemsDialog import RemoveItemsDialog
@@ -41,37 +45,6 @@ import os
 import shutil
 from configuration.Appconfig import Appconfig
 from configparser import ConfigParser, NoSectionError, NoOptionError
-
-
-def _safe_model_subdir(base, name):
-    """Resolve ``<base>/<name>`` for deletion, but ONLY when it is provably a
-    single-component subdirectory strictly inside ``base``.
-
-    Returns the absolute path, or ``None`` when ``name`` is empty/blank, holds a
-    path separator, is ``.``/``..``, or resolves to ``base`` itself or outside
-    it. Callers MUST treat ``None`` as "do not delete anything".
-
-    This is the guard that stops a blank model name from collapsing
-    ``os.path.join(base, "")`` to ``"base/"`` and ``shutil.rmtree`` wiping the
-    whole models directory.
-    """
-    if not name or not str(name).strip():
-        return None
-    name = str(name).strip()
-    if (os.sep in name or (os.altsep and os.altsep in name)
-            or name in ('.', '..')):
-        return None
-    base_abs = os.path.abspath(base)
-    target = os.path.abspath(os.path.join(base_abs, name))
-    if target == base_abs:
-        return None
-    try:
-        if os.path.commonpath([base_abs, target]) != base_abs:
-            return None
-    except ValueError:
-        # Different drives (Windows) -> not a subpath.
-        return None
-    return target
 
 
 class NgVeri(QtWidgets.QWidget):
@@ -107,6 +80,8 @@ class NgVeri(QtWidgets.QWidget):
             digital = os.path.join(
                 os.path.expanduser('~'), '.nghdl', 'DigitalModelLibrary')
         self.digital_home = digital + "/Ngveri"
+        # NGHDL (GHDL) models live in a sibling tree under the same icm base.
+        self.ghdl_home = digital + "/ghdl"
         # modelParamXML root (from the maker Appconfig, keyed off eSim_HOME).
         # Used to list/resolve d_cosim models, which live only under
         # NgVeriCosim/ and never appear in modpath.lst.
@@ -465,6 +440,16 @@ class NgVeri(QtWidgets.QWidget):
                 if name:
                     badges[name] = "NgVeri"
 
+        # NGHDL (GHDL) models, listed from their modelParamXML records -- the
+        # same disk-truth pattern as d_cosim. They never appear in the Ngveri
+        # modpath.lst (they have their own ghdl/modpath.lst), so there is no
+        # overlap with the NgVeri badge above.
+        nghdl_dir = os.path.join(self._xml_loc, 'Nghdl')
+        if os.path.isdir(nghdl_dir):
+            for fname in sorted(os.listdir(nghdl_dir)):
+                if fname.endswith('.xml'):
+                    badges[fname[:-4]] = "Nghdl"
+
         cosim_dir = os.path.join(self._xml_loc, 'NgVeriCosim')
         if os.path.isdir(cosim_dir):
             for fname in sorted(os.listdir(cosim_dir)):
@@ -487,19 +472,20 @@ class NgVeri(QtWidgets.QWidget):
         names, badges = self._list_models()
         if not names:
             Dialogs.information(
-                self, "Remove Verilog Models",
-                "There are no Verilog models to remove.",
+                self, "Remove Models",
+                "There are no models to remove.",
                 QtWidgets.QMessageBox.StandardButton.Ok)
             return
 
         dlg = RemoveItemsDialog(
-            "Remove Verilog Models", names, badges=badges,
+            "Remove Models", names, badges=badges,
             item_noun="model", parent=self)
         if not dlg.exec():
             return
 
         log = CosimLog(self.entry_var[0])
-        rebuilt_needed = False
+        ngveri_needed = False
+        nghdl_needed = False
         for name in dlg.selected_items():
             # Belt-and-braces: a blank name must never reach the teardown
             # helpers (os.path.join(base, "") -> "base/" -> rmtree wipes all
@@ -507,25 +493,36 @@ class NgVeri(QtWidgets.QWidget):
             if not name or not name.strip():
                 continue
             # On-disk layout is the source of truth for which engine owns it.
-            if self._model_backend(name) == "cosim":
+            backend = self._model_backend(name)
+            if backend == "cosim":
                 self._remove_cosim_model(name)
+            elif backend == "nghdl":
+                # Defer the ghdl.cm rebuild to one pass after every model gone.
+                self._remove_nghdl_model(name, rebuild=False)
+                nghdl_needed = True
             else:
                 # Defer the (expensive) Ngveri.cm rebuild to one pass after
                 # every model is gone, not once per model.
                 self._remove_ngveri_model(name, rebuild=False)
-                rebuilt_needed = True
+                ngveri_needed = True
 
-        if rebuilt_needed:
+        # Each rebuild runs a whole-icm make; they are kept separate (and the
+        # rare mixed removal pays for two builds) so the proven NgVeri path is
+        # untouched and each code model is pruned against its own modpath.lst.
+        if ngveri_needed:
             self._rebuild_ngveri_cm(log)
+        if nghdl_needed:
+            self._rebuild_nghdl_cm(log)
 
     def _model_backend(self, name):
         '''
             Resolve which backend created a model from the on-disk
             modelParamXML layout -- the single source of truth that survives
-            restarts: NgVeriCosim/<name>.xml => d_cosim, else legacy NgVeri.
+            restarts: NgVeriCosim/<name>.xml => cosim, Nghdl/<name>.xml =>
+            nghdl, else legacy NgVeri (ngveri). Delegates to the tested
+            free function _resolve_backend.
         '''
-        cosim_xml = os.path.join(self._xml_loc, 'NgVeriCosim', name + '.xml')
-        return "cosim" if os.path.isfile(cosim_xml) else "ngveri"
+        return _resolve_backend(self._xml_loc, name)
 
     def _remove_cosim_model(self, text):
         '''
@@ -698,6 +695,119 @@ class NgVeri(QtWidgets.QWidget):
             )
         else:
             log.ok("Ngveri.cm rebuilt.")
+
+    # ------------------------------------------------------------------ #
+    #  NGHDL (GHDL) model teardown -- mirrors the NgVeri path against the
+    #  ghdl/ tree. Uses eSim's OWN kicad_symlib; never imports the separately
+    #  packaged nghdl GUI, so a broken/absent NGHDL install can't break this.
+    # ------------------------------------------------------------------ #
+    def _remove_nghdl_model(self, text, rebuild=True):
+        '''
+            Tear down an NGHDL (GHDL) model: drop it from ghdl/modpath.lst,
+            strip its eSim_Nghdl KiCad symbol + Nghdl/<name>.xml, delete the
+            per-model source and release dirs, then rebuild/reinstall ghdl.cm
+            so ngspice unlinks it.
+
+            Pass rebuild=False when removing several models in one pass; the
+            caller runs a single _rebuild_nghdl_cm() at the end.
+        '''
+        log = CosimLog(self.entry_var[0])
+        log.phase('REMOVE NGHDL model "' + str(text) + '"')
+
+        if not text or not str(text).strip():
+            log.warn("Refusing to remove an NGHDL model with a blank name.")
+            return
+
+        # Drop the model from ghdl/modpath.lst (absent file/line => no crash).
+        if _strip_modpath_line(self.ghdl_home + '/modpath.lst', text):
+            log.info('Dropped "' + str(text) + '" from ghdl/modpath.lst')
+
+        # Strip the symbol from the shared eSim_Nghdl.kicad_sym and delete the
+        # orphan param XML -- both idempotent, both via eSim's own kicad_symlib.
+        try:
+            sym_path = _nghdl_sym_path(self.src_home)
+            parts = kicad_symlib._read_parts(sym_path)
+            if parts.pop(str(text), None) is not None:
+                kicad_symlib._write_lib(sym_path, parts)
+                log.info("Removed eSim_Nghdl symbol for " + str(text))
+            xml = os.path.join(self._xml_loc, 'Nghdl', str(text) + '.xml')
+            try:
+                os.remove(xml)
+                log.info("Removed Nghdl/" + str(text) + ".xml")
+            except FileNotFoundError:
+                pass
+        except Exception as err:
+            log.warn("Could not remove eSim_Nghdl symbol/XML for '" +
+                     str(text) + "': " + str(err))
+
+        # Drop BOTH per-model dirs (guarded against a blank/unsafe name):
+        #   * source   <ghdl_home>/<model>                  -- ifspec.ifs +
+        #     DUTghdl/ (the VHDL + ghdlserver build), and
+        #   * release  <release>/src/xspice/icm/ghdl/<model> -- compiled .o/.a
+        #     that otherwise get re-bundled into ghdl.cm.
+        for label, base in (
+                ("source", self.ghdl_home),
+                ("release", os.path.join(
+                    self.release_dir, "src/xspice/icm/ghdl"))):
+            model_dir = _safe_model_subdir(base, text)
+            if model_dir is None:
+                log.warn("Refusing to remove unsafe " + label +
+                         " dir for model name: " + repr(text))
+                continue
+            try:
+                shutil.rmtree(model_dir)
+                log.info("Removed " + label + " dir: " + model_dir)
+            except FileNotFoundError:
+                log.detail(label + " dir already absent: " + model_dir)
+            except OSError as err:
+                log.warn("Could not remove " + label + " dir '" +
+                         model_dir + "': " + str(err))
+
+        log.ok('NGHDL model "' + str(text) + '" files removed.')
+        if rebuild:
+            self._rebuild_nghdl_cm(log)
+
+    def _rebuild_nghdl_cm(self, log):
+        '''
+            Rebuild + reinstall ghdl.cm so ngspice unlinks every NGHDL model
+            already stripped from ghdl/modpath.lst. The icm `make` builds the
+            whole code-model tree, so reusing ModelGeneration's runMake/
+            runMakeInstall rebuilds ghdl.cm too. Prune the ghdl modpath first
+            so a ghost line (dir gone, line left) can't abort the build.
+        '''
+        dropped = _prune_modpath(
+            self.ghdl_home + '/modpath.lst', self.ghdl_home)
+        for name in dropped:
+            log.warn('Pruned stale model "' + name + '" from ghdl/modpath.lst '
+                     '(its build dir / ifspec.ifs is missing).')
+
+        self.fname = Maker.verilogFile[self.filecount]
+        model = ModelGeneration.ModelGeneration(
+            self.fname, self.entry_var[0])
+
+        try:
+            log.phase("Rebuild ghdl.cm")
+            ok = model.runMake()
+            if os.name != 'nt':
+                ok = model.runMakeInstall() and ok
+            else:
+                shutil.copy(
+                    self.release_dir + "/src/xspice/icm/ghdl/ghdl.cm",
+                    self.nghdl_home + "/lib/ngspice/"
+                )
+            if not ok:
+                raise RuntimeError(
+                    "the ngspice code-model rebuild returned a "
+                    "non-zero exit status")
+        except Exception as err:
+            Dialogs.critical(
+                self, "Error Message",
+                "The ngspice code model could not be rebuilt after removal: " +
+                str(err),
+                QtWidgets.QMessageBox.StandardButton.Ok
+            )
+        else:
+            log.ok("ghdl.cm rebuilt.")
 
     # ------------------------------------------------------------------ #
     #  Backend switching (d_cosim <-> legacy NgVeri for the same model)
