@@ -5,6 +5,7 @@ from xml.etree import ElementTree as ET
 from . import TrackWidget
 from . import ModelGrouping
 from .ModelGroupWidget import ModelGroupWidget, InstanceRow
+from projManagement import modelCache
 from projManagement.projectPaths import previous_values_path
 
 
@@ -62,6 +63,9 @@ class DeviceModel(QtWidgets.QWidget):
         self.devicemodel_dict_end = {}
         # List to hold information about device
         self.deviceDetail = {}
+        # (model_name, ModelGroupWidget) per group built by eSim_general_libs;
+        # used for cross-project model_cache hints. Empty for sky130/ihp.
+        self._groups = []
 
         # Set Layout
         self.grid = QtWidgets.QGridLayout()
@@ -629,9 +633,38 @@ class DeviceModel(QtWidgets.QWidget):
                 title, rows,
                 resolve_fn=self._resolve_device,
                 group_browse_fn=self._browse_lib)
+            self._apply_cache_hint(model, group, rows)
             self.grid.addWidget(group)
+            self._groups.append((model, group))
 
         self.show()
+
+    def _apply_cache_hint(self, model, group, rows):
+        """Pre-fill a blank group default from the cross-project model_cache.
+
+        Only touches a group with no restored value and no overrides, so a
+        project's own Previous_Values always wins. modelCache.lookup already
+        drops a remembered path that does not exist on this machine, so this can
+        only ever suggest a usable, visible, editable default."""
+        if group.group_path() or any(group.is_overridden(r.ref) for r in rows):
+            return
+        hint = modelCache.lookup(model)
+        if hint:
+            group.set_group_path(hint)
+
+    def remembered_models(self):
+        """{model_name: lib_path} for groups where every instance resolved to
+        the same non-empty library. Fed to modelCache after a successful
+        convert. MOSFET W/L/M are separate per-instance fields and are not part
+        of the model->library mapping."""
+        out = {}
+        for model, group in self._groups:
+            vals = set(group.resolved().values())
+            if len(vals) == 1:
+                path = next(iter(vals))
+                if path:
+                    out[model] = path
+        return out
 
     def _make_dim_changed(self, ref):
         """A MOSFET W/L/M edit changed: refresh that instance's tracked value

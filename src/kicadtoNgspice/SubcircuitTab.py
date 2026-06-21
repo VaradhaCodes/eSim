@@ -3,6 +3,7 @@ from . import TrackWidget
 from . import ModelGrouping
 from .ModelGroupWidget import ModelGroupWidget, InstanceRow
 from projManagement import Validation
+from projManagement import modelCache
 from projManagement.projectPaths import stem_from_file, previous_values_path
 import os
 from xml.etree import ElementTree as ET
@@ -51,6 +52,8 @@ class SubcircuitTab(QtWidgets.QWidget):
         self.subcircuit_dict_end = {}
         self.subDetail = {}            # entry index -> ref
         self.sub_ports = {}            # ref -> required port count
+        # (model_name, ModelGroupWidget) per group, for model_cache hints.
+        self._groups = []
 
         self.grid = QtWidgets.QGridLayout()
         self.setLayout(self.grid)
@@ -89,9 +92,38 @@ class SubcircuitTab(QtWidgets.QWidget):
                 title, rows,
                 resolve_fn=self._resolve_subcircuit,
                 group_browse_fn=self._make_group_browse(instances))
+            self._apply_cache_hint(model, group, rows)
             self.grid.addWidget(group)
+            self._groups.append((model, group))
 
         self.show()
+
+    def _apply_cache_hint(self, model, group, rows):
+        """Pre-fill a blank group default from the cross-project model_cache,
+        but only a directory that exists (lookup guarantees it) AND validates
+        for every instance's port count. A project's own restored values and any
+        override always take precedence."""
+        if group.group_path() or any(group.is_overridden(r.ref) for r in rows):
+            return
+        hint = modelCache.lookup(model)
+        if not hint:
+            return
+        if all(self.obj_validation.validateSub(hint, self.sub_ports[r.ref])
+               == "True" for r in rows):
+            group.set_group_path(hint)
+
+    def remembered_models(self):
+        """{subcircuit_name: directory} for groups where every instance
+        resolved to the same non-empty directory. Fed to modelCache after a
+        successful convert."""
+        out = {}
+        for model, group in self._groups:
+            vals = set(group.resolved().values())
+            if len(vals) == 1:
+                path = next(iter(vals))
+                if path:
+                    out[model] = path
+        return out
 
     # -- tracking ------------------------------------------------------------
 

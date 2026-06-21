@@ -932,6 +932,18 @@ class MainWindow(QtWidgets.QWidget):
             print("=========================================================")
             self.createNetlistFile(store_schematicInfo, plotText)
 
+            # Remember each model's chosen library across projects (a hint for
+            # pre-filling the same model in future conversions). Best-effort:
+            # a cache write must never fail a completed conversion.
+            try:
+                from projManagement import modelCache
+                learned = {}
+                learned.update(obj_devicemodel.remembered_models())
+                learned.update(obj_subcircuitTab.remembered_models())
+                modelCache.remember_many(learned)
+            except Exception as cache_err:
+                print("model_cache update skipped:", cache_err)
+
             self.msg = "The KiCad to Ngspice conversion completed "
             self.msg += "successfully!"
             Dialogs.information(
