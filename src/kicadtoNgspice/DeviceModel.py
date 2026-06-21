@@ -728,7 +728,6 @@ class DeviceModel(QtWidgets.QWidget):
             else:
                 self.entry_var[idx].setText(text)
 
-
     def trackDefaultLib(self):
         sending_btn = self.sender()
         self.widgetObjCount = int(sending_btn.objectName())
