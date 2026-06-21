@@ -1,7 +1,7 @@
 from PyQt6 import QtCore, QtWidgets
 from . import TrackWidget
 import os
-from projManagement.projectPaths import stem_from_file
+from projManagement.projectPaths import previous_values_path
 from xml.etree import ElementTree as ET
 
 
@@ -202,16 +202,11 @@ class Analysis(QtWidgets.QWidget):
           previous value xml file
         """
         kicadFile = self.clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        project_name = stem_from_file(kicadFile)
         check = 1
 
         try:
             f = open(
-                os.path.join(
-                    projpath,
-                    project_name +
-                    "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 'r')
             tree = ET.parse(f)
             parent_root = tree.getroot()
@@ -390,16 +385,11 @@ class Analysis(QtWidgets.QWidget):
         - Also in the end a checkbox, for operating system point analysis
         """
         kicadFile = self.clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        project_name = stem_from_file(kicadFile)
         check = 1
 
         try:
             f = open(
-                os.path.join(
-                    projpath,
-                    project_name +
-                    "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 'r')
             tree = ET.parse(f)
             parent_root = tree.getroot()
@@ -693,16 +683,11 @@ class Analysis(QtWidgets.QWidget):
         - Accordingly also event handlers for combo boxes, creates 3 functions
         """
         kicadFile = self.clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        project_name = stem_from_file(kicadFile)
         check = 1
 
         try:
             f = open(
-                os.path.join(
-                    projpath,
-                    project_name +
-                    "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 'r')
             tree = ET.parse(f)
             parent_root = tree.getroot()

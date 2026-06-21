@@ -19,6 +19,7 @@
 import os
 import re
 import sys
+import tempfile
 from xml.etree import ElementTree as ET
 
 from PyQt6 import QtWidgets
@@ -33,7 +34,7 @@ from . import Source
 from . import SubcircuitTab
 from . import TrackWidget
 from .Processing import PrcocessNetlist
-from projManagement.projectPaths import stem_from_file
+from projManagement.projectPaths import previous_values_path
 
 
 def _get_event_plot_nodes(schematic_info, plot_text):
@@ -322,6 +323,10 @@ class MainWindow(QtWidgets.QWidget):
         self.tabWidget.addTab(self.deviceModelTab, "Device Modeling")
         self.tabWidget.addTab(self.subcircuitTab, "Subcircuits")
         self.tabWidget.addTab(self.microcontrollerTab, "Microcontroller")
+        # Contextual fullscreen toggle in the tab-bar corner (not a global
+        # toolbar): fullscreen this converter panel and dock it back.
+        from frontEnd.FullScreen import FullScreenToggle
+        self.tabWidget.setCornerWidget(FullScreenToggle())
         self.mainLayout = QtWidgets.QVBoxLayout()
         self.mainLayout.addWidget(self.tabWidget)
         # self.mainLayout.addStretch(1)
@@ -373,7 +378,9 @@ class MainWindow(QtWidgets.QWidget):
         - This function called when convert button clicked
         - Extracting data from the objs created above
         - Pushing this data to xml, and writing it finally
-        - Written to a ..._Previous_Values.xml file in the projDirectory
+        - Written to the per-user ..._Previous_Values.xml cache under
+          ~/.esim/prevvalues/ (see projectPaths.previous_values_path); the
+          cache deliberately lives outside the shareable project folder
         - Finally, call createNetListFile, with the converted schematic
         """
         # analysisoutput is published as a module global for downstream
@@ -401,23 +408,17 @@ class MainWindow(QtWidgets.QWidget):
             return
 
         store_schematicInfo = list(schematicInfo)
-        (projpath, filename) = os.path.split(self.kicadFile)
-        # Stem comes from the .cir handed in, not the folder name.
-        project_name = stem_from_file(self.kicadFile)
         check = 1
 
         try:
-            fr = open(
-                os.path.join(
-                    projpath, project_name + "_Previous_Values.xml"), 'r'
-            )
+            fr = open(previous_values_path(self.kicadFile), 'r')
             temp_tree = ET.parse(fr)
             temp_root = temp_tree.getroot()
         except BaseException:
             check = 0
 
         # Opening previous value file pertaining to the selected project
-        fw = os.path.join(projpath, project_name + "_Previous_Values.xml")
+        fw = previous_values_path(self.kicadFile)
 
         if check == 0:
             attr_parent = ET.Element("KicadtoNgspice")
@@ -848,7 +849,19 @@ class MainWindow(QtWidgets.QWidget):
 
         # xml written to previous value file for the project
         tree = ET.ElementTree(attr_parent)
-        tree.write(fw)
+        # Write atomically: a crash mid-write must not leave a half-written
+        # (corrupt) cache that every reader then silently discards. Write to a
+        # sibling temp file, then os.replace() it into place in one step.
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(fw), suffix='.xml.tmp')
+        os.close(tmp_fd)
+        try:
+            tree.write(tmp_path)
+            os.replace(tmp_path, fw)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
         # print("=============================================================")
         # print("SOURCE LIST TRACK")

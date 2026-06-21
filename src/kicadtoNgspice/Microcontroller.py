@@ -8,7 +8,7 @@ from xml.etree import ElementTree as ET
 from PyQt6 import QtWidgets, QtCore
 
 from . import TrackWidget
-from projManagement.projectPaths import stem_from_file
+from projManagement.projectPaths import previous_values_path
 
 
 # Created By Vatsal Patel on 01/07/2022
@@ -69,13 +69,10 @@ class Microcontroller(QtWidgets.QWidget):
         # Processing for getting previous values
 
         kicadFile = clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        # Stem comes from the .cir handed in, not the folder name.
-        project_name = stem_from_file(kicadFile)
         check = 1
         try:
             f = open(
-                os.path.join(projpath, project_name + "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 "r",
             )
             tree = ET.parse(f)

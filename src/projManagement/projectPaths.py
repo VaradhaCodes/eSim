@@ -23,6 +23,8 @@
 import os
 import sys
 import glob
+import shutil
+import hashlib
 
 
 def canonical_path(path):
@@ -102,6 +104,62 @@ def stem_from_file(path):
         the stem, e.g. 'MACProject'
     """
     return os.path.splitext(os.path.basename(str(path)))[0]
+
+
+def previous_values_path(kicad_file):
+    """
+    Return the on-disk path of a project's ``*_Previous_Values.xml`` cache.
+
+    The kicadtoNgspice converter remembers the model parameters and library/
+    subcircuit paths a user last chose, so re-converting the same project does
+    not force them to re-enter everything. Historically this cache lived
+    *inside the project folder* (``<projdir>/<stem>_Previous_Values.xml``),
+    which meant it travelled with the project whenever it was zipped or shared.
+    That leaked one author's *local* library paths into another user's
+    converter fields: they would see pre-filled paths that don't exist on their
+    machine, or -- worse -- happen to exist and silently point at the wrong
+    file. These remembered values are a per-user, per-machine convenience, not
+    project data, so they belong under the user's ``~/.esim`` area (where eSim
+    already keeps ``workspace.txt``, ``config.ini``, ``history/`` ...), never
+    in the shared project.
+
+    The cache is keyed by the project's *canonical path* plus its stem, so two
+    projects that happen to share a stem (e.g. ``MACProject``) in different
+    folders never collide, and the same project always resolves to the same
+    cache file regardless of how its path was spelled (symlinks, ``..``,
+    trailing separators -- see :func:`canonical_path`).
+
+    Lazy, non-destructive migration: the first time a project's new-location
+    cache is requested and does not yet exist, any legacy in-project
+    ``<stem>_Previous_Values.xml`` is copied across so users keep their
+    remembered values after upgrading. The legacy file is left untouched.
+
+    @params
+        :kicad_file => the project's ``.cir`` (or ``.sch`` / ``.cir.out``) path
+
+    @return
+        absolute path to the cache file under ``~/.esim/prevvalues/``. The file
+        itself may not exist yet; callers already treat a missing or
+        parse-failing file as "no previous values".
+    """
+    proj_dir = os.path.dirname(os.path.abspath(str(kicad_file)))
+    stem = stem_from_file(kicad_file)
+    key = hashlib.sha1(
+        (canonical_path(proj_dir) + os.sep + stem).encode('utf-8')
+    ).hexdigest()[:16]
+    base = os.path.join(os.path.expanduser('~'), '.esim', 'prevvalues')
+    os.makedirs(base, exist_ok=True)
+    new_path = os.path.join(base, key + '_Previous_Values.xml')
+
+    # Lazy, non-destructive migration from the legacy in-project location.
+    if not os.path.exists(new_path):
+        legacy = os.path.join(proj_dir, stem + '_Previous_Values.xml')
+        if os.path.isfile(legacy):
+            try:
+                shutil.copy2(legacy, new_path)
+            except (IOError, OSError):
+                pass
+    return new_path
 
 
 def resolve_stem(directory, ext='proj'):

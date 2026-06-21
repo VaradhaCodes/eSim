@@ -3,7 +3,7 @@ from configuration import Dialogs
 import os
 from xml.etree import ElementTree as ET
 from . import TrackWidget
-from projManagement.projectPaths import stem_from_file
+from projManagement.projectPaths import previous_values_path
 
 
 class DeviceModel(QtWidgets.QWidget):
@@ -28,16 +28,10 @@ class DeviceModel(QtWidgets.QWidget):
 
         self.clarg1 = clarg1
         kicadFile = self.clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        # Stem comes from the .cir handed in, not the folder name.
-        project_name = stem_from_file(kicadFile)
         self.root = []
         try:
             f = open(
-                os.path.join(
-                    projpath,
-                    project_name +
-                    "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 'r')
             tree = ET.parse(f)
             parent_self = tree.getroot()

@@ -1,7 +1,7 @@
 from PyQt6 import QtWidgets, QtCore
 from . import TrackWidget
 from projManagement import Validation
-from projManagement.projectPaths import stem_from_file
+from projManagement.projectPaths import stem_from_file, previous_values_path
 import os
 from xml.etree import ElementTree as ET
 
@@ -26,10 +26,7 @@ class SubcircuitTab(QtWidgets.QWidget):
 
         try:
             f = open(
-                os.path.join(
-                    projpath,
-                    project_name +
-                    "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 'r')
             tree = ET.parse(f)
             parent_root = tree.getroot()
