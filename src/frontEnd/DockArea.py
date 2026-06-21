@@ -43,6 +43,13 @@ class DockArea(QtWidgets.QMainWindow):
         # Track plotting docks
         self.active_plotting_docks = set()
 
+        # Drag-and-drop docking: a tool is undocked/redocked by dragging its
+        # title bar (see widgets.DockTitleBar). Accept the drops here and keep a
+        # lazily-built drop placeholder overlay.
+        self.setAcceptDrops(True)
+        self._dock_drop_overlay = None
+        self._drag_target_dock = None
+
         for dockName in dockList:
             dock[dockName] = QtWidgets.QDockWidget(dockName)
             self.welcomeWidget = QtWidgets.QWidget()
@@ -56,80 +63,386 @@ class DockArea(QtWidgets.QMainWindow):
             # as it looks too big on the main home window.
             dock[dockName].setWidget(self.welcomeWidget)
             
-            # CSS
-            dock[dockName].setStyleSheet(" \
-            QWidget { border-radius: 15px; border: 1px solid gray;\
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
+
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName])
+
+        self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
+
+        # Install tactile button motion ONCE here. Previously every call to
+        # apply_fullscreen_feature() re-ran install_button_motion(self) on the
+        # whole dock area, stacking a fresh event-filter on every existing
+        # button each time a tool opened (O(n^2) filters / leak).
+        from frontEnd.motion import install_button_motion
+        install_button_motion(self)
+
+        # Enable close buttons on bottom tabs
 
         # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
         self.show()
 
+
+    def tabifyDockWidget(self, first, second):
+        super().tabifyDockWidget(first, second)
+        self.enable_tab_close_buttons()
+
+    def enable_tab_close_buttons(self):
+        """Finds all QTabBars in the main window and enables their close buttons."""
+        for tb in self.findChildren(QtWidgets.QTabBar):
+            if not isinstance(tb.parent(), QtWidgets.QTabWidget):
+                tb.setTabsClosable(True)
+                try:
+                    tb.tabCloseRequested.disconnect()
+                except Exception:
+                    pass
+                tb.tabCloseRequested.connect(
+                    lambda index, tab_bar=tb: self.handle_tab_close(index, tab_bar))
+
+    # ---- drag-and-drop docking -------------------------------------------
+    def _ensure_drop_overlay(self):
+        if self._dock_drop_overlay is None:
+            from frontEnd.widgets import DockDropOverlay
+            self._dock_drop_overlay = DockDropOverlay(self)
+        return self._dock_drop_overlay
+
+    def begin_dock_drag(self, dock):
+        """Called by a DockTitleBar as a drag starts: remember the dragged dock
+        and raise the drop placeholder over the whole dock area for the drag."""
+        self._drag_target_dock = dock
+        ov = self._ensure_drop_overlay()
+        ov.setGeometry(self.rect())
+        ov.show_active()
+
+    def end_dock_drag(self):
+        """Called when the drag's QDrag.exec returns: hide the placeholder."""
+        self._drag_target_dock = None
+        if self._dock_drop_overlay is not None:
+            self._dock_drop_overlay.hide()
+
+    def dock_area_global_rect(self):
+        """The dock area's rect in global screen coords.
+
+        Used by DockTitleBar's non-Wayland redock watch to tell whether a
+        free-floating tool window has been dragged back over the dock area.
+        ``mapToGlobal`` is unreliable on Wayland, so this is only consulted off
+        Wayland (the watch never runs there)."""
+        try:
+            tl = self.mapToGlobal(self.rect().topLeft())
+            return QtCore.QRect(tl, self.size())
+        except Exception:
+            return QtCore.QRect()
+
+    def point_over_dock_area(self, global_point):
+        """True if a global-screen point falls inside the dock area."""
+        try:
+            return self.dock_area_global_rect().contains(global_point)
+        except Exception:
+            return False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._dock_drop_overlay is not None and self._dock_drop_overlay.isVisible():
+            self._dock_drop_overlay.setGeometry(self.rect())
+
+    # Fallback drop handlers (the raised overlay normally catches the drop, but
+    # if a drop lands on the bare dock area these accept it so QDrag.exec still
+    # returns MoveAction and DockTitleBar re-docks).
+    def dragEnterEvent(self, event):
+        from frontEnd.widgets import DockTitleBar
+        if event.mimeData().hasFormat(DockTitleBar.MIME):
+            event.setDropAction(QtCore.Qt.DropAction.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        from frontEnd.widgets import DockTitleBar
+        if event.mimeData().hasFormat(DockTitleBar.MIME):
+            event.setDropAction(QtCore.Qt.DropAction.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        from frontEnd.widgets import DockTitleBar
+        if event.mimeData().hasFormat(DockTitleBar.MIME):
+            event.setDropAction(QtCore.Qt.DropAction.MoveAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def handle_tab_close(self, index, tab_bar):
+        tab_text = tab_bar.tabText(index).replace('&', '').strip()
+        # Strip Qt truncation ellipsis from end
+        if tab_text.endswith('...'):
+            tab_text = tab_text[:-3].strip()
+
+        # Find the matching visible dock widget by title prefix
+        for child in self.findChildren(QtWidgets.QDockWidget):
+            if not child.isVisible():
+                continue
+            title = child.windowTitle().replace('&', '').strip()
+            if title == tab_text or title.startswith(tab_text):
+                child.close()
+                try:
+                    self.removeDockWidget(child)
+                except Exception:
+                    pass
+                child.deleteLater()
+
+                # Clean up global dock dict
+                keys_to_delete = [k for k, v in dock.items() if v is child]
+                for k in keys_to_delete:
+                    del dock[k]
+
+                main_view = self.get_main_view_reference()
+                if main_view:
+                    main_view.restore_console_area()
+                return
+
+        # Fallback: close the dock at this tab position by index in
+        # the visible dock list (last resort when title match fails)
+        visible = [d for d in self.findChildren(QtWidgets.QDockWidget) if d.isVisible()]
+        if index < len(visible):
+            child = visible[index]
+            child.close()
+            try:
+                self.removeDockWidget(child)
+            except Exception:
+                pass
+            child.deleteLater()
+            keys_to_delete = [k for k, v in dock.items() if v is child]
+            for k in keys_to_delete:
+                del dock[k]
+            main_view = self.get_main_view_reference()
+            if main_view:
+                main_view.restore_console_area()
+
     def apply_fullscreen_feature(self, dock_widget, original_widget):
-        """Wraps a dock's inner widget with a Fullscreen pop-out button."""
+        """Wraps a dock's inner widget with a Fullscreen pop-out button.
+
+        The button stays in its original position (a thin strip pinned to the
+        top-right of every tool window, just under the QDockWidget title bar).
+        We only swap the unicode-glyph label for a proper SVG icon and tighten
+        its chrome so it reads as a small toolbar control rather than a wide
+        bilingual button.
+        """
+        import re
+        from frontEnd.icon_paths import fullscreen_icon, dock_back_icon
+        from frontEnd.widgets import FloatingDockHost
         title = dock_widget.windowTitle()
-        wrapper = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(wrapper)
+        disp_title = re.sub(r'-\d+$', '', title).rstrip('-').strip() or title
+
+        # The tool content lives inside a rounded "card" (dockCard) that floats
+        # inside a transparent host. The host's margins are the gap that reveals
+        # the workspace behind it, and the host paints the faint card shadow.
+        # The dock itself keeps its NATIVE title bar (see below) so Qt's own
+        # drag-to-float / drag-to-re-dock / move works exactly like the Welcome
+        # tab — the rounded card is just the dock's internal content.
+        card = QtWidgets.QFrame()
+        card.setObjectName("dockCard")
+        layout = QtWidgets.QVBoxLayout(card)
         layout.setContentsMargins(0, 0, 0, 0)
-        
-        top_bar = QtWidgets.QHBoxLayout()
-        top_bar.addStretch()
-        fs_btn = QtWidgets.QPushButton("🗗 Fullscreen")
-        fs_btn.setStyleSheet("""
-            QPushButton {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-                font-weight: 600;
-                color: #495057;
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 4px 12px;
-                margin: 2px 5px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-            QPushButton:pressed {
-                background-color: #dee2e6;
-            }
-        """)
-        top_bar.addWidget(fs_btn)
-        
-        layout.addLayout(top_bar)
-        layout.addWidget(original_widget)
-        
-        dock_widget.setWidget(wrapper)
-        
+        layout.setSpacing(0)
+
+        # NOTE: we deliberately keep the dock's NATIVE title bar (no
+        # setTitleBarWidget below). Qt's native title bar IS the dock's drag
+        # handle, and native QDockWidget docking — drag out to undock, drag the
+        # ghost preview anywhere, hover back over a dock area to re-dock — is
+        # implemented by Qt with an internal rubber-band preview + reparent on
+        # drop, NOT a real top-level window move. That is the one cross-window
+        # gesture Wayland routes reliably (it never asks the compositor for a
+        # window position or a global cursor), so it works on Wayland, X11,
+        # Windows and macOS alike. The earlier custom title bar (QDrag /
+        # startSystemMove) DISABLED this native flow and could not replace it on
+        # Wayland — that was the "undock then freeze" bug. The native title bar
+        # is styled to look like the card's quiet header strip (QDockWidget::title
+        # in the QSS), and the Fullscreen / Close actions live on the card's own
+        # top-right chrome overlay (built below), so nothing is lost.
+        fs_icon = fullscreen_icon(14)
+        close_icon_svg = None
+        try:
+            from frontEnd.icon_paths import close_icon as _ci
+            close_icon_svg = _ci(14)
+        except Exception:
+            pass
+
+        fs_btn = QtWidgets.QPushButton(" Fullscreen")
+        fs_btn.setProperty("cssClass", "secondary")
+        fs_btn.setProperty("dockPopButton", "true")
+        fs_btn.setProperty("isPoppedOut", "false")
+        fs_btn.setToolTip("Pop this tool out into its own window")
+        fs_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        if fs_icon:
+            fs_btn.setIcon(fs_icon)
+        fs_btn.setStyleSheet(
+            "QPushButton[dockPopButton=\"true\"] {"
+            "  padding-left: 10px; padding-right: 10px;"
+            "}"
+        )
+
+        close_btn = QtWidgets.QPushButton("  Close")
+        close_btn.setProperty("cssClass", "danger")
+        close_btn.setProperty("dockPopButton", "true")
+        close_btn.setProperty("isCloseBtn", "true")
+        close_btn.setToolTip("Close this tool window")
+        close_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        if close_icon_svg:
+            close_btn.setIcon(close_icon_svg)
+
         popout_state = {"win": None}
+        def custom_close():
+            if popout_state["win"]:
+                popout_state["win"].close()
+            if dock_widget.widget() != wrapper:
+                dock_widget.setWidget(wrapper)
+            dock_widget.setVisible(False)
+            dock_widget.close()
+
+            # Fully tear the dock down (mirror handle_tab_close). It used to be
+            # only hidden, so every close left a hidden zombie tab member in the
+            # dock area; those stale members corrupt QMainWindow's saved dock
+            # layout, so the next tool of the same kind re-opens as a stuck
+            # floating window. Remove it from the layout, drop the global ref,
+            # and schedule deletion.
+            try:
+                self.removeDockWidget(dock_widget)
+            except Exception:
+                pass
+            for _k in [k for k, v in dock.items() if v is dock_widget]:
+                del dock[_k]
+            dock_widget.deleteLater()
+
+            # If the user closes a tool, we fallback to Welcome, so restore console
+            main_view = self.get_main_view_reference()
+            if main_view:
+                main_view.restore_console_area()
+            
+        close_btn.clicked.connect(custom_close)
+
+        layout.addWidget(original_widget)
+
+        # Chrome buttons no longer sit on a strip ABOVE the tool — they overlay
+        # the top-right CORNER of the tool card itself (on the same line as the
+        # tool's own top tab bar), reclaiming the full title-strip height. The
+        # overlay is a child of `card`, so it travels with the card into the
+        # pop-out dialog automatically (no separate header strip to carry).
+        chrome = QtWidgets.QWidget(card)
+        chrome.setObjectName("dockToolChrome")
+        chrome.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        ch = QtWidgets.QHBoxLayout(chrome)
+        ch.setContentsMargins(6, 3, 6, 3)
+        ch.setSpacing(6)
+        ch.addWidget(fs_btn)
+        ch.addWidget(close_btn)
+
+        def _place_chrome():
+            try:
+                chrome.adjustSize()
+                x = card.width() - chrome.width() - 10
+                chrome.move(max(0, x), 6)
+                chrome.raise_()
+            except RuntimeError:
+                pass
+
+        # Keep the overlay pinned to the top-right whenever the card resizes
+        # (dock resize, splitter drag, pop-out to a bigger window).
+        _orig_card_resize = card.resizeEvent
+        def _card_resize(e):
+            _orig_card_resize(e)
+            _place_chrome()
+        card.resizeEvent = _card_resize
+        QtCore.QTimer.singleShot(0, _place_chrome)
+
+        # Float the card: transparent host (margins = the gap) paints the
+        # faint shadow behind the rounded card. `wrapper` stays the moved-around
+        # widget so the pop-out / re-dock flow below is unchanged.
+        wrapper = FloatingDockHost(card)
+
+        dock_widget.setWidget(wrapper)
+        # No setTitleBarWidget(): keep the native title bar so Qt's own
+        # drag-to-undock / drag-anywhere / hover-to-redock works (see the long
+        # note above). Make the drag/float affordances explicit and ensure the
+        # dock can be moved and floated.
+        dock_widget.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+
         def toggle_popout():
             if not popout_state["win"]:
                 win = QtWidgets.QDialog(self.window())
                 win.setWindowTitle(title)
                 win.setWindowFlags(win.windowFlags() | QtCore.Qt.WindowType.WindowMaximizeButtonHint | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
-                
+
                 win_layout = QtWidgets.QVBoxLayout(win)
                 win_layout.setContentsMargins(0, 0, 0, 0)
+
+                # The Fullscreen/Close buttons overlay the card's top-right
+                # corner (children of `card`), so they travel with the card into
+                # this dialog automatically — no separate header strip needed.
                 win_layout.addWidget(wrapper)
-                
-                fs_btn.setText("🡮 Dock to eSim")
-                
+                QtCore.QTimer.singleShot(0, _place_chrome)
+
+                # Apply depth shadow to popped-out window
+                try:
+                    from frontEnd.motion import apply_popup_depth
+                    apply_popup_depth(win)
+                except Exception:
+                    pass
+
+                fs_btn.setText("  Dock to eSim")
+                dock_back = dock_back_icon(14)
+                if dock_back:
+                    fs_btn.setIcon(dock_back)
+                fs_btn.setProperty("isPoppedOut", "true")
+                fs_btn.style().unpolish(fs_btn)
+                fs_btn.style().polish(fs_btn)
+                fs_btn.setToolTip("Put this tool back into the main window")
+
                 def on_close(event):
-                    dock_widget.setWidget(wrapper)
-                    fs_btn.setText("🗗 Fullscreen")
+                    # The dock may already be torn down (tool/app closed while
+                    # popped out); putting the card back into a deleted dock
+                    # raises RuntimeError and would crash eSim from this
+                    # closeEvent. Guard it and just let the window close.
+                    try:
+                        dock_widget.setWidget(wrapper)
+                    except RuntimeError:
+                        popout_state["win"] = None
+                        event.accept()
+                        return
+                    try:
+                        fs_btn.setText("  Fullscreen")
+                        fs_btn.setIcon(fs_icon)
+                        fs_btn.setProperty("isPoppedOut", "false")
+                        fs_btn.style().unpolish(fs_btn)
+                        fs_btn.style().polish(fs_btn)
+                        fs_btn.setToolTip("Pop this tool out into its own window")
+                    except RuntimeError:
+                        pass
                     popout_state["win"] = None
+                    QtCore.QTimer.singleShot(0, _place_chrome)
                     event.accept()
-                    
+
                 win.closeEvent = on_close
                 popout_state["win"] = win
                 win.resize(1000, 700)
                 win.showMaximized()
             else:
                 popout_state["win"].close()
-                
+
         fs_btn.clicked.connect(toggle_popout)
+
+        # Attach the already-installed tactile filter to just the two new
+        # chrome buttons rather than re-installing across the whole dock area
+        # (see DockArea.__init__ for the one-time install).
+        filt = getattr(self, '_esim_press_motion_filter', None)
+        if filt is not None:
+            for b in (fs_btn, close_btn):
+                b.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                b.installEventFilter(filt)
+        else:
+            from frontEnd.motion import install_button_motion
+            install_button_motion(self)
 
     def get_main_view_reference(self):
         """Get reference to the MainView widget."""
@@ -146,11 +459,11 @@ class DockArea(QtWidgets.QMainWindow):
         if not main_view:
             return
             
-        # Check if activated dock is a plotting dock
-        if dock_widget in self.active_plotting_docks:
-            main_view.collapse_console_area()
-        else:
+        # If the welcome tab is activated, restore console, otherwise collapse it
+        if dock_widget.windowTitle() == 'Welcome':
             main_view.restore_console_area()
+        else:
+            main_view.collapse_console_area()
 
     def createTestEditor(self):
         """This function create widget for Library Editor"""
@@ -176,6 +489,7 @@ class DockArea(QtWidgets.QMainWindow):
 
         dock['Tips-' + str(count)].raise_()
 
+
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
             self.obj_appconfig.dock_dict[temp].append(
@@ -186,7 +500,8 @@ class DockArea(QtWidgets.QMainWindow):
     def plottingEditor(self):
         """This function create widget for interactive PythonPlotting."""
         self.projDir = self.obj_appconfig.current_project["ProjectName"]
-        self.projName = os.path.basename(self.projDir)
+        self.projName = self.obj_appconfig.get_proj_stem() \
+            or os.path.basename(self.projDir)
         dockName = f'Plotting-{self.projName}-'
         # self.project = os.path.join(self.projDir, self.projName)
 
@@ -209,12 +524,6 @@ class DockArea(QtWidgets.QMainWindow):
         
         # Track this as a plotting dock
         self.active_plotting_docks.add(dock[dockName + str(count)])
-        
-        # Connect to tab change signal
-        try:
-            self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
-        except:
-            pass  # In case signal is already connected
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -256,14 +565,12 @@ class DockArea(QtWidgets.QMainWindow):
                                    + str(count)])
 
         # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray; padding: 0px;\
-            width: 200px; height: 150px;  } \
-        ")
+        
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
         dock[dockName + str(count)].raise_()
+
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
@@ -326,7 +633,7 @@ class DockArea(QtWidgets.QMainWindow):
 
         self.eConLayout.addLayout(button_layout)
 
-        self.eConWidget.setLayout(self.eConLayout)
+
 
         # lib_path_text_box = QLineEdit()
         # lib_path_text_box.setFixedHeight(30)
@@ -341,52 +648,49 @@ class DockArea(QtWidgets.QMainWindow):
 
         # self.eConLayout.addLayout(lib_path_layout)
 
-        # Add the description HTML content
-        description_html = """
-            <html>
-                <head>
-                    <style>
-                        body {
-                            font-family: sans-serif;
-                            margin: 0px;
-                            padding: 0px;
-                            background-color: white;
-                            border: 4px solid  black;
-                            font-size: 10pt; /* Adjust the font size as needed */
-                        }
+        # Description panel — previous version was an inline
+        # `<html><style>...background-color: white; #165982</style</html>`
+        # block that ignored the active theme. Now built as nested
+        # native widgets: eyebrow + heading + body inherit colour from
+        # style_*.qss via cssClass tokens, so the panel tracks theme
+        # switches and accent swaps automatically.
+        from PyQt6.QtWidgets import QFrame
+        self.description_panel = QtWidgets.QFrame()
+        self.description_panel.setObjectName('converterDescription')
+        description_layout = QtWidgets.QVBoxLayout(self.description_panel)
+        description_layout.setContentsMargins(18, 14, 18, 14)
+        description_layout.setSpacing(6)
 
-                        h1{
-                            font-weight: bold;
-                            font-size: 9pt;
-                            color: #eeeeee;
-                            padding: 10px;
-                            background-color: #165982;
-                            border: 4px outset  #0E324B;
-                        }
-                    </style>
-                </head>
+        eyebrow = QtWidgets.QLabel('ABOUT eSim CONVERTER')
+        eyebrow.setProperty('cssClass', 'caps')
+        description_layout.addWidget(eyebrow)
 
-                <body>
-                    <h1>About eSim Converter</h1>
-                    <p>
-                        <b>Pspice to eSim </b> will convert the PSpice Schematic and Library files to KiCad Schematic and
-                        Library files respectively with proper mapping of the components and the wiring. By this way one 
-                        will be able to simulate their schematic in PSpice and get the PCB layout in KiCad.</b> 
-                        <br/><br/>
-                        <b>LTspice to eSim </b> will convert symbols and schematic from LTspice to Kicad.The goal is to design and
-                        simulate under LTspice and to automatically transfer the circuit under Kicad to draw the PCB.</b>
-                    </p>
-                </body>
-            </html>
-        """
+        heading = QtWidgets.QLabel('Schematic Format Converters')
+        heading.setProperty('cssClass', 'heading')
+        description_layout.addWidget(heading)
 
-        self.description_label = QLabel()
-        self.description_label.setFixedHeight(160)
-        self.description_label.setFixedWidth(950)
-        self.description_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
-        self.description_label.setWordWrap(True)
-        self.description_label.setText(description_html)
-        self.eConLayout.addWidget(self.description_label)  # Add the description label to the layout
+        body = QtWidgets.QLabel(
+            "<b>Pspice to eSim</b> will convert the PSpice Schematic and "
+            "Library files to KiCad Schematic and Library files "
+            "respectively with proper mapping of the components and the "
+            "wiring. This lets you simulate a schematic in PSpice and then "
+            "lay it out as a PCB in KiCad."
+            "<br/><br/>"
+            "<b>LTspice to eSim</b> will convert symbols and schematics "
+            "from LTspice to KiCad. The goal is to design and simulate "
+            "under LTspice and to automatically transfer the circuit into "
+            "KiCad for PCB drawing."
+        )
+        body.setWordWrap(True)
+        body.setProperty('cssClass', 'subtle')
+        body.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        description_layout.addWidget(body)
+
+        # Back-compat: keep `description_label` as an alias for any
+        # historic downstream callers; route it to the panel we
+        # actually added to the layout.
+        self.description_label = self.description_panel
+        self.eConLayout.addWidget(self.description_panel)  # themed summary panel
 
         self.eConWidget.setLayout(self.eConLayout)
 
@@ -396,10 +700,7 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(dock['Welcome'], dock[dockName + str(count)])
 
         # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-            .QWidget { border-radius: 15px; border: 1px solid gray;\
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
+        
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -425,7 +726,8 @@ class DockArea(QtWidgets.QMainWindow):
             )
             self.msg.exec()
             return
-        projName = os.path.basename(projDir)
+        projName = self.obj_appconfig.get_proj_stem() \
+            or os.path.basename(projDir)
         dockName = f'Model Editor-{projName}-'
 
         self.modelwidget = QtWidgets.QWidget()
@@ -446,10 +748,7 @@ class DockArea(QtWidgets.QMainWindow):
                               dock[dockName + str(count)])
 
         # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-            .QWidget { border-radius: 15px; border: 1px solid gray; \
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
+        
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -464,7 +763,8 @@ class DockArea(QtWidgets.QMainWindow):
         global count
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
-        projName = os.path.basename(projDir)
+        projName = self.obj_appconfig.get_proj_stem() \
+            or os.path.basename(projDir)
         dockName = f'Netlist-{projName}-'
 
         self.kicadToNgspiceWidget = QtWidgets.QWidget()
@@ -481,15 +781,13 @@ class DockArea(QtWidgets.QMainWindow):
                               dock[dockName + str(count)])
 
         # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
+        
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
         dock[dockName + str(count)].raise_()
-        dock[dockName + str(count)].activateWindow()
+        dock['Ngspice-' + str(count)].raise_()
+
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
@@ -508,7 +806,8 @@ class DockArea(QtWidgets.QMainWindow):
         & is not None before calling os.path.basename """
 
         if projDir is not None:
-            projName = os.path.basename(projDir)
+            projName = self.obj_appconfig.get_proj_stem() \
+                or os.path.basename(projDir)
             dockName = f'Subcircuit-{projName}-'
 
             self.subcktWidget = QtWidgets.QWidget()
@@ -526,15 +825,13 @@ class DockArea(QtWidgets.QMainWindow):
                                 dock[dockName + str(count)])
 
             # CSS
-            dock[dockName + str(count)].setStyleSheet(" \
-            .QWidget { border-radius: 15px; border: 1px solid gray;\
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
+            
 
             dock[dockName + str(count)].setVisible(True)
             dock[dockName + str(count)].setFocus()
             dock[dockName + str(count)].raise_()
 
+    
             count = count + 1
 
         else:
@@ -566,7 +863,8 @@ class DockArea(QtWidgets.QMainWindow):
             )
             self.msg.exec()
             return
-        projName = os.path.basename(projDir)
+        projName = self.obj_appconfig.get_proj_stem() \
+            or os.path.basename(projDir)
         dockName = f'Makerchip-{projName}-'
 
         self.makerWidget = QtWidgets.QWidget()
@@ -586,18 +884,6 @@ class DockArea(QtWidgets.QMainWindow):
         # Track this as a plotting dock so console is collapsed
         self.active_plotting_docks.add(dock[dockName + str(count)])
         
-        # Connect to tab change signal
-        try:
-            self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
-        except:
-            pass
-
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
-
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
         dock[dockName + str(count)].raise_()
@@ -626,14 +912,12 @@ class DockArea(QtWidgets.QMainWindow):
                               dock['User Manual-' + str(count)])
 
         # CSS
-        dock['User Manual-' + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
+        
 
         dock['User Manual-' + str(count)].setVisible(True)
         dock['User Manual-' + str(count)].setFocus()
         dock['User Manual-' + str(count)].raise_()
+
 
         count = count + 1
 
@@ -641,7 +925,8 @@ class DockArea(QtWidgets.QMainWindow):
         """This function sets up the UI for ngspice to modelica conversion."""
         global count
 
-        projName = os.path.basename(projDir)
+        projName = self.obj_appconfig.get_proj_stem() \
+            or os.path.basename(projDir)
         dockName = f'Modelica-{projName}-'
 
         self.modelicaWidget = QtWidgets.QWidget()
@@ -662,11 +947,9 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)].setFocus()
         dock[dockName + str(count)].raise_()
 
+
         # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
+        
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
             self.obj_appconfig.dock_dict[temp].append(
@@ -678,8 +961,15 @@ class DockArea(QtWidgets.QMainWindow):
     def closeDock(self):
         """
         This function checks for the project in **dock_dict**
-        and closes it.
+        and closes it while cleaning up global references to prevent memory leaks.
         """
         self.temp = self.obj_appconfig.current_project['ProjectName']
-        for dockwidget in self.obj_appconfig.dock_dict[self.temp]:
-            dockwidget.close()
+        if self.temp in self.obj_appconfig.dock_dict:
+            for dockwidget in self.obj_appconfig.dock_dict[self.temp]:
+                dockwidget.close()
+                dockwidget.deleteLater()
+                # Clean up from global dock dictionary
+                keys_to_delete = [k for k, v in dock.items() if v == dockwidget]
+                for k in keys_to_delete:
+                    del dock[k]
+            self.obj_appconfig.dock_dict[self.temp] = []

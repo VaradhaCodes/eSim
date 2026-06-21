@@ -1,12 +1,11 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 import re
 import numpy as np
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QMenu, QMessageBox, QColorDialog, QInputDialog,
-                             QListWidgetItem, QWidget, QPushButton,
+                             QWidget, QPushButton,
                              QGridLayout, QWidgetAction)
-from PyQt6.QtGui import QColor
 from .constants import DEFAULT_LINE_THICKNESS
 from .math_utils import _safe_eval, _canonical_expr
 
@@ -36,6 +35,7 @@ class _FuncTraceMixin:
             if it and it.data(Qt.ItemDataRole.UserRole) == -(f_idx + 1):
                 self._update_func_item_appearance(it, label, color, self._func_visible[f_idx])
                 break
+        self._refresh_select_all_btn()
         self._schedule_refresh()
 
     def _populate_func_color_menu(self, menu: QMenu, f_idx: int) -> None:

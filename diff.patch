@@ -1,0 +1,1172 @@
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench: diff.patch
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/4_bit_JK_ff/4_bit_JK_ff.cir /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/4_bit_JK_ff/4_bit_JK_ff.cir
+--- /tmp/eSim_clean/Examples/4_bit_JK_ff/4_bit_JK_ff.cir	2026-06-08 11:40:05.968029176 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/4_bit_JK_ff/4_bit_JK_ff.cir	2026-06-04 05:51:52.949499604 +0000
+@@ -1,40 +1,32 @@
+-* /home/fossee/UpdatedExamples/4_bit_JK_ff/4_bit_JK_ff.cir
+-
+-* EESchema Netlist Version 1.1 (Spice format) creation date: Thu Mar  3 18:13:51 2016
+-
+-* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+-* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+-
+-* Sheet Name: /
+-U3  Net-_U1-Pad4_ Net-_U1-Pad6_ Net-_U1-Pad5_ Net-_U2-Pad8_ Net-_U3-Pad5_ Net-_U3-Pad6_ Net-_U3-Pad7_ d_jkff		
+-v1  Net-_U1-Pad1_ GND DC		
+-v3  Net-_U1-Pad3_ GND DC		
+-v4  Net-_U4-Pad2_ GND 0		
+-v2  IN GND pulse		
+-U5  Net-_U3-Pad7_ Net-_U3-Pad7_ Net-_U1-Pad5_ Net-_U2-Pad7_ Net-_U4-Pad6_ Net-_U5-Pad6_ Net-_U5-Pad7_ d_jkff		
+-U7  Net-_U6-Pad3_ Net-_U6-Pad3_ Net-_U1-Pad5_ Net-_U2-Pad6_ Net-_U4-Pad7_ Net-_U7-Pad6_ Net-_U7-Pad7_ d_jkff		
+-U10  Net-_U10-Pad1_ Net-_U10-Pad1_ Net-_U1-Pad5_ Net-_U10-Pad4_ Net-_U10-Pad5_ Net-_U10-Pad6_ Net-_U10-Pad7_ d_jkff		
+-U6  Net-_U5-Pad7_ Net-_U3-Pad7_ Net-_U6-Pad3_ d_and		
+-U8  Net-_U7-Pad7_ Net-_U6-Pad3_ Net-_U10-Pad1_ d_and		
+-U4  Net-_U4-Pad1_ Net-_U4-Pad2_ Net-_U4-Pad3_ Net-_U4-Pad4_ Net-_U3-Pad5_ Net-_U4-Pad6_ Net-_U4-Pad7_ Net-_U10-Pad5_ adc_bridge_4		
+-v10  Net-_U4-Pad3_ GND 0		
+-v11  Net-_U4-Pad4_ GND 0		
+-v9  Net-_U4-Pad1_ GND 0		
+-v8  Net-_U2-Pad2_ GND 0		
+-U2  Net-_U2-Pad1_ Net-_U2-Pad2_ Net-_U2-Pad3_ Net-_U2-Pad4_ Net-_U10-Pad4_ Net-_U2-Pad6_ Net-_U2-Pad7_ Net-_U2-Pad8_ adc_bridge_4		
+-v6  Net-_U2-Pad3_ GND 0		
+-v7  Net-_U2-Pad4_ GND 0		
+-v5  Net-_U2-Pad1_ GND 0		
+-U1  Net-_U1-Pad1_ IN Net-_U1-Pad3_ Net-_U1-Pad4_ Net-_U1-Pad5_ Net-_U1-Pad6_ adc_bridge_3		
+-U9  Net-_U3-Pad6_ Net-_U5-Pad6_ Net-_U7-Pad6_ Net-_U10-Pad6_ D1 D2 D3 D4 dac_bridge_4		
+-R1  D1 GND 1k		
+-R2  D2 GND 1k		
+-R3  D3 GND 1k		
+-R4  D4 GND 1k		
+-U11  Net-_U10-Pad7_ GND dac_bridge_1		
+-U12  D1 plot_v1		
+-U14  D4 plot_v1		
+-U15  D3 plot_v1		
+-U13  D2 plot_v1		
+-
++.title KiCad schematic
++v3 __v3
++v1 __v1
++v2 __v2
++U6 __U6
++U4 __U4
++v10 __v10
++v11 __v11
++v4 __v4
++v9 __v9
++R2 D2 GND 1k
++R1 D1 GND 1k
++R3 D3 GND 1k
++U15 __U15
++R4 D4 GND 1k
++U12 __U12
++U13 __U13
++U2 __U2
++v8 __v8
++v6 __v6
++v7 __v7
++v5 __v5
++U5 __U5
++U7 __U7
++U1 __U1
++U3 __U3
++U14 __U14
++U10 __U10
++U11 __U11
++U8 __U8
++U9 __U9
+ .end
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/4_bit_JK_ff/4_bit_JK_ff-rescue.lib /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/4_bit_JK_ff/4_bit_JK_ff-rescue.lib
+--- /tmp/eSim_clean/Examples/4_bit_JK_ff/4_bit_JK_ff-rescue.lib	2026-06-08 11:40:05.968029176 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/4_bit_JK_ff/4_bit_JK_ff-rescue.lib	2026-06-04 05:51:23.733296928 +0000
+@@ -1,6 +1,20 @@
+-EESchema-LIBRARY Version 2.3
++EESchema-LIBRARY Version 2.4
+ #encoding utf-8
+ #
++# GND-RESCUE-4_bit_JK_ff
++#
++DEF GND-RESCUE-4_bit_JK_ff #PWR 0 0 Y Y 1 F P
++F0 "#PWR" 0 0 30 H I C CNN
++F1 "GND-RESCUE-4_bit_JK_ff" 0 -70 30 H I C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 4 0 1 0 -50 0 0 -50 50 0 -50 0 N
++X GND 1 0 0 0 U 30 30 1 1 W N
++ENDDRAW
++ENDDEF
++#
+ # R-RESCUE-4_bit_JK_ff
+ #
+ DEF R-RESCUE-4_bit_JK_ff R 0 0 N Y 1 F N
+@@ -8,6 +22,7 @@
+ F1 "R-RESCUE-4_bit_JK_ff" 50 50 50 H V C CNN
+ F2 "" 50 -20 30 H V C CNN
+ F3 "" 50 50 30 V V C CNN
++F4 "" 0 0 50 H I C CNN
+ $FPLIST
+  R_*
+  Resistor_*
+@@ -19,4 +34,174 @@
+ ENDDRAW
+ ENDDEF
+ #
++# adc_bridge_3
++#
++DEF adc_bridge_3 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "adc_bridge_3" 0 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -400 200 350 -200 0 1 0 N
++X IN1 1 -600 50 200 R 50 50 1 1 I
++X IN2 2 -600 -50 200 R 50 50 1 1 I
++X IN3 3 -600 -150 200 R 50 50 1 1 I
++X OUT1 4 550 50 200 L 50 50 1 1 O
++X OUT2 5 550 -50 200 L 50 50 1 1 O
++X OUT3 6 550 -150 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# adc_bridge_4
++#
++DEF adc_bridge_4 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "adc_bridge_4" 0 300 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -350 350 350 -200 0 1 0 N
++X IN1 1 -550 200 200 R 50 50 1 1 I
++X IN2 2 -550 100 200 R 50 50 1 1 I
++X IN3 3 -550 0 200 R 50 50 1 1 I
++X IN4 4 -550 -100 200 R 50 50 1 1 I
++X OUT1 5 550 200 200 L 50 50 1 1 O
++X OUT2 6 550 100 200 L 50 50 1 1 O
++X OUT3 7 550 0 200 L 50 50 1 1 O
++X OUT4 8 550 -100 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# d_and
++#
++DEF d_and U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "d_and" 50 100 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++A 149 50 101 894 0 0 1 0 N 250 50 150 -50
++A 150 49 101 -6 -900 0 1 0 N 150 150 250 50
++P 4 0 1 0 150 -50 -250 -50 -250 150 150 150 N
++X IN1 1 -450 100 200 R 50 50 1 1 I
++X IN2 2 -450 0 200 R 50 50 1 1 I
++X OUT 3 450 50 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# d_jkff
++#
++DEF d_jkff U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "d_jkff" 50 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S 600 550 -600 -600 0 1 0 N
++X J 1 -800 400 200 R 50 50 1 1 I
++X Clk 3 -800 0 200 R 50 50 1 1 I C
++X K 2 -800 -450 200 R 50 50 1 1 I
++X Set 4 0 750 200 D 50 50 1 1 I
++X Reset 5 0 -800 200 U 50 50 1 1 I
++X Out 6 800 400 200 L 50 50 1 1 O
++X Nout 7 800 -450 200 L 50 50 1 1 O I
++ENDDRAW
++ENDDEF
++#
++# dac_bridge_1
++#
++DEF dac_bridge_1 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "dac_bridge_1" 0 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -400 200 350 -50 0 1 0 N
++X IN1 1 -600 50 200 R 50 50 1 1 I
++X OUT1 2 550 50 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# dac_bridge_4
++#
++DEF dac_bridge_4 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "dac_bridge_4" 0 300 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -350 350 350 -200 0 1 0 N
++X IN1 1 -550 200 200 R 50 50 1 1 I
++X IN2 2 -550 100 200 R 50 50 1 1 I
++X IN3 3 -550 0 200 R 50 50 1 1 I
++X IN4 4 -550 -100 200 R 50 50 1 1 I
++X OUT1 5 550 200 200 L 50 50 1 1 O
++X OUT2 6 550 100 200 L 50 50 1 1 O
++X OUT3 7 550 0 200 L 50 50 1 1 O
++X OUT4 8 550 -100 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# dc-RESCUE-4_bit_JK_ff
++#
++DEF dc-RESCUE-4_bit_JK_ff v 0 40 Y Y 1 F N
++F0 "v" -200 100 60 H V C CNN
++F1 "dc-RESCUE-4_bit_JK_ff" -200 -50 60 H V C CNN
++F2 "R1" -300 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ 1_pin
++$ENDFPLIST
++DRAW
++C 0 0 150 0 1 0 N
++X + 1 0 450 300 D 50 50 1 1 P
++X - 2 0 -450 300 U 50 50 1 1 P
++ENDDRAW
++ENDDEF
++#
++# plot_v1
++#
++DEF plot_v1 U 0 40 Y Y 1 F N
++F0 "U" 0 500 60 H V C CNN
++F1 "plot_v1" 200 350 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++C 0 500 100 0 1 0 N
++X ~ ~ 0 200 200 U 50 50 1 1 I
++ENDDRAW
++ENDDEF
++#
++# pulse
++#
++DEF pulse v 0 40 Y Y 1 F N
++F0 "v" -200 100 60 H V C CNN
++F1 "pulse" -200 -50 60 H V C CNN
++F2 "R1" -300 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ 1_pin
++$ENDFPLIST
++DRAW
++A -25 -450 501 -871 -929 0 1 0 N -50 50 0 50
++C 0 0 150 0 1 0 N
++A 25 400 451 932 868 0 1 0 N 50 -50 0 -50
++A 75 600 551 926 874 0 1 0 N 100 50 50 50
++A 350 0 403 -1729 1729 0 1 0 N -50 -50 -50 50
++A 450 0 453 -1737 1737 0 1 0 N 0 -50 0 50
++A 600 0 552 -1748 1748 0 1 0 N 50 -50 50 50
++X + 1 0 450 300 D 50 50 1 1 P
++X - 2 0 -450 300 U 50 50 1 1 P
++ENDDRAW
++ENDDEF
++#
+ #End Library
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/4_bit_JK_ff: rescue-backup
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/4_bit_JK_ff: sym-lib-table
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/BJT_amplifier/BJT_amplifier.cir /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier/BJT_amplifier.cir
+--- /tmp/eSim_clean/Examples/BJT_amplifier/BJT_amplifier.cir	2026-06-08 11:40:05.981855814 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier/BJT_amplifier.cir	2026-06-04 08:29:32.515556208 +0000
+@@ -1,24 +1,15 @@
+-* /home/saurabh/Installer_Main_Workshop/eSim-1.1.2/Examples/BJT_amplifier/BJT_amplifier.cir
+-
+-* EESchema Netlist Version 1.1 (Spice format) creation date: Wed Aug 21 12:31:11 2019
+-
+-* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+-* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+-
+-* Sheet Name: /
+-v1  Net-_R2-Pad1_ GND DC		
+-R1  Net-_C1-Pad1_ in 50		
+-R2  Net-_R2-Pad1_ Net-_C1-Pad2_ 200k		
+-C1  Net-_C1-Pad1_ Net-_C1-Pad2_ 40u		
+-R3  Net-_C1-Pad2_ GND 50k		
+-R6  out GND 1k		
+-C2  GND Net-_C2-Pad2_ 100u		
+-C3  out Net-_C3-Pad2_ 40u		
+-R5  Net-_R2-Pad1_ Net-_C3-Pad2_ 2k		
+-R4  Net-_C2-Pad2_ GND 1.5k		
+-U1  in plot_v1		
+-U2  out plot_v1		
+-v2  in GND sine		
+-Q1  Net-_C3-Pad2_ Net-_C1-Pad2_ Net-_C2-Pad2_ eSim_NPN		
+-
++.title KiCad schematic
++.model __Q1 NMF
++R6 out GND 1k
++C3 out Net-_Q1-C_ 40u
++R4 Net-_Q1-E_ GND 1.5k
++C2 GND Net-_Q1-E_ 100u
++R3 Net-_Q1-B_ GND 50k
++C1 Net-_C1-Pad1_ Net-_Q1-B_ 40u
++R1 Net-_C1-Pad1_ in 50
++Vv2 in GND DC 0 SIN( 0 1 ) 
++R2 Net-_v1-+_ Net-_Q1-B_ 200k
++R5 Net-_v1-+_ Net-_Q1-C_ 2k
++Vv1 Net-_v1-+_ GND 
++ZQ1 Net-_Q1-C_ Net-_Q1-B_ Net-_Q1-E_ __Q1
+ .end
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: BJT_amplifier.kicad_prl
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: BJT_amplifier.kicad_pro
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: BJT_amplifier.kicad_sch
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/BJT_amplifier/BJT_amplifier-rescue.lib /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier/BJT_amplifier-rescue.lib
+--- /tmp/eSim_clean/Examples/BJT_amplifier/BJT_amplifier-rescue.lib	2026-06-08 11:40:05.981855814 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier/BJT_amplifier-rescue.lib	2026-06-04 08:22:44.635330953 +0000
+@@ -1,6 +1,25 @@
+-EESchema-LIBRARY Version 2.3
++EESchema-LIBRARY Version 2.4
+ #encoding utf-8
+ #
++# C
++#
++DEF C C 0 10 N Y 1 F N
++F0 "C" 25 100 50 H V L CNN
++F1 "C" 25 -100 50 H V L CNN
++F2 "" 38 -150 50 H I C CNN
++F3 "" 0 0 50 H I C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ C_*
++$ENDFPLIST
++DRAW
++P 2 0 1 20 -80 30 80 30 N
++P 2 0 1 20 -80 -30 80 -30 N
++X ~ 1 0 150 110 D 50 50 1 1 P
++X ~ 2 0 -150 110 U 50 50 1 1 P
++ENDDRAW
++ENDDEF
++#
+ # DC-RESCUE-BJT_amplifier
+ #
+ DEF DC-RESCUE-BJT_amplifier v 0 40 Y Y 1 F N
+@@ -8,6 +27,7 @@
+ F1 "DC-RESCUE-BJT_amplifier" -200 -50 60 H V C CNN
+ F2 "R1" -300 0 60 H V C CNN
+ F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
+ $FPLIST
+  1_pin
+ $ENDFPLIST
+@@ -18,4 +38,105 @@
+ ENDDRAW
+ ENDDEF
+ #
++# GND-RESCUE-BJT_amplifier
++#
++DEF GND-RESCUE-BJT_amplifier #PWR 0 0 Y Y 1 F P
++F0 "#PWR" 0 0 30 H I C CNN
++F1 "GND-RESCUE-BJT_amplifier" 0 -70 30 H I C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 4 0 1 0 -50 0 0 -50 50 0 -50 0 N
++X GND 1 0 0 0 U 30 30 1 1 W N
++ENDDRAW
++ENDDEF
++#
++# PWR_FLAG
++#
++DEF PWR_FLAG #FLG 0 0 N N 1 F P
++F0 "#FLG" 0 75 50 H I C CNN
++F1 "PWR_FLAG" 0 150 50 H V C CNN
++F2 "" 0 0 50 H I C CNN
++F3 "" 0 0 50 H I C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 6 0 1 0 0 0 0 50 -40 75 0 100 40 75 0 50 N
++X pwr 1 0 0 0 U 50 50 0 0 w
++ENDDRAW
++ENDDEF
++#
++# R-RESCUE-BJT_amplifier
++#
++DEF R-RESCUE-BJT_amplifier R 0 0 N Y 1 F N
++F0 "R" 80 0 50 V V C CNN
++F1 "R-RESCUE-BJT_amplifier" 0 0 50 V V C CNN
++F2 "" -70 0 30 V V C CNN
++F3 "" 0 0 30 H V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ R_*
++ Resistor_*
++$ENDFPLIST
++DRAW
++S -40 -100 40 100 0 1 10 N
++X ~ 1 0 150 50 D 60 60 1 1 P
++X ~ 2 0 -150 50 U 60 60 1 1 P
++ENDDRAW
++ENDDEF
++#
++# eSim_NPN
++#
++DEF eSim_NPN Q 0 0 Y N 1 F N
++F0 "Q" -100 50 50 H V R CNN
++F1 "eSim_NPN" -50 150 50 H V R CNN
++F2 "" 200 100 29 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 3 0 1 20 25 75 25 -75 25 -75 N
++P 2 0 1 0 25 25 100 100 N
++P 3 0 1 0 25 -25 100 -100 100 -100 N
++C 50 0 111 0 1 10 N
++P 5 0 1 0 50 -70 70 -50 90 -90 50 -70 50 -70 F
++X B 2 -200 0 225 R 50 50 1 1 P
++X C 1 100 200 100 D 50 50 1 1 P
++X E 3 100 -200 100 U 50 50 1 1 P
++ENDDRAW
++ENDDEF
++#
++# plot_v1
++#
++DEF plot_v1 U 0 40 Y Y 1 F N
++F0 "U" 0 500 60 H V C CNN
++F1 "plot_v1" 200 350 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++C 0 500 100 0 1 0 N
++X ~ ~ 0 200 200 U 50 50 1 1 I
++ENDDRAW
++ENDDEF
++#
++# sine
++#
++DEF sine v 0 40 Y Y 1 F N
++F0 "v" -200 100 60 H V C CNN
++F1 "sine" -200 -50 60 H V C CNN
++F2 "R1" -300 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ 1_pin
++$ENDFPLIST
++DRAW
++A -50 0 50 0 1800 0 1 0 N -100 0 0 0
++C 0 0 150 0 1 0 N
++A 50 0 50 1800 0 0 1 0 N 100 0 0 0
++X + 1 0 450 300 D 50 0 1 1 I
++X - 2 0 -450 300 U 50 0 1 1 I
++ENDDRAW
++ENDDEF
++#
+ #End Library
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: ~BJT_amplifier.sch.lck
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: plot_data_i.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: plot_data_v.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: rescue-backup
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_amplifier: sym-lib-table
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: _autosave-BJT_CB_config.kicad_sch
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: #auto_saved_files#
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: BC547B.lib
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/BJT_CB_config/BJT_CB_config.cir /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config/BJT_CB_config.cir
+--- /tmp/eSim_clean/Examples/BJT_CB_config/BJT_CB_config.cir	2026-06-08 11:40:05.980363259 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config/BJT_CB_config.cir	2026-06-05 10:26:22.144972010 +0000
+@@ -1,16 +1,8 @@
+-* /home/saurabh/Installer_Main_Workshop/eSim-1.1.2/Examples/BJT_CB_config/BJT_CB_config.cir
+-
+-* EESchema Netlist Version 1.1 (Spice format) creation date: Wed Aug 21 12:38:22 2019
+-
+-* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+-* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+-
+-* Sheet Name: /
+-v1  vcb GND DC		
+-R1  Net-_R1-Pad1_ Net-_Q1-Pad1_ 1k		
+-R2  Net-_Q1-Pad3_ ie 1k		
+-U_ic1  vcb Net-_R1-Pad1_ plot_i2		
+-I1  ie GND dc		
+-Q1  Net-_Q1-Pad1_ GND Net-_Q1-Pad3_ eSim_NPN		
+-
++.title KiCad schematic
++.model __Q1 NPN level=8
++R1 Net-_U_ic1--_ Net-_Q1-C_ 1k
++Q1 Net-_Q1-C_ GND Net-_Q1-E_ NC-Q1-0 NC-Q1-1 __Q1
++Vv1 vcb GND DC V 
++R2 Net-_Q1-E_ ie 1k
++I1 ie GND DC dc 
+ .end
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: BJT_CB_config.kicad_prl
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: BJT_CB_config.kicad_pro
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: BJT_CB_config.kicad_sch
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/BJT_CB_config/BJT_CB_config-rescue.lib /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config/BJT_CB_config-rescue.lib
+--- /tmp/eSim_clean/Examples/BJT_CB_config/BJT_CB_config-rescue.lib	2026-06-08 11:40:05.980363259 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config/BJT_CB_config-rescue.lib	2026-06-05 10:13:44.435393324 +0000
+@@ -1,4 +1,4 @@
+-EESchema-LIBRARY Version 2.3
++EESchema-LIBRARY Version 2.4
+ #encoding utf-8
+ #
+ # DC-RESCUE-BJT_CB_config
+@@ -8,6 +8,7 @@
+ F1 "DC-RESCUE-BJT_CB_config" -200 -50 60 H V C CNN
+ F2 "R1" -300 0 60 H V C CNN
+ F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
+ $FPLIST
+  1_pin
+ $ENDFPLIST
+@@ -18,6 +19,34 @@
+ ENDDRAW
+ ENDDEF
+ #
++# GND
++#
++DEF GND #PWR 0 0 Y Y 1 F P
++F0 "#PWR" 0 -250 50 H I C CNN
++F1 "GND" 0 -150 50 H V C CNN
++F2 "" 0 0 50 H I C CNN
++F3 "" 0 0 50 H I C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 6 0 1 0 0 0 0 -50 50 -50 0 -100 -50 -50 0 -50 N
++X GND 1 0 0 0 D 50 50 1 1 W N
++ENDDRAW
++ENDDEF
++#
++# PWR_FLAG
++#
++DEF PWR_FLAG #FLG 0 0 N N 1 F P
++F0 "#FLG" 0 75 50 H I C CNN
++F1 "PWR_FLAG" 0 150 50 H V C CNN
++F2 "" 0 0 50 H I C CNN
++F3 "" 0 0 50 H I C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 6 0 1 0 0 0 0 50 -40 75 0 100 40 75 0 50 N
++X pwr 1 0 0 0 U 50 50 0 0 w
++ENDDRAW
++ENDDEF
++#
+ # R-RESCUE-BJT_CB_config
+ #
+ DEF R-RESCUE-BJT_CB_config R 0 0 N Y 1 F N
+@@ -25,6 +54,7 @@
+ F1 "R-RESCUE-BJT_CB_config" 50 50 50 H V C CNN
+ F2 "" 50 -20 30 H V C CNN
+ F3 "" 50 50 30 V V C CNN
++F4 "" 0 0 50 H I C CNN
+ $FPLIST
+  R_*
+  Resistor_*
+@@ -36,4 +66,61 @@
+ ENDDRAW
+ ENDDEF
+ #
++# dc
++#
++DEF dc I 0 40 Y Y 1 F N
++F0 "I" -200 100 60 H V C CNN
++F1 "dc" -200 -50 60 H V C CNN
++F2 "R1" -300 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ 1_pin
++$ENDFPLIST
++DRAW
++P 2 0 1 0 0 100 -50 50 N
++P 2 0 1 0 0 100 0 -100 N
++P 2 0 1 0 0 100 50 50 N
++C 0 0 150 0 1 0 N
++P 2 0 1 0 0 -100 0 -100 N
++X ~ 1 0 450 300 D 50 50 1 1 P
++X ~ 2 0 -450 300 U 50 50 1 1 P
++ENDDRAW
++ENDDEF
++#
++# eSim_NPN
++#
++DEF eSim_NPN Q 0 0 Y N 1 F N
++F0 "Q" -100 50 50 H V R CNN
++F1 "eSim_NPN" -50 150 50 H V R CNN
++F2 "" 200 100 29 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 3 0 1 20 25 75 25 -75 25 -75 N
++P 2 0 1 0 25 25 100 100 N
++P 3 0 1 0 25 -25 100 -100 100 -100 N
++C 50 0 111 0 1 10 N
++P 5 0 1 0 50 -70 70 -50 90 -90 50 -70 50 -70 F
++X B 2 -200 0 225 R 50 50 1 1 P
++X C 1 100 200 100 D 50 50 1 1 P
++X E 3 100 -200 100 U 50 50 1 1 P
++ENDDRAW
++ENDDEF
++#
++# plot_i2
++#
++DEF plot_i2 U 0 40 Y Y 1 F N
++F0 "U" 0 400 60 H V C CNN
++F1 "plot_i2" 0 100 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++C 0 250 100 0 1 0 N
++X + 1 -300 250 200 R 50 50 1 1 I
++X - 2 300 250 200 L 50 50 1 1 I
++ENDDRAW
++ENDDEF
++#
+ #End Library
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: ~BJT_CB_config.sch.lck
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: plot_data_i.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: plot_data_v.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: rescue-backup
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_CB_config: sym-lib-table
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/BJT_Frequency_Response/BJT_Frequency_Response.cir /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response/BJT_Frequency_Response.cir
+--- /tmp/eSim_clean/Examples/BJT_Frequency_Response/BJT_Frequency_Response.cir	2026-06-08 11:40:05.981182431 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response/BJT_Frequency_Response.cir	2026-06-08 06:57:38.153268806 +0000
+@@ -1,25 +1,17 @@
+-* /home/saurabh/Installer_Main_Workshop/eSim-1.1.2/Examples/BJT_Frequency_Response/BJT_Frequency_Response.cir
+-
+-* EESchema Netlist Version 1.1 (Spice format) creation date: Wed Aug 21 12:33:41 2019
+-
+-* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
+-* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
+-
+-* Sheet Name: /
+-v1  Net-_R2-Pad2_ GND DC		
+-v2  in GND AC		
+-C1  Net-_C1-Pad1_ Net-_C1-Pad2_ 40u		
+-C2  GND Net-_C2-Pad2_ 100u		
+-C3  out Net-_C3-Pad2_ 40u		
+-R3  GND Net-_C1-Pad2_ 50k		
+-R4  GND Net-_C2-Pad2_ 1.5k		
+-R6  GND out 1k		
+-R5  Net-_C3-Pad2_ Net-_R2-Pad2_ 2k		
+-R2  Net-_C1-Pad2_ Net-_R2-Pad2_ 200k		
+-R1  in Net-_C1-Pad1_ 50		
+-U3  out plot_log		
+-U2  out plot_phase		
+-U1  in plot_v1		
+-Q1  Net-_C3-Pad2_ Net-_C1-Pad2_ Net-_C2-Pad2_ eSim_NPN		
+-
++.title KiCad schematic
++v1 __v1
++U3 __U3
++U2 __U2
++C3 out Net-_Q1-C_ 40u
++R5 Net-_Q1-C_ Net-_v1-+_ 2k
++Q1 __Q1
++R2 Net-_Q1-B_ Net-_v1-+_ 200k
++R3 GND Net-_Q1-B_ 50k
++C1 Net-_C1-Pad1_ Net-_Q1-B_ 40u
++R1 in Net-_C1-Pad1_ 50
++U1 __U1
++v2 __v2
++R6 GND out 1k
++R4 GND Net-_Q1-E_ 1.5k
++C2 GND Net-_Q1-E_ 100u
+ .end
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response: BJT_Frequency_Response.kicad_prl
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response: BJT_Frequency_Response.kicad_pro
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response: BJT_Frequency_Response.kicad_sch
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response: BJT_Frequency_Response-rescue.lib
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response: rescue-backup
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/BJT_Frequency_Response: sym-lib-table
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/FET_Characteristic: plot_data_i.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/FET_Characteristic: plot_data_v.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/Integrator_LM_741: plot_data_i.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/Integrator_LM_741: plot_data_v.txt
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/Examples/JK_Flipflop/JK_Flipflop-rescue.lib /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/JK_Flipflop/JK_Flipflop-rescue.lib
+--- /tmp/eSim_clean/Examples/JK_Flipflop/JK_Flipflop-rescue.lib	2026-06-08 11:40:05.989917227 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/JK_Flipflop/JK_Flipflop-rescue.lib	2026-06-05 11:26:13.084154012 +0000
+@@ -1,4 +1,4 @@
+-EESchema-LIBRARY Version 2.3
++EESchema-LIBRARY Version 2.4
+ #encoding utf-8
+ #
+ # DC-RESCUE-JK_Flipflop
+@@ -8,6 +8,7 @@
+ F1 "DC-RESCUE-JK_Flipflop" -200 -50 60 H V C CNN
+ F2 "R1" -300 0 60 H V C CNN
+ F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
+ $FPLIST
+  1_pin
+ $ENDFPLIST
+@@ -16,6 +17,148 @@
+ X + 1 0 450 300 D 50 50 1 1 P
+ X - 2 0 -450 300 U 50 50 1 1 P
+ ENDDRAW
++ENDDEF
++#
++# GND
++#
++DEF GND #PWR 0 0 Y Y 1 F P
++F0 "#PWR" 0 -250 50 H I C CNN
++F1 "GND" 0 -150 50 H V C CNN
++F2 "" 0 0 50 H I C CNN
++F3 "" 0 0 50 H I C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++P 6 0 1 0 0 0 0 -50 50 -50 0 -100 -50 -50 0 -50 N
++X GND 1 0 0 0 D 50 50 1 1 W N
++ENDDRAW
++ENDDEF
++#
++# R-RESCUE-JK_Flipflop
++#
++DEF R-RESCUE-JK_Flipflop R 0 0 N Y 1 F N
++F0 "R" 50 130 50 H V C CNN
++F1 "R-RESCUE-JK_Flipflop" 50 50 50 H V C CNN
++F2 "" 50 -20 30 H V C CNN
++F3 "" 50 50 30 V V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ R_*
++ Resistor_*
++$ENDFPLIST
++DRAW
++S 150 10 -50 90 0 1 10 N
++X ~ 1 -100 50 50 R 60 60 1 1 P
++X ~ 2 200 50 50 L 60 60 1 1 P
++ENDDRAW
++ENDDEF
++#
++# adc_bridge_1
++#
++DEF adc_bridge_1 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "adc_bridge_1" 0 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -400 200 350 -50 0 1 0 N
++X IN1 1 -600 50 200 R 50 50 1 1 I
++X OUT1 2 550 50 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# adc_bridge_3
++#
++DEF adc_bridge_3 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "adc_bridge_3" 0 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -400 200 350 -200 0 1 0 N
++X IN1 1 -600 50 200 R 50 50 1 1 I
++X IN2 2 -600 -50 200 R 50 50 1 1 I
++X IN3 3 -600 -150 200 R 50 50 1 1 I
++X OUT1 4 550 50 200 L 50 50 1 1 O
++X OUT2 5 550 -50 200 L 50 50 1 1 O
++X OUT3 6 550 -150 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# d_jkff
++#
++DEF d_jkff U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "d_jkff" 50 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S 600 550 -600 -600 0 1 0 N
++X J 1 -800 400 200 R 50 50 1 1 I
++X Clk 3 -800 0 200 R 50 50 1 1 I C
++X K 2 -800 -450 200 R 50 50 1 1 I
++X Set 4 0 750 200 D 50 50 1 1 I
++X Reset 5 0 -800 200 U 50 50 1 1 I
++X Out 6 800 400 200 L 50 50 1 1 O
++X Nout 7 800 -450 200 L 50 50 1 1 O I
++ENDDRAW
++ENDDEF
++#
++# dac_bridge_2
++#
++DEF dac_bridge_2 U 0 40 Y Y 1 F N
++F0 "U" 0 0 60 H V C CNN
++F1 "dac_bridge_2" 50 150 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++S -250 200 350 -100 0 1 0 N
++X IN1 1 -450 50 200 R 50 50 1 1 I
++X IN2 2 -450 -50 200 R 50 50 1 1 I
++X OUT1 3 550 50 200 L 50 50 1 1 O
++X OUT4 4 550 -50 200 L 50 50 1 1 O
++ENDDRAW
++ENDDEF
++#
++# plot_v1
++#
++DEF plot_v1 U 0 40 Y Y 1 F N
++F0 "U" 0 500 60 H V C CNN
++F1 "plot_v1" 200 350 60 H V C CNN
++F2 "" 0 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++DRAW
++C 0 500 100 0 1 0 N
++X ~ ~ 0 200 200 U 50 50 1 1 I
++ENDDRAW
++ENDDEF
++#
++# pulse
++#
++DEF pulse v 0 40 Y Y 1 F N
++F0 "v" -200 100 60 H V C CNN
++F1 "pulse" -200 -50 60 H V C CNN
++F2 "R1" -300 0 60 H V C CNN
++F3 "" 0 0 60 H V C CNN
++F4 "" 0 0 50 H I C CNN
++$FPLIST
++ 1_pin
++$ENDFPLIST
++DRAW
++A -25 -450 501 -871 -929 0 1 0 N -50 50 0 50
++C 0 0 150 0 1 0 N
++A 25 400 451 932 868 0 1 0 N 50 -50 0 -50
++A 75 600 551 926 874 0 1 0 N 100 50 50 50
++A 350 0 403 -1729 1729 0 1 0 N -50 -50 -50 50
++A 450 0 453 -1737 1737 0 1 0 N 0 -50 0 50
++A 600 0 552 -1748 1748 0 1 0 N 50 -50 50 50
++X + 1 0 450 300 D 50 50 1 1 P
++X - 2 0 -450 300 U 50 50 1 1 P
++ENDDRAW
+ ENDDEF
+ #
+ #End Library
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/JK_Flipflop: plot_data_i.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/JK_Flipflop: plot_data_v.txt
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/JK_Flipflop: rescue-backup
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/Examples/JK_Flipflop: sym-lib-table
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench: fix_kicad_script2.py
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench: fix_kicad_script.py
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: IC_LM3411
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: IC_MC1556
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: LM386N
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: MC10136
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: MC33171
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: MIC4422
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: SDA12
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: SN75451
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: TL317
+Only in /tmp/eSim_clean/library/SubcircuitLibrary: TLC2264
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/nghdl: nghdl
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench: run_esim.sh
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/src/frontEnd/DockArea.py /home/work/.gemini/antigravity/scratch/esim_testbench/src/frontEnd/DockArea.py
+--- /tmp/eSim_clean/src/frontEnd/DockArea.py	2026-06-08 11:40:09.540421864 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/src/frontEnd/DockArea.py	2026-06-05 11:21:27.274745787 +0000
+@@ -51,7 +51,7 @@
+ 
+             # Adding to main Layout
+             self.welcomeWidget.setLayout(self.welcomeLayout)
+-            dock[dockName].setWidget(self.welcomeWidget)
++            self.apply_fullscreen_feature(dock[dockName], self.welcomeWidget)
+             # CSS
+             dock[dockName].setStyleSheet(" \
+             QWidget { border-radius: 15px; border: 1px solid gray;\
+@@ -62,6 +62,53 @@
+         # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
+         self.show()
+ 
++    def apply_fullscreen_feature(self, dock_widget, original_widget):
++        """Wraps a dock's inner widget with a Fullscreen pop-out button."""
++        title = dock_widget.windowTitle()
++        wrapper = QtWidgets.QWidget()
++        layout = QtWidgets.QVBoxLayout(wrapper)
++        layout.setContentsMargins(0, 0, 0, 0)
++        
++        top_bar = QtWidgets.QHBoxLayout()
++        top_bar.addStretch()
++        fs_btn = QtWidgets.QPushButton("🗗 Fullscreen")
++        fs_btn.setStyleSheet("font-weight: bold; color: #444444; padding: 2px 6px; border: 1px solid transparent;")
++        fs_btn.setFlat(True)
++        top_bar.addWidget(fs_btn)
++        
++        layout.addLayout(top_bar)
++        layout.addWidget(original_widget)
++        
++        dock_widget.setWidget(wrapper)
++        
++        popout_state = {"win": None}
++        def toggle_popout():
++            if not popout_state["win"]:
++                win = QtWidgets.QDialog(self.window())
++                win.setWindowTitle(title)
++                win.setWindowFlags(win.windowFlags() | QtCore.Qt.WindowType.WindowMaximizeButtonHint | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
++                
++                win_layout = QtWidgets.QVBoxLayout(win)
++                win_layout.setContentsMargins(0, 0, 0, 0)
++                win_layout.addWidget(wrapper)
++                
++                fs_btn.setText("🡮 Dock to eSim")
++                
++                def on_close(event):
++                    dock_widget.setWidget(wrapper)
++                    fs_btn.setText("🗗 Fullscreen")
++                    popout_state["win"] = None
++                    event.accept()
++                    
++                win.closeEvent = on_close
++                popout_state["win"] = win
++                win.resize(1000, 700)
++                win.showMaximized()
++            else:
++                popout_state["win"].close()
++                
++        fs_btn.clicked.connect(toggle_popout)
++
+     def get_main_view_reference(self):
+         """Get reference to the MainView widget."""
+         parent = self.parent()
+@@ -96,7 +143,7 @@
+         self.testWidget.setLayout(self.testLayout)
+         dock['Tips-' + str(count)] = \
+             QtWidgets.QDockWidget('Tips-' + str(count))
+-        dock['Tips-' + str(count)].setWidget(self.testWidget)
++        self.apply_fullscreen_feature(dock['Tips-' + str(count)], self.testWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock['Tips-' + str(count)])
+         self.tabifyDockWidget(
+@@ -132,8 +179,7 @@
+         dock[dockName + str(count)
+              ] = QtWidgets.QDockWidget(dockName
+                                        + str(count))
+-        dock[dockName + str(count)] \
+-            .setWidget(self.plottingWidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.plottingWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock[dockName + str(count)])
+         self.tabifyDockWidget(dock['Welcome'],
+@@ -180,8 +226,7 @@
+         dock[dockName + str(count)
+              ] = QtWidgets.QDockWidget(dockName
+                                        + str(count))
+-        dock[dockName + str(count)] \
+-            .setWidget(self.ngspiceWidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.ngspiceWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock[dockName + str(count)])
+         self.tabifyDockWidget(dock['Welcome'],
+@@ -324,7 +369,7 @@
+         self.eConWidget.setLayout(self.eConLayout)
+ 
+         dock[dockName + str(count)] = QtWidgets.QDockWidget(dockName + str(count))
+-        dock[dockName + str(count)].setWidget(self.eConWidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.eConWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName + str(count)])
+         self.tabifyDockWidget(dock['Welcome'], dock[dockName + str(count)])
+ 
+@@ -372,8 +417,7 @@
+         dock[dockName +
+              str(count)] = QtWidgets.QDockWidget(dockName
+                                                  + str(count))
+-        dock[dockName + str(count)] \
+-            .setWidget(self.modelwidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.modelwidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock[dockName + str(count)])
+         self.tabifyDockWidget(dock['Welcome'],
+@@ -408,8 +452,7 @@
+         self.kicadToNgspiceWidget.setLayout(self.kicadToNgspiceLayout)
+         dock[dockName + str(count)] = \
+             QtWidgets.QDockWidget(dockName + str(count))
+-        dock[dockName +
+-             str(count)].setWidget(self.kicadToNgspiceWidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.kicadToNgspiceWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock[dockName + str(count)])
+         self.tabifyDockWidget(dock['Welcome'],
+@@ -454,8 +497,7 @@
+             dock[dockName +
+                 str(count)] = QtWidgets.QDockWidget(dockName
+                                                     + str(count))
+-            dock[dockName + str(count)] \
+-                .setWidget(self.subcktWidget)
++            self.apply_fullscreen_feature(dock[dockName + str(count)], self.subcktWidget)
+             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                             dock[dockName + str(count)])
+             self.tabifyDockWidget(dock['Welcome'],
+@@ -513,12 +555,21 @@
+         dock[dockName +
+              str(count)] = QtWidgets.QDockWidget(dockName
+                                                  + str(count))
+-        dock[dockName + str(count)].setWidget(self.makerWidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.makerWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock[dockName + str(count)])
+         self.tabifyDockWidget(dock['Welcome'],
+                               dock[dockName + str(count)])
+ 
++        # Track this as a plotting dock so console is collapsed
++        self.active_plotting_docks.add(dock[dockName + str(count)])
++        
++        # Connect to tab change signal
++        try:
++            self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
++        except:
++            pass
++
+         # CSS
+         dock[dockName + str(count)].setStyleSheet(" \
+         .QWidget { border-radius: 15px; border: 1px solid gray;\
+@@ -529,6 +580,11 @@
+         dock[dockName + str(count)].setFocus()
+         dock[dockName + str(count)].raise_()
+ 
++        # Collapse console immediately
++        main_view = self.get_main_view_reference()
++        if main_view:
++            QtCore.QTimer.singleShot(100, main_view.collapse_console_area)
++
+         count = count + 1
+ 
+     def usermanual(self):
+@@ -541,7 +597,7 @@
+         self.usermanualWidget.setLayout(self.usermanualLayout)
+         dock['User Manual-' +
+              str(count)] = QtWidgets.QDockWidget('User Manual-' + str(count))
+-        dock['User Manual-' + str(count)].setWidget(self.usermanualWidget)
++        self.apply_fullscreen_feature(dock['User Manual-' + str(count)], self.usermanualWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock['User Manual-' + str(count)])
+         self.tabifyDockWidget(dock['Welcome'],
+@@ -573,8 +629,7 @@
+         self.modelicaWidget.setLayout(self.modelicaLayout)
+         dock[dockName + str(count)
+              ] = QtWidgets.QDockWidget(dockName + str(count))
+-        dock[dockName + str(count)] \
+-            .setWidget(self.modelicaWidget)
++        self.apply_fullscreen_feature(dock[dockName + str(count)], self.modelicaWidget)
+         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                            dock[dockName
+                                 + str(count)])
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/src/maker/makerchip.py /home/work/.gemini/antigravity/scratch/esim_testbench/src/maker/makerchip.py
+--- /tmp/eSim_clean/src/maker/makerchip.py	2026-06-08 11:40:09.541723578 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/src/maker/makerchip.py	2026-06-05 11:09:23.755909085 +0000
+@@ -27,7 +27,7 @@
+ # =========================================================================
+ 
+ # importing the files and libraries
+-from PyQt6 import QtWidgets
++from PyQt6 import QtWidgets, QtCore
+ from . import Maker
+ from . import NgVeri
+ 
+@@ -80,8 +80,11 @@
+         self.NgVeriTab.setWidget(obj_NgVeri)
+         self.NgVeriTab.setWidgetResizable(True)
+         self.tabWidget = QtWidgets.QTabWidget()
++
+         self.tabWidget.addTab(self.MakerTab, "Makerchip")
+         self.tabWidget.addTab(self.NgVeriTab, "NgVeri")
++
++
+         # The object refresh gets destroyed when Ngspice\
+         # to verilog converter is called
+         # so calling refresh_change to start toggling of refresh again
+@@ -93,3 +96,4 @@
+         # incrementing filecount for every new window
+         filecount = filecount + 1
+         return self.convertWindow
++
+diff -ur '--exclude=.git' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.out' '--exclude=*.raw' '--exclude=*.log' '--exclude=*_Previous_Values.xml' /tmp/eSim_clean/src/maker/Maker.py /home/work/.gemini/antigravity/scratch/esim_testbench/src/maker/Maker.py
+--- /tmp/eSim_clean/src/maker/Maker.py	2026-06-08 11:40:09.541723578 +0000
++++ /home/work/.gemini/antigravity/scratch/esim_testbench/src/maker/Maker.py	2026-06-05 11:13:14.745901888 +0000
+@@ -170,6 +170,27 @@
+         # self.notify.start()
+         # open("filepath.txt","w").write(self.verilogfile)
+ 
++    def load_verilog(self, filepath):
++        self.verilogfile = filepath
++        self.text = open(self.verilogfile).read()
++        self.entry_var[0].setText(self.verilogfile)
++        self.entry_var[1].setText(self.text)
++        global verilogFile
++        verilogFile[self.filecount] = self.verilogfile
++        self._stop_current_toggle()
++
++        self.observer = watchdog.observers.Observer()
++        self.event_handler = Handler(
++            self.verilogfile,
++            self.refreshoption,
++            self.observer)
++
++        self.observer.schedule(
++            self.event_handler,
++            path=self.verilogfile,
++            recursive=True)
++        self.observer.start()
++
+     # This function is used to call refresh while
+     # running Ngspice to Verilog Converter
+     # (as the original one gets destroyed)
+@@ -372,6 +393,13 @@
+         # self.optionsbox2.setTitle("Note: Please save the file once edited")
+         # self.optionsgrid2 = QtWidgets.QGridLayout()
+         self.optionsgroupbtn = QtWidgets.QButtonGroup()
++        
++        self.verifier_btn = QtWidgets.QPushButton("Verilog Simulator IDE")
++        self.verifier_btn.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
++        self.optionsgroupbtn.addButton(self.verifier_btn)
++        self.verifier_btn.clicked.connect(self.open_verifier)
++        self.optionsgrid.addWidget(self.verifier_btn, 0, 0)
++        
+         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
+         self.optionsgroupbtn.addButton(self.addoptions)
+         self.addoptions.clicked.connect(self.addverilog)
+@@ -410,6 +438,26 @@
+         self.optionsbox.setLayout(self.optionsgrid)
+         return self.optionsbox
+ 
++    def open_verifier(self):
++        if not hasattr(self, 'verifier_win'):
++            from .VerilogVerifier import VerilogVerifier
++            self.verifier_win = QtWidgets.QDialog(self.window())
++            self.verifier_win.setWindowTitle("Verilog Simulator IDE")
++            self.verifier_win.setWindowFlags(self.verifier_win.windowFlags() | QtCore.Qt.WindowType.WindowMaximizeButtonHint | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
++            layout = QtWidgets.QVBoxLayout(self.verifier_win)
++            layout.setContentsMargins(0, 0, 0, 0)
++            self.obj_VerilogVerifier = VerilogVerifier()
++            
++            # Connect the signal directly to load_verilog
++            self.obj_VerilogVerifier.sendToNgVeri.connect(self.load_verilog)
++            
++            layout.addWidget(self.obj_VerilogVerifier)
++            self.verifier_win.resize(1000, 700)
++            
++        self.verifier_win.show()
++        self.verifier_win.raise_()
++        self.verifier_win.activateWindow()
++
+     # This function adds the other parts of widget like text box
+     def creategroup(self):
+         self.trbox = QtWidgets.QGroupBox()
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/src/maker: VerilogVerifier.py
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/src: test_empty.py
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench/src: test_plot.py
+Only in /home/work/.gemini/antigravity/scratch/esim_testbench: venv

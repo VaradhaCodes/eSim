@@ -124,7 +124,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         try:
             self.removebtn.setHidden(True)
             self.modeltable.setHidden(True)
-        except BaseException:
+        except Exception:
             pass
 
         # Opens new dialog box
@@ -348,7 +348,7 @@ class ModelEditorclass(QtWidgets.QWidget):
 
             if self.editfile:
                 self.createtable(self.editfile)
-        except BaseException:
+        except Exception:
             print("No File selected for edit")
 
     def createtable(self, modelfile):
@@ -398,7 +398,7 @@ class ModelEditorclass(QtWidgets.QWidget):
             self.modeltable.setItem(count, 0, QTableWidgetItem(tags))
             try:
                 valueitem = QTableWidgetItem(values)
-            except BaseException:
+            except Exception:
                 pass
             self.modeltable.setItem(count, 1, valueitem)
             count = count + 1
@@ -425,7 +425,7 @@ class ModelEditorclass(QtWidgets.QWidget):
             para = self.modeltable.item(rowno, 0)
             val = str(para.data(0))
             self.modeldict[val] = name
-        except BaseException:
+        except Exception:
             pass
 
     def addparameters(self):
@@ -808,7 +808,7 @@ class ModelEditorclass(QtWidgets.QWidget):
                 listofname.append(
                     ''.join(stringof[int(stopcount[i]):int(stopcount[i + 1])]))
                 i = i + 1
-            except BaseException:
+            except Exception:
                 pass
         listoflist = []
         listofname2 = [
@@ -833,7 +833,7 @@ class ModelEditorclass(QtWidgets.QWidget):
             model_dict[listoflist[0][0]] = listoflist[1][0]
             try:
                 model_dict[listoflist[i][-1]] = listoflist[i + 1][0]
-            except BaseException:
+            except Exception:
                 pass
         root = ET.Element("library")
         ET.SubElement(root, "model_name").text = model_name

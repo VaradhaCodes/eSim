@@ -69,7 +69,9 @@ class Microcontroller(QtWidgets.QWidget):
 
         kicadFile = clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        from projManagement.projectPaths import stem_from_file
+        project_name = stem_from_file(kicadFile)
         check = 1
         try:
             f = open(
@@ -81,7 +83,7 @@ class Microcontroller(QtWidgets.QWidget):
             for parent in parent_root:
                 if parent.tag == "microcontroller":
                     self.root = parent
-        except BaseException:
+        except Exception:
 
             check = 0
             print("Microcontroller Previous Values XML is Empty")
@@ -115,6 +117,8 @@ class Microcontroller(QtWidgets.QWidget):
 
             tag_dict = {}
             modelbox = QtWidgets.QGroupBox()
+            modelbox.setProperty('cssClass', 'themedGroupBox')
+
             modelgrid = QtWidgets.QGridLayout()
             modelbox.setTitle(line[5])
             self.start = self.nextcount
@@ -169,7 +173,7 @@ class Microcontroller(QtWidgets.QWidget):
                                     self.obj_trac.microcontroller_var[
                                         self.nextcount].setText(child[i].text)
                                     i = i + 1
-                        except BaseException:
+                        except Exception:
                             print("Passes previous values")
 
                         modelgrid.addWidget(
@@ -214,14 +218,6 @@ class Microcontroller(QtWidgets.QWidget):
 
                         # CSS
 
-                        modelbox.setStyleSheet(
-                            " \
-                        QGroupBox { border: 1px solid gray; border-radius:\
-                        9px; margin-top: 0.5em; } \
-                        QGroupBox::title { subcontrol-origin: margin; left:\
-                        10px; padding: 0 3px 0 3px; } \
-                        "
-                        )
                         self.grid.addWidget(modelbox)
 
                     try:
@@ -231,7 +227,7 @@ class Microcontroller(QtWidgets.QWidget):
                                     self.nextcount].setText(child[i].text)
                                 i = i + 1
 
-                    except BaseException:
+                    except Exception:
                         print("Passes previous values")
 
                     modelgrid.addWidget(
@@ -247,15 +243,6 @@ class Microcontroller(QtWidgets.QWidget):
             modelbox.setLayout(modelgrid)
 
             # CSS
-
-            modelbox.setStyleSheet(
-                " \
-            QGroupBox { border: 1px solid gray; border-radius: \
-            9px; margin-top: 0.5em; } \
-            QGroupBox::title { subcontrol-origin: margin; left:\
-             10px; padding: 0 3px 0 3px; } \
-            "
-            )
 
             self.grid.addWidget(modelbox)
 

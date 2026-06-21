@@ -27,7 +27,7 @@
 # =========================================================================
 
 # importing the files and libraries
-from PyQt6 import QtWidgets, QtCore
+from PyQt6 import QtWidgets
 from . import Maker
 from . import NgVeri
 
@@ -79,11 +79,29 @@ class makerchip(QtWidgets.QWidget):
         obj_NgVeri = NgVeri.NgVeri(filecount)
         self.NgVeriTab.setWidget(obj_NgVeri)
         self.NgVeriTab.setWidgetResizable(True)
-        self.tabWidget = QtWidgets.QTabWidget()
 
+        # Verilog Simulator IDE — was a separate pop-up dialog launched from a
+        # button inside the Maker tab. It now lives here as the FIRST tab so
+        # the whole Verilog flow (simulate -> Makerchip -> NgVeri) is one dock.
+        # Added directly (no QScrollArea wrapper): it is a full IDE that manages
+        # its own splitters / web views, so it should fill the tab, not sit in a
+        # nested scroll viewport that would cramp it.
+        from .VerilogVerifier import VerilogVerifier
+        self.VerilogTab = VerilogVerifier()
+        # "Send to NgVeri" from the verifier loads the file into the Maker tab,
+        # exactly as the old dialog did.
+        self.VerilogTab.sendToNgVeri.connect(obj_Maker.load_verilog)
+
+        self.tabWidget = QtWidgets.QTabWidget()
+        self.tabWidget.addTab(self.VerilogTab, "Verilog Simulator")
         self.tabWidget.addTab(self.MakerTab, "Makerchip")
         self.tabWidget.addTab(self.NgVeriTab, "NgVeri")
 
+        # The in-Maker "Verilog Simulator IDE" button now focuses this tab
+        # instead of spawning a separate window. Hand Maker a callback to do so.
+        obj_Maker.focus_verilog_tab = (
+            lambda: self.tabWidget.setCurrentWidget(self.VerilogTab)
+        )
 
         # The object refresh gets destroyed when Ngspice\
         # to verilog converter is called
@@ -96,4 +114,3 @@ class makerchip(QtWidgets.QWidget):
         # incrementing filecount for every new window
         filecount = filecount + 1
         return self.convertWindow
-

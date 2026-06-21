@@ -146,7 +146,7 @@ class NgMoConverter:
             if os.path.exists(filename):
                 try:
                     f = open(filename)
-                except BaseException:
+                except Exception:
                     print("Error in opening file")
                     raise
             else:
@@ -276,7 +276,7 @@ class NgMoConverter:
                 modifiedcompValue += self.mappingData["Units"][unitValue]
 
             return modifiedcompValue
-        except BaseException:
+        except Exception:
             return compValue
 
     def compInit(self, compInfo, node, modelInfo, subcktName,
@@ -430,7 +430,7 @@ class NgMoConverter:
                             )
                             userDeviceParamList.append(
                                 str(actualModelicaParam))
-                        except BaseException:
+                        except Exception:
                             pass
 
                     # Running loop over default parameter of OpenModelica
@@ -511,7 +511,7 @@ class NgMoConverter:
                                 " ")
                             userDeviceParamList.append(
                                 str(actualModelicaParam))
-                    except BaseException:
+                    except Exception:
                         pass
                 # Running loop over default parameter of OpenModelica
                 for default in (
@@ -690,12 +690,7 @@ class NgMoConverter:
                 for key in modelInfo[refName]:
                     # If parameter is not mapped then it will just pass
                     try:
-                        actualModelicaParam = self.mappingData(
-                            ["Devices"]
-                            [deviceName]
-                            ["mapping"]
-                            [key]
-                        )
+                        actualModelicaParam = self.mappingData["Devices"][deviceName]["mapping"][key]
                         tempstatList.append(
                             actualModelicaParam +
                             "=" +
@@ -703,7 +698,7 @@ class NgMoConverter:
                                 modelInfo[refName][key]) +
                             " ")
                         userDeviceParamList.append(str(actualModelicaParam))
-                    except BaseException:
+                    except Exception:
                         pass
                 # Running loop over default parameter of OpenModelica
                 for default in (
@@ -786,7 +781,7 @@ class NgMoConverter:
                                 modelInfo[refName][key]) +
                             " ")
                         userModelParamList.append(str(actualModelicaParam))
-                    except BaseException:
+                    except Exception:
                         pass
 
                 # Running loop over default parameter of OpenModelica
@@ -846,7 +841,7 @@ class NgMoConverter:
             else:
                 continue
 
-        if '0' or 'gnd' in node:
+        if '0' in node or 'gnd' in node:
             modelicaCompInit.append('Analog.Basic.Ground g;')
         return modelicaCompInit, numNodesSub
 

@@ -20,7 +20,9 @@ class SubcircuitTab(QtWidgets.QWidget):
     def __init__(self, schematicInfo, clarg1):
         kicadFile = clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        from projManagement.projectPaths import stem_from_file
+        project_name = stem_from_file(kicadFile)
 
         try:
             f = open(
@@ -34,7 +36,7 @@ class SubcircuitTab(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "subcircuit":
                     root = child
-        except BaseException:
+        except Exception:
             print("Subcircuit Previous values XML is Empty")
 
         QtWidgets.QWidget.__init__(self)
@@ -67,6 +69,8 @@ class SubcircuitTab(QtWidgets.QWidget):
                 self.obj_trac.subcircuitList[project_name + words[0]] = words
                 self.subcircuit_dict_beg[words[0]] = self.count
                 subbox = QtWidgets.QGroupBox()
+                subbox.setProperty('cssClass', 'themedGroupBox')
+
                 subgrid = QtWidgets.QGridLayout()
                 subbox.setTitle("Add subcircuit for " + words[len(words) - 1])
                 self.entry_var[self.count] = QtWidgets.QLineEdit()
@@ -87,10 +91,10 @@ class SubcircuitTab(QtWidgets.QWidget):
                                     path_name = child[0].text
                                 else:
                                     self.entry_var[self.count].setText("")
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of " +
                                       "subcircuit :", str(e))
-                except BaseException as e:
+                except Exception as e:
                     print("Error before subcircuit :", str(e))
 
                 subgrid.addWidget(self.entry_var[self.count], self.row, 1)
@@ -107,13 +111,6 @@ class SubcircuitTab(QtWidgets.QWidget):
                 subbox.setLayout(subgrid)
 
                 # CSS
-                subbox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius:\
-                 9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
-
                 self.grid.addWidget(subbox)
 
                 # Adding Subcircuit Details

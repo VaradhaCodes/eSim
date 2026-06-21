@@ -41,7 +41,7 @@ class DeviceModel(QtWidgets.QWidget):
             for child in parent_self:
                 if child.tag == "devicemodel":
                     self.root = child
-        except BaseException:
+        except Exception:
             print("Device Model Previous XML is Empty")
 
         QtWidgets.QWidget.__init__(self)
@@ -92,6 +92,8 @@ class DeviceModel(QtWidgets.QWidget):
 
     def eSim_sky130(self, schematicInfo):
         sky130box = QtWidgets.QGroupBox()
+        sky130box.setProperty('cssClass', 'themedGroupBox')
+
         sky130grid = QtWidgets.QGridLayout()
         self.count = self.count+1
         self.row = self.row + 1
@@ -163,12 +165,6 @@ class DeviceModel(QtWidgets.QWidget):
         self.trackLibraryWithoutButton(beg, path_name)
 
         sky130box.setLayout(sky130grid)
-        sky130box.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius:\
-                 9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
         self.grid.addWidget(sky130box)
         # if self.entry_var[self.count-3].text() == "":
         #    pass
@@ -208,6 +204,8 @@ class DeviceModel(QtWidgets.QWidget):
                 self.devicemodel_dict_beg[words[0]] = self.count
                 self.deviceDetail[self.count] = words[0]
                 sky130box = QtWidgets.QGroupBox()
+                sky130box.setProperty('cssClass', 'themedGroupBox')
+
                 sky130grid = QtWidgets.QGridLayout()
                 beg = self.count
                 sky130box.setTitle(
@@ -227,12 +225,6 @@ class DeviceModel(QtWidgets.QWidget):
                 sky130grid.addWidget(self.entry_var[self.count], self.row, 1)
                 self.entry_var[self.count].textChanged.connect(self.textChange)
                 sky130box.setLayout(sky130grid)
-                sky130box.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius: \
-                9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
                 try:
                     for child in self.root:
                         if child.tag == words[0]:
@@ -246,10 +238,10 @@ class DeviceModel(QtWidgets.QWidget):
                                 else:
                                     self.entry_var[self.count].setText("")
                                     path_name = ""
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of Device " +
                                       "SKY130 Component :", str(e))
-                except BaseException:
+                except Exception:
                     pass
                 self.trackLibraryWithoutButton(self.count, path_name)
                 self.grid.addWidget(sky130box)
@@ -366,6 +358,9 @@ class DeviceModel(QtWidgets.QWidget):
             self.deviceDetail[self.count] = device_ref
             
             ihpbox = QtWidgets.QGroupBox()
+            
+            ihpbox.setProperty('cssClass', 'themedGroupBox')
+
             ihpgrid = QtWidgets.QGridLayout()
             beg = self.count
             
@@ -479,12 +474,9 @@ class DeviceModel(QtWidgets.QWidget):
                 self.obj_trac.deviceModelTrack[device_ref] = f"{lib_path}:{corner}:{params}"
             
             ihpbox.setLayout(ihpgrid)
-            ihpbox.setStyleSheet("""
-                QGroupBox { border: 1px solid #4a86c7; border-radius: 9px;
-                            margin-top: 0.5em; background-color: #f0f8ff; }
-                QGroupBox::title { subcontrol-origin: margin; left: 10px;
-                                  padding: 0 3px 0 3px; color: #2c5aa0; }
-            """)
+            ihpbox.setProperty("cssClass", "ihpGroup")
+            ihpbox.style().unpolish(ihpbox)
+            ihpbox.style().polish(ihpbox)
             self.grid.addWidget(ihpbox)
             
             self.row += 1
@@ -576,6 +568,8 @@ class DeviceModel(QtWidgets.QWidget):
                 # print("Device Model Transistor: ", words[0])
                 self.devicemodel_dict_beg[words[0]] = self.count
                 transbox = QtWidgets.QGroupBox()
+                transbox.setProperty('cssClass', 'themedGroupBox')
+
                 transgrid = QtWidgets.QGridLayout()
                 transbox.setTitle(
                     "Add library for Transistor " +
@@ -600,10 +594,10 @@ class DeviceModel(QtWidgets.QWidget):
                                     path_name = child[0].text
                                 else:
                                     self.entry_var[self.count].setText("")
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of device " +
                                       "model transistor :", str(e))
-                except BaseException:
+                except Exception:
                     pass
 
                 transgrid.addWidget(self.entry_var[self.count], self.row, 1)
@@ -621,13 +615,6 @@ class DeviceModel(QtWidgets.QWidget):
                 transbox.setLayout(transgrid)
 
                 # CSS
-                transbox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius: \
-                9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
-
                 self.grid.addWidget(transbox)
 
                 # Adding Device Details #
@@ -641,6 +628,8 @@ class DeviceModel(QtWidgets.QWidget):
                 # print("Device Model Diode:", words[0])
                 self.devicemodel_dict_beg[words[0]] = self.count
                 diodebox = QtWidgets.QGroupBox()
+                diodebox.setProperty('cssClass', 'themedGroupBox')
+
                 diodegrid = QtWidgets.QGridLayout()
                 diodebox.setTitle(
                     "Add library for Diode " +
@@ -664,10 +653,10 @@ class DeviceModel(QtWidgets.QWidget):
                                         .setText(child[0].text)
                                 else:
                                     self.entry_var[self.count].setText("")
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of device " +
                                       "model diode :", str(e))
-                except BaseException:
+                except Exception:
                     pass
 
                 diodegrid.addWidget(self.entry_var[self.count], self.row, 1)
@@ -685,13 +674,6 @@ class DeviceModel(QtWidgets.QWidget):
                 diodebox.setLayout(diodegrid)
 
                 # CSS
-                diodebox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius: \
-                9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
-
                 self.grid.addWidget(diodebox)
 
                 # Adding Device Details #
@@ -705,6 +687,8 @@ class DeviceModel(QtWidgets.QWidget):
                 # print("Device Model JFET:", words[0])
                 self.devicemodel_dict_beg[words[0]] = self.count
                 jfetbox = QtWidgets.QGroupBox()
+                jfetbox.setProperty('cssClass', 'themedGroupBox')
+
                 jfetgrid = QtWidgets.QGridLayout()
                 jfetbox.setTitle(
                     "Add library for JFET " +
@@ -728,10 +712,10 @@ class DeviceModel(QtWidgets.QWidget):
                                     path_name = child[0].text
                                 else:
                                     self.entry_var[self.count].setText("")
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of Device " +
                                       "Model JFET :", str(e))
-                except BaseException:
+                except Exception:
                     pass
 
                 jfetgrid.addWidget(self.entry_var[self.count], self.row, 1)
@@ -749,13 +733,6 @@ class DeviceModel(QtWidgets.QWidget):
                 jfetbox.setLayout(jfetgrid)
 
                 # CSS
-                jfetbox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius:\
-                 9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
-
                 self.grid.addWidget(jfetbox)
 
                 # Adding Device Details #
@@ -768,6 +745,8 @@ class DeviceModel(QtWidgets.QWidget):
                 # print("Device Model Switch:", words[0])
                 self.devicemodel_dict_beg[words[0]] = self.count
                 switchbox = QtWidgets.QGroupBox()
+                switchbox.setProperty('cssClass', 'themedGroupBox')
+
                 switchgrid = QtWidgets.QGridLayout()
                 switchbox.setTitle(
                     "Add library for Switch " +
@@ -790,10 +769,10 @@ class DeviceModel(QtWidgets.QWidget):
                                         .setText(child[0].text)
                                 else:
                                     self.entry_var[self.count].setText("")
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of device " +
                                       "model switch :", str(e))
-                except BaseException:
+                except Exception:
                     pass
 
                 switchgrid.addWidget(self.entry_var[self.count], self.row, 1)
@@ -811,13 +790,6 @@ class DeviceModel(QtWidgets.QWidget):
                 switchbox.setLayout(switchgrid)
 
                 # CSS
-                switchbox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius: \
-                9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
-
                 self.grid.addWidget(switchbox)
 
                 # Adding Device Details #
@@ -831,6 +803,8 @@ class DeviceModel(QtWidgets.QWidget):
                 # print("Device Model ymod:", words[0])
                 self.devicemodel_dict_beg[words[0]] = self.count
                 ymodbox = QtWidgets.QGroupBox()
+                ymodbox.setProperty('cssClass', 'themedGroupBox')
+
                 ymodgrid = QtWidgets.QGridLayout()
                 ymodbox.setTitle(
                     "Add library for ymod " +
@@ -853,10 +827,10 @@ class DeviceModel(QtWidgets.QWidget):
                                         .setText(child[0].text)
                                 else:
                                     self.entry_var[self.count].setText("")
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of device " +
                                       "model ymod :", str(e))
-                except BaseException:
+                except Exception:
                     pass
 
                 ymodgrid.addWidget(self.entry_var[self.count], self.row, 1)
@@ -874,13 +848,6 @@ class DeviceModel(QtWidgets.QWidget):
                 ymodbox.setLayout(ymodgrid)
 
                 # CSS
-                ymodbox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius: \
-                9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
-
                 self.grid.addWidget(ymodbox)
 
                 # Adding Device Details #
@@ -894,6 +861,8 @@ class DeviceModel(QtWidgets.QWidget):
 
                 self.devicemodel_dict_beg[words[0]] = self.count
                 mosfetbox = QtWidgets.QGroupBox()
+                mosfetbox.setProperty('cssClass', 'themedGroupBox')
+
                 mosfetgrid = QtWidgets.QGridLayout()
                 i = self.count
                 beg = self.count
@@ -970,15 +939,9 @@ class DeviceModel(QtWidgets.QWidget):
                                     else:
                                         self.entry_var[i].setText("")
                                 i = i + 1
-                except BaseException:
+                except Exception:
                     pass
                 # CSS
-                mosfetbox.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius:\
-                 9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left: \
-                10px; padding: 0 3px 0 3px; } \
-                ")
                 if self.entry_var[beg].text() == "":
                     pass
                 else:

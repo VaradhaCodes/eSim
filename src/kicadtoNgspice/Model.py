@@ -24,7 +24,9 @@ class Model(QtWidgets.QWidget):
         # Processing for getting previous values
         kicadFile = clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        from projManagement.projectPaths import stem_from_file
+        project_name = stem_from_file(kicadFile)
         check = 1
         try:
             f = open(
@@ -36,7 +38,7 @@ class Model(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "model":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
 
         # Creating track widget object
@@ -64,6 +66,8 @@ class Model(QtWidgets.QWidget):
 
             tag_dict = {}
             modelbox = QtWidgets.QGroupBox()
+            modelbox.setProperty('cssClass', 'themedGroupBox')
+
             modelgrid = QtWidgets.QGridLayout()
             modelbox.setTitle(line[5])
             self.start = self.nextcount
@@ -93,7 +97,7 @@ class Model(QtWidgets.QWidget):
                                 if child.text == line[2] and child.tag == line[3]:
                                     le.setText(child[i].text)
                                     i += 1
-                        except BaseException:
+                        except Exception:
                             pass
 
                         # add exactly one widget per row
@@ -119,7 +123,7 @@ class Model(QtWidgets.QWidget):
                             if child.text == line[2] and child.tag == line[3]:
                                 le.setText(child[i].text)
                                 i += 1
-                    except BaseException:
+                    except Exception:
                         pass
 
                     modelgrid.addWidget(le, self.nextrow, 1)
@@ -132,15 +136,6 @@ class Model(QtWidgets.QWidget):
             modelbox.setLayout(modelgrid)
 
             # CSS
-            modelbox.setStyleSheet(
-                " \
-            QGroupBox { border: 1px solid gray; border-radius: \
-            9px; margin-top: 0.5em; } \
-            QGroupBox::title { subcontrol-origin: margin; left:\
-             10px; padding: 0 3px 0 3px; } \
-            "
-            )
-
             self.grid.addWidget(modelbox)
 
             # This keeps the track of Model Tab Widget
@@ -173,12 +168,4 @@ class Model(QtWidgets.QWidget):
         modelbox.setLayout(modelgrid)
 
         # CSS
-        modelbox.setStyleSheet(
-            " \
-        QGroupBox { border: 1px solid gray; border-radius:\
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left:\
-        10px; padding: 0 3px 0 3px; } \
-        "
-        )
         self.grid.addWidget(modelbox)

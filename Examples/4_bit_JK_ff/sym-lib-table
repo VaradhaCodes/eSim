@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 0)
+  (lib (name "4_bit_JK_ff-rescue")(type "Legacy")(uri "${KIPRJMOD}/4_bit_JK_ff-rescue.lib")(options "")(descr ""))
+  (lib (name "eSim_Subckt1")(type "Legacy")(uri "${KICAD9_SYMBOL_DIR}/eSim_Subckt.lib")(options "")(descr ""))
+)

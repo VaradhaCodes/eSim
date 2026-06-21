@@ -222,7 +222,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
             )
             self.msg.exec()
 
-        except BaseException as e:
+        except Exception as e:
             traceback.print_exc()
             print("================")
             self.msg = QtWidgets.QErrorMessage()
@@ -245,7 +245,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
             print("OMEdit called")
             self.obj_appconfig.print_info("OMEdit called")
 
-        except BaseException:
+        except Exception:
             self.msg = QtWidgets.QMessageBox()
             self.msgContent = (
                 "There was an error while opening OMEdit.<br/>"

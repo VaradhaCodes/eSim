@@ -37,6 +37,15 @@ except Exception:  # pragma: no cover — running outside frontEnd package.
     close_icon = None
     copy_icon = None
 
+
+def _mono_font_family():
+    """Portable monospace family (Consolas is Windows-only)."""
+    try:
+        from frontEnd.widgets import mono_family
+        return mono_family()
+    except Exception:
+        return "Consolas"
+
 class VcdPlotWindow(plotWindow):
     def __init__(self, timestamps, signals_data, signal_types, project_name="Verilog Simulation", parent=None):
         self.timestamps = timestamps
@@ -160,6 +169,18 @@ class CodeEditor(QtWidgets.QPlainTextEdit):
         self.updateRequest.connect(self.updateLineNumberArea)
         self.updateLineNumberAreaWidth(0)
 
+    def _highlight_current_line(self):
+        selections = []
+        if not self.isReadOnly():
+            dark = self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
+            sel = QtWidgets.QTextEdit.ExtraSelection()
+            sel.format.setBackground(QtGui.QColor(83, 215, 255, 14) if dark else QtGui.QColor(0, 119, 168, 14))
+            sel.format.setProperty(QtGui.QTextFormat.Property.FullWidthSelection, True)
+            sel.cursor = self.textCursor()
+            sel.cursor.clearSelection()
+            selections.append(sel)
+        self.setExtraSelections(selections)
+
     def lineNumberAreaWidth(self):
         digits = 1
         max_num = max(1, self.blockCount())
@@ -187,30 +208,49 @@ class CodeEditor(QtWidgets.QPlainTextEdit):
 
     def lineNumberAreaPaintEvent(self, event):
         painter = QtGui.QPainter(self.lineNumberArea)
-        # Use the active widget palette so the gutter tracks the
-        # currently-applied QSS theme (dark/light) without hardcoding.
-        pal = self.palette()
-        painter.fillRect(event.rect(), pal.color(QtGui.QPalette.ColorRole.AlternateBase))
+        dark = self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
 
-        border_color = pal.color(QtGui.QPalette.ColorRole.Mid)
-        text_color = pal.color(QtGui.QPalette.ColorRole.PlaceholderText)
+        bg0 = QtGui.QColor("#0D182B" if dark else "#EDF4FA")
+        bg1 = QtGui.QColor("#09111F" if dark else "#F8FBFF")
+        grad = QtGui.QLinearGradient(0, 0, self.lineNumberArea.width(), 0)
+        grad.setColorAt(0, bg0)
+        grad.setColorAt(1, bg1)
+        painter.fillRect(event.rect(), grad)
 
-        # Subtle right border for the gutter
+        border_color = QtGui.QColor("#1D2B45" if dark else "#D6E1EE")
+        text_color = QtGui.QColor("#94A8C3" if dark else "#6B7F99")
+        active_color = QtGui.QColor("#53D7FF" if dark else "#0077A8")
+
         painter.setPen(border_color)
         painter.drawLine(self.lineNumberArea.width() - 1, 0, self.lineNumberArea.width() - 1, event.rect().height())
-        
+
+        current_block = self.textCursor().blockNumber()
         block = self.firstVisibleBlock()
         blockNumber = block.blockNumber()
         top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
         bottom = top + self.blockBoundingRect(block).height()
-        
+
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(blockNumber + 1)
-                painter.setPen(text_color)
+                if blockNumber == current_block:
+                    pill_rect = QtCore.QRect(4, int(top) + 1, self.lineNumberArea.width() - 8, self.fontMetrics().height())
+                    painter.setBrush(QtGui.QColor(83, 215, 255, 30) if dark else QtGui.QColor(0, 119, 168, 22))
+                    painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                    painter.drawRoundedRect(pill_rect, 6, 6)
+                    painter.setPen(active_color)
+                    f = self.font()
+                    if hasattr(QtGui.QFont, 'Weight'):
+                        f.setWeight(QtGui.QFont.Weight.Bold)
+                    elif hasattr(QtGui.QFont, 'setBold'):
+                        f.setBold(True)
+                    painter.setFont(f)
+                else:
+                    painter.setPen(text_color)
+                    painter.setFont(self.font())
                 painter.drawText(0, int(top), self.lineNumberArea.width() - 4, self.fontMetrics().height(),
                                  QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter, number)
-            
+
             block = block.next()
             top = bottom
             bottom = top + self.blockBoundingRect(block).height()
@@ -307,18 +347,26 @@ endmodule
 class VerilogHighlighter(QtGui.QSyntaxHighlighter):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.is_dark = None
         self.highlightingRules = []
-        # Read the actually-applied palette so syntax colors follow the
-        # user's selected QSS theme rather than just the OS scheme —
-        # this is the same signal theme_utils.apply_theme uses to
-        # decide between style_dark.qss / style_light.qss.
-        pal_window = QtGui.QGuiApplication.palette().color(
-            QtGui.QPalette.ColorRole.Window
-        )
-        is_dark = pal_window.lightness() < 64
+        self._update_theme()
+
+    def _update_theme(self):
+        app = QtWidgets.QApplication.instance()
+        if not app:
+            return
+            
+        pal_window = app.palette().color(QtGui.QPalette.ColorRole.Window)
+        current_is_dark = pal_window.lightness() < 128
+        
+        if self.is_dark == current_is_dark:
+            return
+            
+        self.is_dark = current_is_dark
+        self.highlightingRules.clear()
 
         keywordFormat = QtGui.QTextCharFormat()
-        keywordFormat.setForeground(QtGui.QColor("#60A5FA" if is_dark else "#165982")) # Blue for keywords
+        keywordFormat.setForeground(QtGui.QColor("#7DD3FC" if self.is_dark else "#006D9C"))
         keywordFormat.setFontWeight(QtGui.QFont.Weight.Bold)
         keywords = [
             "module", "endmodule", "input", "output", "inout", "wire", "reg", "logic",
@@ -331,22 +379,23 @@ class VerilogHighlighter(QtGui.QSyntaxHighlighter):
 
         # Numbers
         numberFormat = QtGui.QTextCharFormat()
-        numberFormat.setForeground(QtGui.QColor("#B5CEA8" if is_dark else "#098658")) # Greenish-teal for numbers
+        numberFormat.setForeground(QtGui.QColor("#A7F3D0" if self.is_dark else "#047857"))
         self.highlightingRules.append((QtCore.QRegularExpression(r"\b\d+'[bBoOdDhH][0-9a-fA-F_xzXZ]+\b"), numberFormat))
         self.highlightingRules.append((QtCore.QRegularExpression(r"\b\d+\b"), numberFormat))
 
         # Comments
         commentFormat = QtGui.QTextCharFormat()
-        commentFormat.setForeground(QtGui.QColor("#6A9955" if is_dark else "#008000")) # Dark green for comments
+        commentFormat.setForeground(QtGui.QColor("#64748B" if self.is_dark else "#6B7280"))
         self.highlightingRules.append((QtCore.QRegularExpression(r"//[^\n]*"), commentFormat))
         self.highlightingRules.append((QtCore.QRegularExpression(r"/\*[\s\S]*?\*/"), commentFormat))
 
         # System Tasks
         sysTaskFormat = QtGui.QTextCharFormat()
-        sysTaskFormat.setForeground(QtGui.QColor("#DCDCAA" if is_dark else "#795e26")) # Brown for $tasks
+        sysTaskFormat.setForeground(QtGui.QColor("#C4B5FD" if self.is_dark else "#6D28D9"))
         self.highlightingRules.append((QtCore.QRegularExpression(r"\$\w+\b"), sysTaskFormat))
 
     def highlightBlock(self, text):
+        self._update_theme()
         for pattern, format in self.highlightingRules:
             matchIterator = pattern.globalMatch(text)
             while matchIterator.hasNext():
@@ -705,8 +754,6 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console.update()
 
     def init_ui(self):
-        # Theme-only surfaces come from style_dark/light.qss via the
-        # #verilogRoot object name — never inline-setStyleSheet here.
         self.setObjectName('verilogRoot')
 
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -714,14 +761,13 @@ class VerilogVerifier(QtWidgets.QWidget):
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         main_layout.addWidget(main_splitter)
         
-        # 1. Top widget containing the tabbed editors
         top_container = QtWidgets.QWidget()
+        top_container.setObjectName('verilogTopContainer')
         top_layout = QtWidgets.QVBoxLayout(top_container)
         top_layout.setContentsMargins(0, 0, 0, 0)
         
         def setup_popout(widget_to_pop, parent_container, insert_index=0, title="", extra_widgets=None):
             popout_btn = QtWidgets.QPushButton("  Fullscreen")
-            popout_btn.setProperty('cssClass', 'labeledIcon')
             popout_btn.setProperty('dockPopButton', 'true')
             popout_btn.setProperty('isPoppedOut', 'false')
             popout_btn.setToolTip('Pop out into a separate window')
@@ -757,12 +803,26 @@ class VerilogVerifier(QtWidgets.QWidget):
                     popout_btn.setToolTip('Bring the editor back into the main window')
 
                     def on_close(event):
-                        parent_container.insertWidget(insert_index, widget_to_pop)
-                        popout_btn.setText("  Fullscreen")
-                        popout_btn.setProperty('isPoppedOut', 'false')
-                        popout_btn.style().unpolish(popout_btn)
-                        popout_btn.style().polish(popout_btn)
-                        popout_btn.setToolTip('Pop out into a separate window')
+                        # The parent splitter (or the popped widget) may already
+                        # be gone — e.g. the Makerchip dock was closed while this
+                        # pane was popped out. Re-inserting into a deleted C++
+                        # object raises RuntimeError and, left unhandled in a
+                        # closeEvent, crashes eSim with a segfault. Guard it: if
+                        # the home is gone, just let the dialog close.
+                        try:
+                            parent_container.insertWidget(insert_index, widget_to_pop)
+                        except RuntimeError:
+                            popout_state["win"] = None
+                            event.accept()
+                            return
+                        try:
+                            popout_btn.setText("  Fullscreen")
+                            popout_btn.setProperty('isPoppedOut', 'false')
+                            popout_btn.style().unpolish(popout_btn)
+                            popout_btn.style().polish(popout_btn)
+                            popout_btn.setToolTip('Pop out into a separate window')
+                        except RuntimeError:
+                            pass
                         popout_state["win"] = None
                         event.accept()
 
@@ -780,6 +840,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Sidebar for module hierarchy
         sidebar_widget = QtWidgets.QWidget()
+        sidebar_widget.setObjectName('verilogSidebar')
+        # Enough room for a module name + the order badge + up/down controls so
+        # names are not clipped when the splitter is dragged narrow.
+        sidebar_widget.setMinimumWidth(228)
         sidebar_layout = QtWidgets.QVBoxLayout(sidebar_widget)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(8)
@@ -794,15 +858,23 @@ class VerilogVerifier(QtWidgets.QWidget):
         sidebar_layout.addWidget(self.btn_auto_detect)
 
         self.hierarchy_list = QtWidgets.QListWidget()
+        self.hierarchy_list.setObjectName('verilogHierarchyList')
         self.hierarchy_list.itemDoubleClicked.connect(self.hierarchy_double_clicked)
         self.hierarchy_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.hierarchy_list.customContextMenuRequested.connect(self.show_hierarchy_context_menu)
-        self.hierarchy_list.setAlternatingRowColors(True)
+        self.hierarchy_list.setAlternatingRowColors(False)
+        self.hierarchy_list.setSpacing(3)
+        self.hierarchy_list.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Keep each row spanning the list width so the up/down controls stay
+        # right-aligned (see _sync_hierarchy_widths / eventFilter).
+        self.hierarchy_list.viewport().installEventFilter(self)
         sidebar_layout.addWidget(self.hierarchy_list)
         
         top_h_splitter.addWidget(sidebar_widget)
 
         self.editor_tabs = QtWidgets.QTabWidget()
+        self.editor_tabs.setObjectName('verilogEditorTabs')
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.setMovable(True)
         self.editor_tabs.tabCloseRequested.connect(self.close_tab)
@@ -823,13 +895,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         corner_layout = QtWidgets.QHBoxLayout(corner_widget)
         corner_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.btn_add_module = QtWidgets.QPushButton("➕ Add Module")
-        self.btn_add_module.setProperty('cssClass', 'tertiary')
+        self.btn_add_module = QtWidgets.QPushButton("+ Add Module")
         self.btn_add_module.clicked.connect(self.add_module_tab)
         corner_layout.addWidget(self.btn_add_module)
 
         self.popout_btn = QtWidgets.QPushButton("  Fullscreen")
-        self.popout_btn.setProperty('cssClass', 'labeledIcon')
         self.popout_btn.setProperty('dockPopButton', 'true')
         self.popout_btn.setProperty('isPoppedOut', 'false')
         self.popout_btn.setToolTip('Pop out the editor into a separate window')
@@ -879,7 +949,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         top_h_splitter.addWidget(self.editor_tabs)
         top_h_splitter.setSizes([200, 800])
         
-        self.font = QtGui.QFont("Consolas", 11)
+        self.font = QtGui.QFont(_mono_font_family(), 11)
         
         # Design editor (Module 1)
         self.design_views = []
@@ -887,10 +957,13 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Testbench editor (always pinned to the end)
         self.tb_view = CodeEditor()
+        self.tb_view.setObjectName('verilogCodeEditor')
         self.tb_view.filepath = None
         self.tb_view.setFont(self.font)
         self.tb_view.setPlainText(DEFAULT_TB)
         self.tb_highlighter = VerilogHighlighter(self.tb_view.document())
+        self.tb_view.cursorPositionChanged.connect(self.tb_view._highlight_current_line)
+        self.tb_view._highlight_current_line()
         self.editor_tabs.addTab(self.tb_view, "Testbench (tb_design.v)")
         # Disable close button for tb_view
         self.editor_tabs.tabBar().setTabButton(self.editor_tabs.count()-1, TAB_RIGHT, None)
@@ -902,36 +975,58 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Controls panel under editors
         controls_layout = QtWidgets.QHBoxLayout()
+        controls_layout.setSpacing(10)
         top_layout.addLayout(controls_layout)
-        
+
+        def _vsep():
+            line = QtWidgets.QFrame()
+            line.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+            line.setFixedWidth(1)
+            line.setStyleSheet("color: rgba(127,127,127,0.25);")
+            return line
+
+        # ── File group (secondary) ──────────────────────────────────
         self.btn_load_source = QtWidgets.QPushButton("Load Source .v")
+        self.btn_load_source.setProperty('cssClass', 'secondary')
         self.btn_load_source.clicked.connect(self.load_source_files)
         controls_layout.addWidget(self.btn_load_source)
-        
+
         self.btn_load_tb = QtWidgets.QPushButton("Load TB .v")
+        self.btn_load_tb.setProperty('cssClass', 'secondary')
         self.btn_load_tb.clicked.connect(self.load_tb_file)
         controls_layout.addWidget(self.btn_load_tb)
-        
+
         self.btn_save_file = QtWidgets.QPushButton("Save")
+        self.btn_save_file.setProperty('cssClass', 'secondary')
         self.btn_save_file.clicked.connect(self.save_file)
         controls_layout.addWidget(self.btn_save_file)
-        
+
         self.btn_save_as = QtWidgets.QPushButton("Save As")
+        self.btn_save_as.setProperty('cssClass', 'secondary')
         self.btn_save_as.clicked.connect(self.save_as_file)
         controls_layout.addWidget(self.btn_save_as)
-        
+
+        controls_layout.addWidget(_vsep())
+
+        # ── Run group (Simulate is the one hero action) ─────────────
         self.btn_syntax = QtWidgets.QPushButton("Check Syntax")
+        self.btn_syntax.setProperty('cssClass', 'secondary')
         self.btn_syntax.clicked.connect(self.check_syntax)
         controls_layout.addWidget(self.btn_syntax)
-        
+
         self.btn_stub = QtWidgets.QPushButton("Auto-Generate Testbench")
+        self.btn_stub.setProperty('cssClass', 'secondary')
         self.btn_stub.clicked.connect(self.auto_generate_tb)
         controls_layout.addWidget(self.btn_stub)
-        
+
         self.btn_simulate = QtWidgets.QPushButton("Simulate")
+        self.btn_simulate.setProperty('cssClass', 'verifierPrimary')
         self.btn_simulate.clicked.connect(self.simulate_and_wave)
         controls_layout.addWidget(self.btn_simulate)
-        
+
+        controls_layout.addStretch()
+
+        # ── Output group (secondary) ────────────────────────────────
         self.btn_export_csv = QtWidgets.QPushButton("Export CSV")
         self.btn_export_csv.setProperty('cssClass', 'secondary')
         self.btn_export_csv.clicked.connect(self.export_csv)
@@ -939,6 +1034,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         controls_layout.addWidget(self.btn_export_csv)
 
         self.btn_send = QtWidgets.QPushButton("Send to Makerchip")
+        self.btn_send.setProperty('cssClass', 'secondary')
         self.btn_send.clicked.connect(self.send_to_makerchip)
         controls_layout.addWidget(self.btn_send)
 
@@ -952,6 +1048,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Find/Replace Toolbar
         self.find_widget = QtWidgets.QWidget()
+        self.find_widget.setObjectName('verilogFindBar')
         find_layout = QtWidgets.QHBoxLayout(self.find_widget)
         find_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -993,6 +1090,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # 2. Bottom widget containing console log and Waveform viewer
         bottom_container = QtWidgets.QWidget()
+        bottom_container.setObjectName('verilogBottomContainer')
         bottom_layout = QtWidgets.QHBoxLayout(bottom_container)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -1001,10 +1099,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Console output styled like Vivado TCL Console
         self.console_tabs = QtWidgets.QTabWidget()
+        self.console_tabs.setObjectName('verilogConsoleTabs')
         self.console = ConsoleEdit()
         self.console.setReadOnly(True)
         self.console.setPlaceholderText("Console logs will appear here...\nDouble-click a syntax error (e.g. design.v:5: error) to jump directly to the line.")
-        self.console.setFont(QtGui.QFont("Consolas", 11))
+        self.console.setFont(QtGui.QFont(_mono_font_family(), 11))
         self.console.error_clicked.connect(self.jump_to_error)
         # Theme-aware via #verilogConsole / #verilogConsoleError rules.
         self.console.setObjectName('verilogConsole')
@@ -1012,7 +1111,6 @@ class VerilogVerifier(QtWidgets.QWidget):
         bottom_splitter.addWidget(self.console_tabs)
 
         self.btn_copy_console = QtWidgets.QPushButton("  Copy")
-        self.btn_copy_console.setProperty('cssClass', 'labeledIcon')
         self.btn_copy_console.setToolTip('Copy console output to clipboard')
         if copy_icon is not None:
             self.btn_copy_console.setIcon(copy_icon(16))
@@ -1022,6 +1120,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Inline Waveform viewer (native eSim plotWindow)
         self.wave_tabs = QtWidgets.QTabWidget()
+        self.wave_tabs.setObjectName('verilogWaveTabs')
         self.load_empty_waveform()
         bottom_splitter.addWidget(self.wave_tabs)
         setup_popout(self.wave_tabs, bottom_splitter, 1, "Waveform Viewer")
@@ -1031,6 +1130,13 @@ class VerilogVerifier(QtWidgets.QWidget):
         main_splitter.setSizes([450, 250])
         bottom_splitter.setSizes([400, 400])
         
+        from frontEnd.motion import install_button_motion, install_tab_kinetics, apply_panel_depth, install_context_menu_motion
+        install_button_motion(self)
+        install_tab_kinetics(self)
+        for w in (self.hierarchy_list, self.editor_tabs, self.console_tabs):
+            apply_panel_depth(w, blur=28, y=8, alpha=82)
+        install_context_menu_motion(self)
+
         # Check for Icarus Verilog on boot and lock if missing
         self.check_iverilog_lock()
 
@@ -1039,9 +1145,12 @@ class VerilogVerifier(QtWidgets.QWidget):
             name = f"module_{len(self.design_views) + 1}.v"
 
         editor = CodeEditor()
+        editor.setObjectName('verilogCodeEditor')
         editor.filepath = filepath
         editor.setFont(self.font)
         editor.setPlainText(content)
+        editor.cursorPositionChanged.connect(editor._highlight_current_line)
+        editor._highlight_current_line()
         highlighter = VerilogHighlighter(editor.document())
 
         # Keep track of highlighters to prevent garbage collection
@@ -1088,7 +1197,12 @@ class VerilogVerifier(QtWidgets.QWidget):
     def show_tab_context_menu(self, pos):
         index = self.editor_tabs.tabBar().tabAt(pos)
         if index >= 0 and index < self.editor_tabs.count() - 1: # Prevent operations on testbench
-            menu = QtWidgets.QMenu(self)
+            menu = QtWidgets.QMenu(self.editor_tabs.tabBar())
+            try:
+                from frontEnd.motion import make_menu_rounded
+                make_menu_rounded(menu)
+            except Exception:
+                pass
             rename_action = menu.addAction("Rename Module")
             delete_action = menu.addAction("Delete Module")
             action = menu.exec(self.editor_tabs.tabBar().mapToGlobal(pos))
@@ -1109,7 +1223,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         item = self.hierarchy_list.itemAt(pos)
         if item:
             name = item.data(QtCore.Qt.ItemDataRole.UserRole)
-            menu = QtWidgets.QMenu(self)
+            menu = QtWidgets.QMenu(self.hierarchy_list)
+            try:
+                from frontEnd.motion import make_menu_rounded
+                make_menu_rounded(menu)
+            except Exception:
+                pass
             rename_action = menu.addAction("Rename Module")
             delete_action = menu.addAction("Delete Module")
             action = menu.exec(self.hierarchy_list.mapToGlobal(pos))
@@ -1152,40 +1271,87 @@ class VerilogVerifier(QtWidgets.QWidget):
                 if hasattr(self, 'design_views') and self.editor_tabs.widget(i) in self.design_views:
                     names.append(self.editor_tabs.tabText(i))
                 
-        for name in names:
+        for order, name in enumerate(names, start=1):
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
             widget = QtWidgets.QWidget()
             widget.setObjectName('hierarchyRow')
             layout = QtWidgets.QHBoxLayout(widget)
-            layout.setContentsMargins(8, 2, 6, 2)
+            layout.setContentsMargins(10, 4, 8, 4)
+            layout.setSpacing(9)
+
+            # Compile-order badge — gives each module a clear, numbered
+            # definition instead of a bare dim name.
+            badge = QtWidgets.QLabel(str(order))
+            badge.setObjectName('hierarchyIndex')
+            badge.setFixedSize(22, 22)
+            badge.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
             lbl = QtWidgets.QLabel(name)
-            lbl.setProperty('cssClass', 'subtle')
+            lbl.setObjectName('hierarchyName')
+            # Expanding so the name owns the space between the badge and the
+            # controls (no separate stretch that could squeeze it to a clip).
+            lbl.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                              QtWidgets.QSizePolicy.Policy.Preferred)
 
-            btn_up = QtWidgets.QPushButton("▲")
+            btn_up = QtWidgets.QPushButton("↑")  # ↑
+            btn_up.setObjectName('hierarchyMoveBtn')
             btn_up.setFixedSize(24, 24)
-            btn_up.setProperty('cssClass', 'icon')
             btn_up.setToolTip('Move this module up in compile order')
+            btn_up.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
 
-            btn_down = QtWidgets.QPushButton("▼")
+            btn_down = QtWidgets.QPushButton("↓")  # ↓
+            btn_down.setObjectName('hierarchyMoveBtn')
             btn_down.setFixedSize(24, 24)
-            btn_down.setProperty('cssClass', 'icon')
             btn_down.setToolTip('Move this module down in compile order')
+            btn_down.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))
 
-            layout.addWidget(lbl)
-            layout.addStretch()
+            layout.addWidget(badge)
+            layout.addWidget(lbl, 1)
             layout.addWidget(btn_up)
             layout.addWidget(btn_down)
 
-            # Force height to properly contain the 24px buttons
-            widget.setMinimumHeight(32)
-            item.setSizeHint(QtCore.QSize(0, 32))
+            widget.setMinimumHeight(40)
+            # Full viewport width so the stretch can right-align the controls
+            # (a 0-width sizeHint collapsed the row, bunching the arrows up
+            # against the module name).
+            item.setSizeHint(QtCore.QSize(self.hierarchy_list.viewport().width(), 42))
 
             self.hierarchy_list.addItem(item)
             self.hierarchy_list.setItemWidget(item, widget)
+        self._sync_hierarchy_widths()
+        # Re-sync once layout settles (viewport width is final post-show).
+        QtCore.QTimer.singleShot(0, self._sync_hierarchy_widths)
+
+    def _sync_hierarchy_widths(self):
+        """Stretch every hierarchy row to the list's current width so the
+        up/down controls stay pinned to the right edge regardless of how the
+        sidebar splitter is resized. Setting the item sizeHint alone does NOT
+        resize an already-installed item widget — it keeps its natural (name
+        length) width, bunching the arrows — so the row widget width is forced
+        here too."""
+        w = self.hierarchy_list.viewport().width()
+        if w <= 0:
+            return
+        for i in range(self.hierarchy_list.count()):
+            it = self.hierarchy_list.item(i)
+            h = it.sizeHint().height() or 42
+            it.setSizeHint(QtCore.QSize(w, h))
+            rw = self.hierarchy_list.itemWidget(it)
+            if rw is not None:
+                # The item view insets the row by a few px on the left; mirror
+                # that on the right so the row fits the viewport exactly instead
+                # of overflowing and clipping the right-hand move arrow.
+                inset = max(0, self.hierarchy_list.visualItemRect(it).x())
+                rw.setFixedWidth(max(40, w - 2 * inset))
+
+    def eventFilter(self, obj, event):
+        if (obj is self.hierarchy_list.viewport()
+                and event.type() == QtCore.QEvent.Type.Resize):
+            self._sync_hierarchy_widths()
+        return super().eventFilter(obj, event)
 
     def auto_detect_hierarchy(self):
         import re
@@ -1272,7 +1438,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         editor = self.get_current_editor()
         cursor = editor.textCursor()
-        if cursor.hasSelection() and cursor.selectedText() == text_to_find:
+        if cursor.hasSelection() and cursor.selectedText().lower() == text_to_find.lower():
             cursor.insertText(replacement)
             self.find_next()
         else:

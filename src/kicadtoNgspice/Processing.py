@@ -392,7 +392,7 @@ class PrcocessNetlist:
                                                 modelLine += words[pos] + " "
                                                 pos += 1
 
-                                    except BaseException:
+                                    except Exception:
                                         print(
                                             "There is error while processing\
                                              Vector Details")

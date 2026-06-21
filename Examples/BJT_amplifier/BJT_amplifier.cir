@@ -1,24 +1,15 @@
-* /home/saurabh/Installer_Main_Workshop/eSim-1.1.2/Examples/BJT_amplifier/BJT_amplifier.cir
-
-* EESchema Netlist Version 1.1 (Spice format) creation date: Wed Aug 21 12:31:11 2019
-
-* To exclude a component from the Spice Netlist add [Spice_Netlist_Enabled] user FIELD set to: N
-* To reorder the component spice node sequence add [Spice_Node_Sequence] user FIELD and define sequence: 2,1,0
-
-* Sheet Name: /
-v1  Net-_R2-Pad1_ GND DC		
-R1  Net-_C1-Pad1_ in 50		
-R2  Net-_R2-Pad1_ Net-_C1-Pad2_ 200k		
-C1  Net-_C1-Pad1_ Net-_C1-Pad2_ 40u		
-R3  Net-_C1-Pad2_ GND 50k		
-R6  out GND 1k		
-C2  GND Net-_C2-Pad2_ 100u		
-C3  out Net-_C3-Pad2_ 40u		
-R5  Net-_R2-Pad1_ Net-_C3-Pad2_ 2k		
-R4  Net-_C2-Pad2_ GND 1.5k		
-U1  in plot_v1		
-U2  out plot_v1		
-v2  in GND sine		
-Q1  Net-_C3-Pad2_ Net-_C1-Pad2_ Net-_C2-Pad2_ eSim_NPN		
-
+.title KiCad schematic
+.model __Q1 NMF
+R6 out GND 1k
+C3 out Net-_Q1-C_ 40u
+R4 Net-_Q1-E_ GND 1.5k
+C2 GND Net-_Q1-E_ 100u
+R3 Net-_Q1-B_ GND 50k
+C1 Net-_C1-Pad1_ Net-_Q1-B_ 40u
+R1 Net-_C1-Pad1_ in 50
+Vv2 in GND DC 0 SIN( 0 1 ) 
+R2 Net-_v1-+_ Net-_Q1-B_ 200k
+R5 Net-_v1-+_ Net-_Q1-C_ 2k
+Vv1 Net-_v1-+_ GND 
+ZQ1 Net-_Q1-C_ Net-_Q1-B_ Net-_Q1-E_ __Q1
 .end

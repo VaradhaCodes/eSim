@@ -119,5 +119,7 @@ class WorkerThread(QtCore.QThread):
 
         self.my_workers.append(proc)
         procThread.procThread_list.append(proc)
-        procThread.proc_dict[procThread.current_project['ProjectName']].append(
-            proc.pid)
+        # setdefault: the project key may not exist yet (e.g. a tool launched
+        # before the project tree registered it) -- avoid a KeyError.
+        procThread.proc_dict.setdefault(
+            procThread.current_project['ProjectName'], []).append(proc.pid)

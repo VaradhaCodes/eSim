@@ -17,6 +17,7 @@
 # =========================================================================
 
 import os
+import re
 import sys
 from xml.etree import ElementTree as ET
 
@@ -31,6 +32,51 @@ from . import Source
 from . import SubcircuitTab
 from . import TrackWidget
 from .Processing import PrcocessNetlist
+from projManagement.projectPaths import stem_from_file
+
+
+def _get_event_plot_nodes(schematic_info, plot_text):
+    """Return ordered event (digital) node names that appear in plot_text.
+
+    Scans schematic_info for .model lines (adc_bridge / d_cosim / dac_bridge)
+    and a-device lines to decide which nodes are XSPICE event nodes, then keeps
+    only those also requested in plot_text ("plot v(node)"). ngspice's `eprint`
+    fails if handed a plain analog node, so the two sets must be intersected.
+    """
+    model_types = {}
+    for line in schematic_info:
+        s = str(line).strip()
+        if s.lower().startswith('.model '):
+            parts = s.split()
+            if len(parts) >= 3:
+                model_types[parts[1].lower()] = parts[2].split('(')[0].lower()
+
+    event_nodes = set()
+    for line in schematic_info:
+        s = str(line).strip()
+        if not s or s[0].lower() != 'a':
+            continue
+        groups = re.findall(r'\[([^\]]*)\]', s)
+        inst_name = s.split()[-1].lower()
+        mtype = model_types.get(inst_name, '')
+        if mtype == 'adc_bridge' and len(groups) >= 2:
+            event_nodes.update(groups[1].split())
+        elif mtype == 'd_cosim':
+            for g in groups:
+                event_nodes.update(g.split())
+        elif mtype == 'dac_bridge' and len(groups) >= 1:
+            event_nodes.update(groups[0].split())
+
+    seen = set()
+    result = []
+    for item in plot_text:
+        m = re.search(r'v\(([^),\s]+)\)', item)
+        if m:
+            node = m.group(1)
+            if node in event_nodes and node not in seen:
+                result.append(node)
+                seen.add(node)
+    return result
 
 
 class MainWindow(QtWidgets.QWidget):
@@ -121,23 +167,18 @@ class MainWindow(QtWidgets.QWidget):
         """
         if unknownModelList:
             print("Unknown Model List is : ", unknownModelList)
-            self.msg = QtWidgets.QErrorMessage()
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Unknown Models")
-            self.content = "Your schematic contain unknown model " + \
-                           ', '.join(unknownModelList)
-            self.msg.showMessage(self.content)
-            self.msg.exec()
+            QtWidgets.QMessageBox.warning(
+                None, "Unknown Models",
+                "Your schematic contains unknown model(s): " +
+                ', '.join(unknownModelList)
+            )
 
         elif multipleModelList:
-            self.msg = QtWidgets.QErrorMessage()
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Multiple Models")
-            self.mcontent = "Look like you have duplicate model in \
-            modelParamXML directory " + \
-                            ', '.join(multipleModelList[0])
-            self.msg.showMessage(self.mcontent)
-            self.msg.exec()
+            QtWidgets.QMessageBox.warning(
+                None, "Multiple Models",
+                "Duplicate model found in modelParamXML directory: " +
+                ', '.join(multipleModelList[0])
+            )
 
         else:
             self.createMainWindow()
@@ -253,7 +294,8 @@ class MainWindow(QtWidgets.QWidget):
         global kicad
         store_schematicInfo = list(schematicInfo)
         (projpath, filename) = os.path.split(self.kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        project_name = stem_from_file(self.kicadFile)
         check = 1
 
         try:
@@ -263,7 +305,7 @@ class MainWindow(QtWidgets.QWidget):
             )
             temp_tree = ET.parse(fr)
             temp_root = temp_tree.getroot()
-        except BaseException:
+        except Exception:
             check = 0
 
         # Opening previous value file pertaining to the selected project
@@ -818,7 +860,7 @@ class MainWindow(QtWidgets.QWidget):
                 # Close the file
                 f.close()
 
-            except BaseException:
+            except Exception:
                 print("Error While opening Project Analysis file.\
                  Please check it")
                 sys.exit()
@@ -871,6 +913,16 @@ class MainWindow(QtWidgets.QWidget):
         out = open(outfile, "w")
         out.writelines(infoline)
         out.writelines('\n')
+        # Verilog co-simulators loaded by the d_cosim code model (Icarus
+        # ivlng/vvp) are one-shot: the vvp runs to completion once and cannot
+        # be reset. With `ngspice -b`, an analysis *card* (.tran/.ac/...) is
+        # auto-run, and a `.control` `run` runs it a second time -- that pass
+        # reuses the finished vvp ("already run", 0 ports, mismatched counts).
+        # For such netlists, run the analysis exactly once inside `.control`
+        # and drop the analysis card. Non-d_cosim netlists are unchanged.
+        uses_dcosim = any(
+            'd_cosim' in str(line).lower() for line in store_schematicInfo)
+
         sections = [
             simulatorOption,
             initialCondOption,
@@ -878,6 +930,8 @@ class MainWindow(QtWidgets.QWidget):
             analysisOption]
 
         for section in sections:
+            if uses_dcosim and section is analysisOption:
+                continue        # moved into .control below (single run)
             if len(section) == 0:
                 continue
             else:
@@ -887,10 +941,27 @@ class MainWindow(QtWidgets.QWidget):
 
         out.writelines('\n* Control Statements \n')
         out.writelines('.control\n')
-        out.writelines('run\n')
+        out.writelines('set width=1000\n')
+        if uses_dcosim:
+            for line in analysisOption:
+                # '.tran 1e-3 15e-3 0' -> 'tran 1e-3 15e-3 0' (runs once)
+                out.writelines(line.strip().lstrip('.') + '\n')
+        else:
+            out.writelines('run\n')
         # out.writelines(outputOption)
         out.writelines('print allv > plot_data_v.txt\n')
         out.writelines('print alli > plot_data_i.txt\n')
+        # `print allv` truncates column names to ~15 chars, so distinct long
+        # node names (e.g. plot_vout_bit_10..31) collapse to the same string in
+        # the plot legend. Also dump an ASCII rawfile, whose Variables section
+        # keeps FULL names in the same column order; data_extraction uses it to
+        # recover the real names (count-guarded, falls back if absent).
+        out.writelines('set filetype=ascii\n')
+        out.writelines('write plot_data.raw\n')
+        event_nodes = _get_event_plot_nodes(store_schematicInfo, plotText)
+        if event_nodes:
+            out.writelines('eprint ' + ' '.join(event_nodes)
+                           + ' > plot_data_event.txt\n')
         for item in plotText:
             out.writelines(item + '\n')
         out.writelines('.endc\n')
@@ -907,7 +978,7 @@ class MainWindow(QtWidgets.QWidget):
         if os.path.exists(self.project + ".cir.out"):
             try:
                 f = open(self.project + ".cir.out")
-            except BaseException:
+            except Exception:
                 print("Error in opening .cir.out file.")
         else:
             # print("=========================================================")

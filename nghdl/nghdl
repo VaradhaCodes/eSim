@@ -1,0 +1,18 @@
+#!/bin/bash
+# NGHDL launcher script for eSim
+# Launches the NGHDL GUI (ngspice_ghdl.py) from the eSim installation
+
+ESIM_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+NGHDL_SRC="$ESIM_DIR/nghdl/src"
+VENV_DIR="$ESIM_DIR/venv"
+
+# Activate virtualenv if present
+if [ -f "$VENV_DIR/bin/activate" ]; then
+    source "$VENV_DIR/bin/activate"
+fi
+
+# NGHDL expects to be run from its src directory
+cd "$NGHDL_SRC"
+
+# Pass all arguments (e.g. -e for external launch from eSim)
+exec python3 "$NGHDL_SRC/ngspice_ghdl.py" "$@"

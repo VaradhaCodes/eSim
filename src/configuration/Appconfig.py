@@ -55,8 +55,12 @@ class Appconfig(QtWidgets.QWidget):
         workspace_check = 0
 
     default_workspace = {"workspace": home}
-    # Current Project detail
-    current_project = {"ProjectName": None}
+    # Current Project detail.
+    #   ProjectName => the project *folder* path
+    #   ProjName    => the project *stem* (basename shared by <stem>.proj/.cir/
+    #                  .sch/...), resolved from the .proj anchor, NOT the folder
+    #                  name. Use get_proj_stem() to read it.
+    current_project = {"ProjectName": None, "ProjName": None}
     # Current Subcircuit detail
     current_subcircuit = {"SubcircuitName": None}
     # Workspace detail
@@ -78,6 +82,10 @@ class Appconfig(QtWidgets.QWidget):
         os.path.join(user_home, '.esim', 'config.ini')
     )
 
+    # Default so the attribute always exists: if config.ini is missing the key
+    # (or unreadable on Win10), ModelicaUI reading Appconfig.modelica_map_json
+    # gets None instead of an AttributeError.
+    modelica_map_json = None
     # Try catch added, since eSim cannot be accessed under parser for Win10
     try:
         modelica_map_json = parser_esim.get('eSim', 'MODELICA_MAP_JSON')
@@ -86,7 +94,8 @@ class Appconfig(QtWidgets.QWidget):
         print(str(e))
 
     try:
-        project_explorer = json.load(open(dictPath["path"]))
+        with open(dictPath["path"]) as _pe_fh:
+            project_explorer = json.load(_pe_fh)
     except BaseException:
         project_explorer = {}
     process_obj = []
@@ -105,6 +114,49 @@ class Appconfig(QtWidgets.QWidget):
         self._app_ypos = 100
         self._app_width = 600
         self._app_heigth = 400
+
+    def set_current_project(self, proj_dir, stem=None):
+        """
+        Set the active project. This is the single place that updates both the
+        project folder path and its resolved stem, so callers never have to
+        derive the stem from the folder name themselves.
+
+        @params
+            :proj_dir   => the project folder path, or None to clear the project
+            :stem        => the already-resolved stem; if omitted it is resolved
+                            from the folder's .proj anchor
+        """
+        self.current_project["ProjectName"] = proj_dir
+        if not proj_dir:
+            self.current_project["ProjName"] = None
+            return
+        if stem is None:
+            from projManagement.projectPaths import resolve_stem
+            stem, _status = resolve_stem(proj_dir, 'proj')
+        self.current_project["ProjName"] = stem
+
+    def get_proj_stem(self):
+        """
+        Return the active project's stem (the basename shared by its files).
+
+        This is the canonical replacement for ``os.path.basename(projDir)``
+        when constructing project file paths. Resolves lazily from the .proj
+        anchor if not cached, and falls back to the folder basename so legacy
+        code paths keep working.
+
+        @return
+            the project stem, or None if no project is open
+        """
+        stem = self.current_project.get("ProjName")
+        if stem:
+            return stem
+        proj_dir = self.current_project.get("ProjectName")
+        if not proj_dir:
+            return None
+        from projManagement.projectPaths import resolve_stem
+        stem, _status = resolve_stem(proj_dir, 'proj')
+        self.current_project["ProjName"] = stem
+        return stem
 
     def print_info(self, info):
         self.noteArea['Note'].append('[INFO]: ' + info)
@@ -130,10 +182,37 @@ class Appconfig(QtWidgets.QWidget):
                 data = json.load(f)
                 project_path = data.get("ProjectName", None)
                 if project_path and os.path.exists(project_path):
-                    self.current_project["ProjectName"] = project_path
+                    self.set_current_project(project_path)
                     return project_path
                 else:
                     print("Project path does not exist: ", project_path)
         except Exception as e:
             print("Error: ", str(e))
         return None
+
+    def load_preferences(self):
+        prefs = {"theme_mode": "System", "accent_color": "default", "secondary_accent_color": "system", "internal_bg_color": "system"}
+        import json
+        try:
+            path = os.path.join(self.user_home, ".esim", "preferences.json")
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    prefs.update(data)
+        except Exception as e:
+            print("Error loading preferences: ", str(e))
+        return prefs
+
+    def save_preferences(self, theme_mode, accent_color, secondary_accent_color="system", internal_bg_color="system"):
+        import json
+        try:
+            path = os.path.join(self.user_home, ".esim", "preferences.json")
+            with open(path, "w") as f:
+                json.dump({
+                    "theme_mode": theme_mode,
+                    "accent_color": accent_color,
+                    "secondary_accent_color": secondary_accent_color,
+                    "internal_bg_color": internal_bg_color
+                }, f)
+        except Exception as e:
+            print("Failed to save preferences:", str(e))

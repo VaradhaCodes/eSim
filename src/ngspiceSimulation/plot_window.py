@@ -52,6 +52,7 @@ from ._cursor_mixin import _CursorMixin
 from ._func_trace_mixin import _FuncTraceMixin
 from ._render_mixin import _RenderMixin
 from ._list_mixin import _ListMixin
+from ._palette import current_palette, matplotlib_rc_overrides
 
 class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixin, _ListMixin):
     """Main plotting widget for NGSpice simulation results."""
@@ -71,6 +72,11 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
 
         self._initialize_data_structures()
         self._initialize_configuration()
+        # Build the theme-aware color dict once at construction; the waveform
+        # list, function-trace widgets, and matplotlib styling all reference
+        # this single source of truth so toggling theme doesn't leave chrome
+        # behind.
+        self._palette = current_palette(QtWidgets.QApplication.instance())
         self.create_main_frame()
         self.load_simulation_data()
         self.apply_theme()
@@ -213,6 +219,31 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         super().closeEvent(event)
 
     def apply_theme(self) -> None:
+        """Build and install the theme-aware QSS for the plotting window.
+
+        Driven entirely by ``self._palette`` (set in __init__). Every surface,
+        text color, accent, and overlay must come from there so the widget
+        tracks both light/dark mode and the user-chosen accent color. No more
+        hardcoded ``#FFFFFF``/``#1976D2``/``#212121`` literals — those caused
+        dark-mode contrast issues.
+        """
+        # Walk every axes (current and lazily-created) and re-paint their
+        # facecolor from the live palette. Matplotlib's default facecolor is
+        # white; without this, the empty figure plus its axes flash white
+        # before any signal data is rendered, even in dark mode.
+        try:
+            p_bg = self._palette.get("bg", None)
+            if p_bg and getattr(self, "fig", None) is not None:
+                self.fig.set_facecolor(p_bg)
+                self.fig.patch.set_facecolor(p_bg)
+                for ax in self.fig.axes:
+                    ax.set_facecolor(self._palette.get("axes_face", p_bg))
+                try:
+                    self.canvas.draw_idle()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         em      = self._em
         sb_w    = max(6,  em // 2)
         ind     = max(12, em - 2)
@@ -226,34 +257,52 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         btn_h   = max(24, em + 8)
         le_p    = max(4,  em // 3)
 
+        p = self._palette
         theme_stylesheet = f"""
-        QMenuBar {{ border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }}
-        QStatusBar {{ border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }}
-        QWidget {{ background-color: #FFFFFF; color: #212121; }}
-        QListWidget {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; outline: none; selection-background-color: transparent; selection-color: inherit; }}
+        QMenuBar {{ border-radius: 8px; background-color: {p['surface']}; border: 1px solid {p['border']}; padding: 2px; color: {p['text']}; }}
+        QStatusBar {{ border-radius: 8px; background-color: {p['surface']}; border: 1px solid {p['border']}; padding: 2px; color: {p['text_muted']}; }}
+        QWidget {{ background-color: {p['bg']}; color: {p['text']}; }}
+        QListWidget {{ background-color: {p['bg']}; border: 1px solid {p['border']}; padding: 2px; outline: none; selection-background-color: transparent; selection-color: inherit; }}
         QListWidget::item {{ min-height: {item_h}px; padding: {item_pv}px {item_ph}px; margin: 1px 2px; background-color: transparent; border: none; }}
         QListWidget::item:selected {{ background-color: transparent; border: none; }}
-        QListWidget::item:hover {{ background-color: rgba(0, 0, 0, 0.04); }}
+        QListWidget::item:hover {{ background-color: {p['hover_overlay']}; }}
         QListWidget::item:focus {{ outline: none; }}
-        QGroupBox {{ border: 1px solid #E0E0E0; margin-top: 0.5em; padding-top: 0.5em; }}
-        QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }}
-        QPushButton {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: {btn_pv}px {btn_ph}px; min-height: {btn_h}px; font-weight: 500; }}
-        QPushButton:hover {{ background-color: #F2F2F2; border-color: #1976D2; }}
-        QPushButton:pressed {{ background-color: #E0E0E0; }}
+        QGroupBox {{ border: 1px solid {p['border']}; margin-top: 0.5em; padding-top: 0.5em; color: {p['text']}; }}
+        QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; color: {p['text_muted']}; }}
+        QPushButton {{ background-color: {p['panel']}; border: 1px solid {p['border']}; padding: {btn_pv}px {btn_ph}px; min-height: {btn_h}px; font-weight: 500; color: {p['text']}; border-radius: 4px; }}
+        QPushButton:hover {{ background-color: {p['surface']}; border-color: {p['primary']}; }}
+        QPushButton:pressed {{ background-color: {p['pressed_overlay']}; }}
         QCheckBox::indicator {{ width: {ind}px; height: {ind}px; }}
-        QMenu {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; }}
-        QMenu::item:selected {{ background-color: #E3F2FD; }}
-        QLineEdit {{ border: 1px solid #E0E0E0; padding: {le_p}px {btn_ph}px; background-color: #FAFAFA; }}
-        QLineEdit:focus {{ border-color: #1976D2; background-color: #FFFFFF; }}
-        QSlider::groove:horizontal {{ border: 1px solid #E0E0E0; height: 4px; background: #E0E0E0; }}
-        QSlider::handle:horizontal {{ background: #1976D2; border: 1px solid #1976D2; width: {sldr}px; height: {sldr}px; margin: {sldr_m}px 0; }}
-        QScrollBar:vertical {{ background-color: #F5F5F5; width: {sb_w}px; border: none; border-radius: {sb_w // 2}px; }}
-        QScrollBar::handle:vertical {{ background-color: #BDBDBD; border-radius: {sb_w // 2}px; min-height: 20px; margin: 2px; }}
-        QScrollBar::handle:vertical:hover {{ background-color: #9E9E9E; }}
+        QMenu {{ background-color: {p['bg']}; border: 1px solid {p['border']}; color: {p['text']}; }}
+        QMenu::item:selected {{ background-color: {p['selection_bg']}; color: {p['selection_text']}; }}
+        QLineEdit {{ border: 1px solid {p['border']}; padding: {le_p}px {btn_ph}px; background-color: {p['surface']}; color: {p['text']}; }}
+        QLineEdit:focus {{ border-color: {p['primary']}; background-color: {p['bg']}; }}
+        QSlider::groove:horizontal {{ border: 1px solid {p['border']}; height: 4px; background: {p['border']}; }}
+        QSlider::handle:horizontal {{ background: {p['primary']}; border: 1px solid {p['primary']}; width: {sldr}px; height: {sldr}px; margin: {sldr_m}px 0; border-radius: {sldr // 2}px; }}
+        QScrollBar:vertical {{ background-color: transparent; width: {sb_w}px; border: none; border-radius: {sb_w // 2}px; }}
+        QScrollBar::handle:vertical {{ background-color: {p['border_strong']}; border-radius: {sb_w // 2}px; min-height: 20px; margin: 2px; }}
+        QScrollBar::handle:vertical:hover {{ background-color: {p['text_subtle']}; }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
-        QSplitter::handle:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.49 transparent, stop:0.5 #D0D0D0, stop:0.51 transparent); }}
-        QSplitter::handle:horizontal:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.45 transparent, stop:0.5 #1976D2, stop:0.55 transparent); }}
+        QSplitter::handle:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.49 transparent, stop:0.5 {p['border_strong']}, stop:0.51 transparent); }}
+        QSplitter::handle:horizontal:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.45 transparent, stop:0.5 {p['primary']}, stop:0.55 transparent); }}
+        QLabel#analysisLabel {{ font-weight: bold; font-size: {max(11, em - 4)}px; padding: {max(3, em // 5)}px; color: {p['text']}; }}
+        QLabel#cursorLabel {{ font-size: 13px; padding: 3px 0; color: {p['text']}; }}
+        QLabel#cursorHelp {{ color: {p['text_muted']}; font-size: 11px; }}
+        QLabel#cursorSeparator {{ background-color: {p['divider']}; margin: 2px 0; }}
+        /* Toolbar buttons (_fig_btn, _focus_btn) take their hover/checked
+           tints from theme tokens. No more hardcoded rgba() literals — the
+           hover overlay reads correctly in light and dark mode. */
+        QToolButton#plotToolButton {{ border: none; background: transparent; border-radius: 3px; }}
+        QToolButton#plotToolButton:hover {{ background-color: {p['hover_overlay']}; }}
+        QToolButton#plotToolButton:checked {{ background-color: {p['selection_bg']}; }}
+        /* Color-picker cell wrapper — keeps the swatch grid from showing a
+           white rectangle on a dark menu. */
+        QWidget.colorPickerWidget {{ background-color: {p['surface']}; }}
+        /* Trace list rows — visible/inactive color comes from the theme; the
+           per-trace color is still painted inline because it's data. */
+        QLabel[cssClass~="traceLabel"].active {{ font-weight: 500; }}
+        QLabel[cssClass~="traceLabel"].muted {{ font-weight: normal; }}
         """
         self.setStyleSheet(theme_stylesheet)
 
@@ -303,9 +352,9 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         left_layout = QVBoxLayout(left_widget)
         em = self._em
         self.analysis_label = QLabel()
-        self.analysis_label.setStyleSheet(
-            f"font-weight: bold; font-size: {max(11, em - 4)}px; padding: {max(3, em // 5)}px;"
-        )
+        # font + theme styling live in QSS under #analysisLabel — keeps the
+        # inline-stylesheet list empty so theme toggles apply cleanly.
+        self.analysis_label.setObjectName("analysisLabel")
         left_layout.addWidget(self.analysis_label)
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search waveforms...")
@@ -337,27 +386,27 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 self.nav_toolbar.removeAction(_a)
         _icon_sz = self.nav_toolbar.iconSize()
         _tb_h    = self.nav_toolbar.sizeHint().height()
-        _btn_style = (
-            "QToolButton { border: none; background: transparent; border-radius: 3px; }"
-            "QToolButton:hover { background: rgba(0,0,0,0.06); }"
-            "QToolButton:checked { background: rgba(25,118,210,0.12); }"
-        )
+        # Toolbar buttons take their colors from QSS (#plotToolButton) so the
+        # hover/checked tint matches the active accent + theme — no inline
+        # rgba() literals here.
         _fig_btn = QToolButton()
+        _fig_btn.setObjectName("plotToolButton")
+        _fig_btn.setProperty("cssClass", "tertiary")
         _fig_btn.setIcon(self.nav_toolbar._icon('qt4_editor_options'))
         _fig_btn.setIconSize(_icon_sz)
         _fig_btn.setFixedSize(_tb_h, _tb_h)
         _fig_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         _fig_btn.setToolTip('Figure Options (P)')
-        _fig_btn.setStyleSheet(_btn_style)
         _fig_btn.clicked.connect(self.open_figure_options)
         self._focus_btn = QToolButton()
+        self._focus_btn.setObjectName("plotToolButton")
+        self._focus_btn.setProperty("cssClass", "tertiary")
         self._focus_btn.setIcon(self._make_focus_icon(_icon_sz.width()))
         self._focus_btn.setIconSize(_icon_sz)
         self._focus_btn.setFixedSize(_tb_h, _tb_h)
         self._focus_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._focus_btn.setCheckable(True)
         self._focus_btn.setToolTip('Focus plot — hide panels (F)')
-        self._focus_btn.setStyleSheet(_btn_style)
         self._focus_btn.toggled.connect(self._toggle_focus_mode)
         QShortcut(QKeySequence('F'), self, activated=self._focus_btn.toggle)
         toolbar_row = QHBoxLayout()
@@ -378,7 +427,30 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.canvas_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Paint the QScrollArea viewport with the canvas surface so the empty
+        # canvas area doesn't flash white in dark mode. The scroll area has
+        # no border by default; we replace that with a themed 1px frame.
+        self.canvas_scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: {self._palette['axes_face']}; "
+            f"border: 1px solid {self._palette['border_strong']}; "
+            "border-radius: 6px; }"
+        )
         center_layout.addWidget(self.canvas_scroll)
+
+        # Empty-state placeholder — covers the canvas until data is loaded so
+        # dark themes don't display a white plotting rectangle by default.
+        self.empty_overlay = QLabel(self.canvas_scroll)
+        self.empty_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_overlay.setObjectName("plotEmptyState")
+        self.empty_overlay.setTextFormat(Qt.TextFormat.RichText)
+        self.empty_overlay.setText(self._empty_state_text())
+        self.empty_overlay.setStyleSheet(self._empty_state_style())
+        self.empty_overlay.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        # Sized on first show and on canvas resize events.
+        self.empty_overlay.setVisible(True)
+        self.empty_overlay.show()
         self.canvas.mpl_connect('resize_event', self._on_canvas_resize)
         self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
         self.canvas.mpl_connect('button_release_event', self.on_canvas_release)
@@ -496,19 +568,24 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         cursor_layout.setContentsMargins(ih, iv, ih, iv)
         cursor_layout.setSpacing(sp)
 
-        self.cursor1_label = QLabel('<b style="color:#e53935">C1</b>  <span style="color:#aaa">not set</span>')
+        # Cursor / chrome / muted colors come from the active theme palette so
+        # the readout stays consistent with light/dark mode + accent choices.
+        cp = self._palette
+        self.cursor1_label = QLabel(f'<b style="color:{cp["cursor1"]}">C1</b>  <span style="color:{cp["cursor_disabled"]}">not set</span>')
         self.cursor1_label.setWordWrap(True)
-        self.cursor1_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
-        self.cursor2_label = QLabel('<b style="color:#1976d2">C2</b>  <span style="color:#aaa">not set</span>')
+        self.cursor1_label.setObjectName("cursorLabel")
+        self.cursor2_label = QLabel(f'<b style="color:{cp["cursor2"]}">C2</b>  <span style="color:{cp["cursor_disabled"]}">not set</span>')
         self.cursor2_label.setWordWrap(True)
-        self.cursor2_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
-        self.delta_label = QLabel('<b style="color:#e65100">ΔX</b>  <span style="color:#aaa">—</span>')
-        self.delta_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+        self.cursor2_label.setObjectName("cursorLabel")
+        self.delta_label = QLabel(f'<b style="color:{cp["cursor_delta"]}">ΔX</b>  <span style="color:{cp["cursor_disabled"]}">—</span>')
+        self.delta_label.setObjectName("cursorLabel")
 
         def _cursor_sep() -> QLabel:
             s = QLabel()
             s.setFixedHeight(1)
-            s.setStyleSheet("background-color: #d0d0d0; margin: 2px 0;")
+            # Border color comes from QSS (#cursorSeparator) so the divider
+            # tracks theme + accent.
+            s.setObjectName("cursorSeparator")
             return s
 
         cursor_layout.setSpacing(8)
@@ -520,7 +597,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         cursor_help = QLabel(
             "L-click = Cursor 1   ·   Middle / R-click = Cursor 2\n"
             "R-click in stacked view = pane menu")
-        cursor_help.setStyleSheet("color: #757575; font-size: 11px;")
+        cursor_help.setObjectName("cursorHelp")
         cursor_help.setWordWrap(True)
         cursor_layout.addWidget(cursor_help)
         self.clear_cursors_btn = QPushButton("Clear Cursors")
@@ -538,6 +615,9 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.export_btn = QPushButton("Export Image")
         self.export_btn.clicked.connect(self.export_image)
         export_layout.addWidget(self.export_btn)
+        self.export_csv_btn = QPushButton("Export CSV")
+        self.export_csv_btn.clicked.connect(self.export_csv)
+        export_layout.addWidget(self.export_csv_btn)
         self.func_input = QLineEdit()
         self.func_input.setPlaceholderText("e.g., v(net1) + v(net2)  or  abs(v(net1))")
         self.func_input.returnPressed.connect(self.plot_function)
@@ -556,6 +636,9 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         export_action = QAction('Export Image...', self)
         export_action.triggered.connect(self.export_image)
         file_menu.addAction(export_action)
+        export_csv_action = QAction('Export CSV...', self)
+        export_csv_action.triggered.connect(self.export_csv)
+        file_menu.addAction(export_csv_action)
         view_menu = self.menu_bar.addMenu('View')
         zoom_in_action = QAction('Zoom In', self)
         zoom_in_action.setShortcut('Ctrl++')
@@ -598,6 +681,9 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._rebuild_nb_sorted()
         self.data_info = self.obj_dataext.numVals()
         self.volts_length = self.data_info[1]
+        # If load_simulation_data actually yields data, hide the empty-state
+        # overlay so it doesn't visually overlap the freshly-drawn curves.
+        self._show_empty_state(self.volts_length == 0)
         if self.plot_type[0] == DataExtraction.AC_ANALYSIS:
             self.analysis_label.setText("AC Analysis")
         elif self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS:
@@ -876,6 +962,95 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 logger.error(f"Error exporting image: {e}")
                 QMessageBox.warning(self, "Export Error", f"Failed to export image: {str(e)}")
 
+    def _collect_plot_data(self) -> Tuple[List[str], "np.ndarray"]:
+        """Build a rectangular table of the whole simulation's data.
+
+        First column is the X axis (Time / Frequency / Voltage sweep depending
+        on analysis type); each following column is one signal from the
+        simulation, named with its unit. EVERY node/branch is exported, not
+        just the visible/selected traces, so the user can inspect waveforms
+        they never plotted. Any user-defined function traces are appended too.
+        All columns are clipped to the shortest length so the result is a clean
+        rectangle the csv writer (or an AI) can consume without ragged rows.
+
+        Returns (header, matrix) where matrix is a 2-D float array with one
+        column per header entry. Raises ValueError if there is no data.
+        """
+        raw_x = np.asarray(self.obj_dataext.x, dtype=float)
+
+        # Match the on-screen view: transient plots drop the initial settling
+        # region, so the CSV reflects exactly what the user sees.
+        start_idx = 0
+        if self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS:
+            s = self._get_transient_start_idx(raw_x)
+            if 0 < s < len(raw_x):
+                start_idx = s
+        x = raw_x[start_idx:]
+
+        atype = self.plot_type[0]
+        if atype == DataExtraction.AC_ANALYSIS:
+            x_label = "Frequency (Hz)"
+        elif atype == DataExtraction.DC_ANALYSIS:
+            x_label = "Voltage Sweep (V)"
+        else:
+            x_label = "Time (s)"
+
+        columns: List[Tuple[str, "np.ndarray"]] = [(x_label, x)]
+
+        # Every signal in the simulation, not just visible/selected ones.
+        nb = self.obj_dataext.NBList
+        for idx in range(len(self.obj_dataext.y)):
+            y = np.asarray(self.obj_dataext.y[idx], dtype=float)[start_idx:]
+            name = (self.traces[idx].name if idx in self.traces
+                    else nb[idx] if idx < len(nb) else f"col{idx}")
+            unit = "V" if idx < self.obj_dataext.volts_length else "A"
+            columns.append((f"{name} ({unit})", y))
+
+        # All user-defined function traces. They are derived from the full x
+        # array, so trim them by the same start_idx when their length matches.
+        for label, _fx, fy, *_ in self._func_traces:
+            fy = np.asarray(fy, dtype=float)
+            if len(fy) == len(raw_x):
+                fy = fy[start_idx:]
+            columns.append((label, fy))
+
+        if len(columns) == 1:
+            raise ValueError("No simulation data to export.")
+
+        n = min(len(arr) for _, arr in columns)
+        if n == 0:
+            raise ValueError("Plotted traces contain no data points.")
+
+        header = [name for name, _ in columns]
+        # Clip every column to the shortest length and stack into one 2-D
+        # array so the body can be written with np.savetxt (C-level).
+        matrix = np.column_stack(
+            [np.asarray(arr[:n], dtype=float) for _, arr in columns])
+        return header, matrix
+
+    def export_csv(self) -> None:
+        try:
+            header, matrix = self._collect_plot_data()
+        except ValueError as e:
+            QMessageBox.information(self, "Export CSV", str(e))
+            return
+
+        import csv
+        file_name, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", "", "CSV Files (*.csv);;All Files (*)")
+        if not file_name:
+            return
+        if '.' not in os.path.basename(file_name):
+            file_name += '.csv'
+        try:
+            with open(file_name, 'w', newline='', encoding='utf-8') as f:
+                csv.writer(f, lineterminator='\n').writerow(header)
+                np.savetxt(f, matrix, delimiter=',', fmt='%.10g')
+            self.status_bar.showMessage(f"CSV exported to {file_name}", 3000)
+        except Exception as e:
+            logger.error(f"Error exporting CSV: {e}")
+            QMessageBox.warning(self, "Export Error", f"Failed to export CSV: {str(e)}")
+
     def clear_plot(self) -> None:
         self.timing_annotations.clear()
         self.deselect_all_waveforms()
@@ -922,6 +1097,8 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
     def _setup_matplotlib_style(self) -> None:
         dpi = max(72, self.logicalDpiY())
         base_pt = max(6.5, round(8.0 * 96.0 / dpi, 1))
+        # Merge defaults with palette-derived colors so the chart axes, grid,
+        # labels, and legend frame all match the active theme + accent.
         plt.rcParams.update({
             'font.size':         base_pt,
             'axes.labelsize':    base_pt + 1,
@@ -930,14 +1107,62 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             'ytick.labelsize':   base_pt,
             'legend.fontsize':   base_pt,
             'keymap.fullscreen': [],
+            **matplotlib_rc_overrides(self._palette),
         })
 
     def _on_canvas_resize(self, event) -> None:
         self._resize_timer.start()  # restart on every event; fires 120ms after last one
+        # Keep the empty-state placeholder sized to the visible scroll area.
+        try:
+            self._layout_empty_overlay()
+        except Exception:
+            pass
 
     def _do_deferred_resize(self) -> None:
         if hasattr(self, 'canvas'):
             self.canvas.draw_idle()
+            try:
+                self._layout_empty_overlay()
+            except Exception:
+                pass
+
+    # --------------------------------------------------------------- empty UI
+    def _empty_state_text(self) -> str:
+        """Centered placeholder text used until simulation data is loaded."""
+        return (
+            "<div style='text-align:center;'>"
+            "<div style='font-size:18px; font-weight:600;'>No Simulation Data</div>"
+            "<div style='margin-top:6px; color:#888;'>"
+            "Run a transient, AC, or DC sweep to plot signals here</div>"
+          "+</div>"
+        )
+
+    def _empty_state_style(self) -> str:
+        p = self._palette
+        return (
+            "QLabel#plotEmptyState {"
+            f"  color: {p['text_muted']};"
+            f"  background-color: {p['axes_face']};"
+            f"  border: 1px dashed {p['border_strong']};"
+            "  border-radius: 10px;"
+            "  padding: 24px 36px;"
+            "}"
+        )
+
+    def _layout_empty_overlay(self) -> None:
+        if not hasattr(self, "empty_overlay"):
+            return
+        scroll = self.canvas_scroll
+        overlap = scroll.viewport().size()
+        self.empty_overlay.setMinimumSize(overlap)
+        self.empty_overlay.resize(overlap)
+        # Re-apply the style so theme changes (e.g. accent switch) propagate
+        self.empty_overlay.setStyleSheet(self._empty_state_style())
+
+    def _show_empty_state(self, on: bool) -> None:
+        if hasattr(self, "empty_overlay"):
+            self.empty_overlay.setVisible(on)
+            self._layout_empty_overlay()
 
     @property
     def _em(self) -> int:
@@ -961,6 +1186,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         super().showEvent(event)
         if not getattr(self, '_splitter_initialized', False):
             QtCore.QTimer.singleShot(0, self._init_splitter_sizes)
+        QtCore.QTimer.singleShot(0, self._layout_empty_overlay)
 
     def _init_splitter_sizes(self) -> None:
         if getattr(self, '_splitter_initialized', False):

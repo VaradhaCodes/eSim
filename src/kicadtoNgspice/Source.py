@@ -50,7 +50,9 @@ class Source(QtWidgets.QWidget):
         print("===========================================================")"""
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
+        # Stem comes from the .cir handed in, not the folder name.
+        from projManagement.projectPaths import stem_from_file
+        project_name = stem_from_file(kicadFile)
 
         try:
             f = open(
@@ -64,7 +66,7 @@ class Source(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "source":
                     root = child
-        except BaseException:
+        except Exception:
             print("Source Previous Values XML is Empty")
 
         self.grid = QtWidgets.QGridLayout()
@@ -77,6 +79,8 @@ class Source(QtWidgets.QWidget):
                 track_id = line[0]
                 if line[2] == 'ac':
                     acbox = QtWidgets.QGroupBox()
+                    acbox.setProperty('cssClass', 'themedGroupBox')
+
                     acbox.setTitle(line[3])
                     acgrid = QtWidgets.QGridLayout()
                     self.start = self.count
@@ -105,7 +109,7 @@ class Source(QtWidgets.QWidget):
                                     .setText(child[0].text)
                                 self.entry_var[self.count + 1] \
                                     .setText(child[1].text)
-                    except BaseException:
+                    except Exception:
                         pass
                     # Value Need to check previuouse value
                     # self.entry_var[self.count].setText("")
@@ -115,19 +119,14 @@ class Source(QtWidgets.QWidget):
                     acbox.setLayout(acgrid)
 
                     # CSS
-                    acbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius:\
-                     9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left:\
-                     10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(acbox)
                     sourcelisttrack.append(
                         [track_id, 'ac', self.start, self.end])
 
                 elif line[2] == 'dc':
                     dcbox = QtWidgets.QGroupBox()
+                    dcbox.setProperty('cssClass', 'themedGroupBox')
+
                     dcbox.setTitle(line[3])
                     dcgrid = QtWidgets.QGridLayout()
                     self.row = self.row + 1
@@ -149,7 +148,7 @@ class Source(QtWidgets.QWidget):
                                     and child.text == line[2]:
                                 self.entry_var[self.count] \
                                     .setText(child[0].text)
-                    except BaseException:
+                    except Exception:
                         pass
 
                     self.row = self.row + 1
@@ -158,19 +157,14 @@ class Source(QtWidgets.QWidget):
                     dcbox.setLayout(dcgrid)
 
                     # CSS
-                    dcbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius:\
-                     9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left:\
-                     10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(dcbox)
                     sourcelisttrack.append(
                         [track_id, 'dc', self.start, self.end])
 
                 elif line[2] == 'sine':
                     sinebox = QtWidgets.QGroupBox()
+                    sinebox.setProperty('cssClass', 'themedGroupBox')
+
                     sinebox.setTitle(line[3])
                     sinegrid = QtWidgets.QGridLayout()
                     self.row = self.row + 1
@@ -193,7 +187,7 @@ class Source(QtWidgets.QWidget):
                                         and child.text == line[2]:
                                     self.entry_var[self.count] \
                                         .setText(child[it-4].text)
-                        except BaseException:
+                        except Exception:
                             pass
 
                         self.row = self.row + 1
@@ -202,19 +196,14 @@ class Source(QtWidgets.QWidget):
                     sinebox.setLayout(sinegrid)
 
                     # CSS
-                    sinebox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius: \
-                    9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(sinebox)
                     sourcelisttrack.append(
                         [track_id, 'sine', self.start, self.end])
 
                 elif line[2] == 'pulse':
                     pulsebox = QtWidgets.QGroupBox()
+                    pulsebox.setProperty('cssClass', 'themedGroupBox')
+
                     pulsebox.setTitle(line[3])
                     pulsegrid = QtWidgets.QGridLayout()
                     self.start = self.count
@@ -236,7 +225,7 @@ class Source(QtWidgets.QWidget):
                                         and child.text == line[2]:
                                     self.entry_var[self.count] \
                                         .setText(child[it-4].text)
-                        except BaseException:
+                        except Exception:
                             pass
 
                         self.row = self.row + 1
@@ -245,19 +234,14 @@ class Source(QtWidgets.QWidget):
                     pulsebox.setLayout(pulsegrid)
 
                     # CSS
-                    pulsebox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius: \
-                    9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(pulsebox)
                     sourcelisttrack.append(
                         [track_id, 'pulse', self.start, self.end])
 
                 elif line[2] == 'pwl':
                     pwlbox = QtWidgets.QGroupBox()
+                    pwlbox.setProperty('cssClass', 'themedGroupBox')
+
                     pwlbox.setTitle(line[3])
                     self.start = self.count
                     pwlgrid = QtWidgets.QGridLayout()
@@ -276,7 +260,7 @@ class Source(QtWidgets.QWidget):
                                     and child.text == line[2]:
                                 self.entry_var[self.count] \
                                     .setText(child[0].text)
-                    except BaseException:
+                    except Exception:
                         pass
 
                     self.row = self.row + 1
@@ -285,19 +269,14 @@ class Source(QtWidgets.QWidget):
                     pwlbox.setLayout(pwlgrid)
 
                     # CSS
-                    pwlbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius: \
-                    9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(pwlbox)
                     sourcelisttrack.append(
                         [track_id, 'pwl', self.start, self.end])
 
                 elif line[2] == 'exp':
                     expbox = QtWidgets.QGroupBox()
+                    expbox.setProperty('cssClass', 'themedGroupBox')
+
                     expbox.setTitle(line[3])
                     expgrid = QtWidgets.QGridLayout()
                     self.start = self.count
@@ -319,7 +298,7 @@ class Source(QtWidgets.QWidget):
                                         and child.text == line[2]:
                                     self.entry_var[self.count] \
                                         .setText(child[it-4].text)
-                        except BaseException:
+                        except Exception:
                             pass
 
                         self.row = self.row + 1
@@ -328,13 +307,6 @@ class Source(QtWidgets.QWidget):
                     expbox.setLayout(expgrid)
 
                     # CSS
-                    expbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius:\
-                     9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(expbox)
                     sourcelisttrack.append(
                         [track_id, 'exp', self.start, self.end])

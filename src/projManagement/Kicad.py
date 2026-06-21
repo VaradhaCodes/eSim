@@ -17,7 +17,9 @@
 # =========================================================================
 
 import os
+import shlex
 from . import Validation
+from .projectPaths import main_schematic
 from configuration.Appconfig import Appconfig
 from . import Worker
 from PyQt6 import QtWidgets
@@ -82,24 +84,24 @@ class Kicad:
 
         # Validating if current project is available or not
         if self.obj_validation.validateKicad(self.projDir):
-            self.projName = os.path.basename(self.projDir)
-            self.project = os.path.join(self.projDir, self.projName)
+            self.projName = self.obj_appconfig.get_proj_stem()
+            self.project = os.path.join(self.projDir, str(self.projName))
 
-            # creating a command to open schematic
-            schematic_file = self.project + ".kicad_sch"  # kicad6 file
-            if not os.path.exists(schematic_file) and os.path.exists(
-                    self.project + ".sch"):
-                schematic_file = self.project + ".sch"    # kicad4 file
+            # Resolve the main schematic from the .proj anchor (handles kicad6
+            # .kicad_sch and kicad4 .sch, independent of the folder name).
+            schematic_file = main_schematic(self.projDir, self.projName)
 
             # When running as Flatpak, use flatpak run to launch KiCad
-            # (install: flatpak install flathub org.kicad.KiCad)
+            # (install: flatpak install flathub org.kicad.KiCad). Paths are
+            # quoted so workspaces containing spaces still launch (Worker runs
+            # the command through shlex.split).
             if os.environ.get('ESIM_FLATPAK') == '1':
                 self.cmd = (
                     "flatpak run --command=eeschema org.kicad.KiCad " +
-                    schematic_file
+                    shlex.quote(schematic_file)
                 )
             else:
-                self.cmd = "eeschema " + schematic_file
+                self.cmd = "eeschema " + shlex.quote(schematic_file)
 
             self.obj_workThread.args = self.cmd
             self.obj_workThread.start()
@@ -207,9 +209,23 @@ class Kicad:
             pass
         # Validating if current project is available or not
         if self.obj_validation.validateKicad(self.projDir):
+            projName = self.obj_appconfig.get_proj_stem()
+
+            # KiCad >= 7 `--format spice` strips connectivity for eSim symbols
+            # (they carry no Sim.* model), degrading every part to "<ref> __<REF>".
+            # Regenerate <proj>.cir ourselves from the kicadxml netlist, which
+            # always preserves ref/value/pin->net regardless of simulation models.
+            try:
+                from kicadtoNgspice import KicadNetlister
+                ok, msg = KicadNetlister.generate_netlist(self.projDir, projName)
+                self.obj_appconfig.print_info('KiCad netlist: ' + msg)
+            except Exception as e:
+                self.obj_appconfig.print_warning(
+                    'Netlist auto-generation skipped: ' + str(e))
+
             # Checking if project has .cir file or not
-            if self.obj_validation.validateCir(self.projDir):
-                self.projName = os.path.basename(self.projDir)
+            if self.obj_validation.validateCir(self.projDir, projName):
+                self.projName = projName
                 self.project = os.path.join(self.projDir, self.projName)
 
                 # Creating a command to run

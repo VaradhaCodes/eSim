@@ -14,14 +14,14 @@ class UserManual(QtWidgets.QWidget):
 
         self.vlayout = QtWidgets.QVBoxLayout()
 
-        manual = 'library/browser/User-Manual/eSim_Manual_2.5.pdf'
+        _BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        manual_path = os.path.join(_BASE_DIR, 'library', 'browser', 'User-Manual', 'eSim_Manual_2.5.pdf')
 
         if os.name == 'nt':
-            os.startfile(os.path.realpath(manual))
+            os.startfile(manual_path)
         else:
-            manual_path = '../../' + manual
             subprocess.Popen(
-                ['xdg-open', os.path.realpath(manual_path)], shell=False
+                ['xdg-open', manual_path], shell=False
             )
 
         self.setLayout(self.vlayout)

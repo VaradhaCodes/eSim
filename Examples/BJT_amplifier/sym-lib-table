@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 0)
+  (lib (name "BJT_amplifier-rescue")(type "Legacy")(uri "${KIPRJMOD}/BJT_amplifier-rescue.lib")(options "")(descr ""))
+  (lib (name "eSim_Subckt1")(type "Legacy")(uri "${KICAD9_SYMBOL_DIR}/eSim_Subckt.lib")(options "")(descr ""))
+)

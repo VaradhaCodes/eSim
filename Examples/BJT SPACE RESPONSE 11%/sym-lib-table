@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 0)
+  (lib (name "BJT_Frequency_Response-rescue")(type "Legacy")(uri "${KIPRJMOD}/BJT_Frequency_Response-rescue.lib")(options "")(descr ""))
+  (lib (name "eSim_Subckt1")(type "Legacy")(uri "${KICAD9_SYMBOL_DIR}/eSim_Subckt.lib")(options "")(descr ""))
+)

@@ -46,6 +46,49 @@ verilogFile = []
 toggle_flag = []
 
 
+def _kill_toggle(th):
+    """Disconnect + interrupt a toggle QThread so it can neither fire its
+    changeStyle signal into a (possibly deleted) button nor keep running."""
+    if th is None:
+        return
+    try:
+        th.changeStyle.disconnect()
+    except (TypeError, RuntimeError):
+        pass
+    try:
+        if th.isRunning():
+            th.requestInterruption()
+            th.wait(2000)
+    except RuntimeError:
+        pass
+
+
+def _shutdown_thread_dict(dd):
+    """Stop every background thread/observer recorded in a Maker instance
+    __dict__. Takes the dict (not the widget) so it is safe to run during/after
+    the widget's C++ destruction — it never accesses the deleted wrapper."""
+    global toggle_flag
+    ro = dd.get('refreshoption')
+    if ro is not None:
+        try:
+            if ro in toggle_flag:
+                toggle_flag.remove(ro)
+        except (RuntimeError, ValueError):
+            pass
+    eh = dd.get('event_handler')
+    if eh is not None:
+        _kill_toggle(getattr(eh, 'toggle', None))
+    _kill_toggle(dd.get('_rc_toggle'))
+    obs = dd.get('observer')
+    if obs is not None:
+        try:
+            if obs.is_alive():
+                obs.stop()
+                obs.join(2)
+        except RuntimeError:
+            pass
+
+
 # This function is called to accept TOS of makerchip
 def makerchipTOSAccepted(display=True):
     if not os.path.isfile(home + "/.makerchip_accepted"):
@@ -84,6 +127,20 @@ class Maker(QtWidgets.QWidget):
         self.createMakerWidget()
         self.obj_Appconfig = Appconfig()
         verilogFile.append("")
+        # When the Makerchip dock is closed it is torn down with deleteLater(),
+        # which never delivers a QCloseEvent — so closeEvent() alone could not be
+        # relied on to stop our background threads. A surviving file-watch
+        # observer + toggle QThread would then fire on the next "Send to
+        # Makerchip" (it overwrites the same .v file) and emit into this now
+        # deleted widget, crashing eSim. Tear the threads down on destruction.
+        #
+        # The slot must NOT touch `self`: by the time `destroyed` fires the C++
+        # object is gone and any attribute access on the wrapper raises. We
+        # instead capture the instance __dict__ (a plain dict that outlives the
+        # C++ object and still holds the live observer/thread objects) and clean
+        # up straight from it.
+        self.destroyed.connect(
+            lambda *_, dd=self.__dict__: _shutdown_thread_dict(dd))
 
     # Creating the various components of the Widget(Maker Tab)
     def createMakerWidget(self):
@@ -104,13 +161,31 @@ class Maker(QtWidgets.QWidget):
             self.event_handler.toggle.requestInterruption()
             self.event_handler.toggle.wait(2000)
 
-    def closeEvent(self, event):
+    def _teardown_watch(self):
+        """Stop the current file-watch observer and JOIN it before re-arming a
+        new one, then stop the toggle it may have started.
+
+        The join is the crucial part: a second "Send to Makerchip" overwrites
+        the watched .v file, which fires the watchdog observer's on_modified on
+        its own background thread at the same moment load_verilog() re-creates
+        self.observer / self.event_handler on the main thread. Without joining,
+        the old event_handler (and its toggle QThread) is dropped and garbage
+        collected while the toggle is still running -> Qt aborts with
+        "QThread: Destroyed while thread is still running". Joining the observer
+        first guarantees any in-flight callback has finished (or never starts)
+        before we touch those objects."""
+        obs = self.__dict__.get('observer')
+        if obs is not None:
+            try:
+                if obs.is_alive():
+                    obs.stop()
+                    obs.join(2)
+            except RuntimeError:
+                pass
         self._stop_current_toggle()
-        if hasattr(self, '_rc_toggle') and self._rc_toggle.isRunning():
-            self._rc_toggle.requestInterruption()
-            self._rc_toggle.wait(2000)
-        if hasattr(self, 'observer') and self.observer.is_alive():
-            self.observer.stop()
+
+    def closeEvent(self, event):
+        _shutdown_thread_dict(self.__dict__)
         super().closeEvent(event)
 
     # This function is to Add new verilog file
@@ -155,7 +230,7 @@ class Maker(QtWidgets.QWidget):
         global verilogFile
 
         verilogFile[self.filecount] = self.verilogfile
-        self._stop_current_toggle()
+        self._teardown_watch()
 
         self.observer = watchdog.observers.Observer()
         self.event_handler = Handler(
@@ -171,6 +246,32 @@ class Maker(QtWidgets.QWidget):
         # self.notify=notify(self.verilogfile,self.refreshoption)
         # self.notify.start()
         # open("filepath.txt","w").write(self.verilogfile)
+
+    def load_verilog(self, filepath):
+        # Tear the old watch down FIRST. The caller (Send to Makerchip) has just
+        # overwritten `filepath`; stopping+joining the old observer here, before
+        # we re-arm, preempts its on_modified from racing this re-arm (see
+        # _teardown_watch) and avoids the QThread-destroyed-while-running abort.
+        self._teardown_watch()
+        self.verilogfile = filepath
+        with open(self.verilogfile) as fh:
+            self.text = fh.read()
+        self.entry_var[0].setText(self.verilogfile)
+        self.entry_var[1].setText(self.text)
+        global verilogFile
+        verilogFile[self.filecount] = self.verilogfile
+
+        self.observer = watchdog.observers.Observer()
+        self.event_handler = Handler(
+            self.verilogfile,
+            self.refreshoption,
+            self.observer)
+
+        self.observer.schedule(
+            self.event_handler,
+            path=self.verilogfile,
+            recursive=True)
+        self.observer.start()
 
     # This function is used to call refresh while
     # running Ngspice to Verilog Converter
@@ -192,7 +293,7 @@ class Maker(QtWidgets.QWidget):
         print("NgVeri File: " + self.verilogfile + " Refreshed")
         self.obj_Appconfig.print_info(
             "NgVeri File: " + self.verilogfile + " Refreshed")
-        self._stop_current_toggle()
+        self._teardown_watch()
         self.observer = watchdog.observers.Observer()
         self.event_handler = Handler(
             self.verilogfile,
@@ -460,6 +561,12 @@ Please check if verilog file is chosen.")
         return self.optionsbox
 
     def open_verifier(self):
+        # When embedded in the makerchip tab widget, the Verilog Simulator is
+        # already a sibling tab — just focus it instead of opening a separate
+        # window. (makerchip wires this callback after building the tabs.)
+        if hasattr(self, 'focus_verilog_tab') and callable(self.focus_verilog_tab):
+            self.focus_verilog_tab()
+            return
         if not hasattr(self, 'verifier_win'):
             from .VerilogVerifier import VerilogVerifier
             self.verifier_win = QtWidgets.QDialog(self.window())

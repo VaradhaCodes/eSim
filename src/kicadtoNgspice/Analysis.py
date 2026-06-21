@@ -123,7 +123,7 @@ class Analysis(QtWidgets.QWidget):
                 self.check.setChecked(True)
                 self.track_obj.set_CheckBox["ITEMS"] = "DC"
 
-        except BaseException:
+        except Exception:
             self.checkTRAN.setChecked(True)
             self.track_obj.set_CheckBox["ITEMS"] = "TRAN"
 
@@ -217,11 +217,12 @@ class Analysis(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "analysis":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
             print("AC Previous Values XML is Empty")
 
         self.acbox = QtWidgets.QGroupBox()
+        self.acbox.setProperty('cssClass', 'themedGroupBox')
         self.acbox.setTitle("AC Analysis")
         self.acbox.setDisabled(True)
         self.acbox.setVisible(False)
@@ -278,7 +279,7 @@ class Analysis(QtWidgets.QWidget):
         # Try setting to default value from anaylsis file
         try:
             self.ac_parameter[self.parameter_cnt] = str(root[0][6].text)
-        except BaseException:
+        except Exception:
             self.ac_parameter[self.parameter_cnt] = "Hz"
 
         # Event listener for combo action
@@ -297,7 +298,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.ac_parameter[self.parameter_cnt] = str(root[0][7].text)
-        except BaseException:
+        except Exception:
             self.ac_parameter[self.parameter_cnt] = "Hz"
 
         self.stop_fre_combo.currentTextChanged.connect(self.stop_combovalue)
@@ -305,13 +306,7 @@ class Analysis(QtWidgets.QWidget):
         self.track_obj.AC_entry_var["ITEMS"] = self.ac_entry_var
         self.track_obj.AC_Parameter["ITEMS"] = self.ac_parameter
 
-        # CSS
-        self.acbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: 9px; margin-top: \
-        0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: \
-        0 3px 0 3px; } \
-        ")
+        # CSS handled by QSS — `cssClass="themedGroupBox"` (see style_*.qss)
         if check:
             try:
                 if root[0][0].text == "true":
@@ -337,7 +332,7 @@ class Analysis(QtWidgets.QWidget):
                 if index >= 0:
                     self.stop_fre_combo.setCurrentIndex(index)
 
-            except BaseException:
+            except Exception:
                 print("AC Analysis XML Parse Error")
 
         return self.acbox
@@ -405,11 +400,12 @@ class Analysis(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "analysis":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
             print("DC Previous Values XML is empty")
 
         self.dcbox = QtWidgets.QGroupBox()
+        self.dcbox.setProperty('cssClass', 'themedGroupBox')
         self.dcbox.setTitle("DC Analysis")
         self.dcbox.setDisabled(True)
         self.dcbox.setVisible(False)
@@ -497,7 +493,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][5].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.start_combo.currentTextChanged.connect(self.start_changecombo)
@@ -514,7 +510,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][6].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.increment_combo.currentTextChanged.connect(self.increment_changecombo)
@@ -531,7 +527,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][7].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.stop_combo.currentTextChanged.connect(self.stop_changecombo)
@@ -548,7 +544,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][12].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.start_combo2.currentTextChanged.connect(self.start_changecombo2)
@@ -565,7 +561,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][13].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.increment_combo2.currentTextChanged.connect(
@@ -583,7 +579,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][14].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.stop_combo2.currentTextChanged.connect(self.stop_changecombo2)
@@ -593,7 +589,7 @@ class Analysis(QtWidgets.QWidget):
         try:
             self.track_obj.op_check.append(
                 str(root[1][4].text()))
-        except BaseException:
+        except Exception:
             self.track_obj.op_check.append('0')
 
         self.check.stateChanged.connect(self.setflag)
@@ -602,13 +598,7 @@ class Analysis(QtWidgets.QWidget):
         self.track_obj.DC_entry_var["ITEMS"] = self.dc_entry_var
         self.track_obj.DC_Parameter["ITEMS"] = self.dc_parameter
 
-        # CSS
-        self.dcbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: 9px; margin-top: \
-        0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-        10px; padding: 0 3px 0 3px; } \
-        ")
+        # CSS handled by QSS — `cssClass="themedGroupBox"` (see style_*.qss)
         if check:
             try:
                 self.dc_entry_var[0].setText(root[1][0].text or "")
@@ -642,7 +632,7 @@ class Analysis(QtWidgets.QWidget):
                     self.check.setChecked(True)
                 else:
                     self.check.setChecked(False)
-            except BaseException:
+            except Exception:
                 print("DC Analysis XML Parse Error")
 
         return self.dcbox
@@ -708,11 +698,12 @@ class Analysis(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "analysis":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
             print("Transient Previous Values XML is Empty")
 
         self.trbox = QtWidgets.QGroupBox()
+        self.trbox.setProperty('cssClass', 'themedGroupBox')
         self.trbox.setTitle("Transient Analysis")
         # self.trbox.setDisabled(True)
         # self.trbox.setVisible(False)
@@ -751,7 +742,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.tran_parameter[self.parameter_cnt] = str(root[2][3].text)
-        except BaseException:
+        except Exception:
             self.tran_parameter[self.parameter_cnt] = "sec"
 
         self.start_combobox.currentTextChanged.connect(self.start_combo_change)
@@ -766,7 +757,7 @@ class Analysis(QtWidgets.QWidget):
         self.trgrid.addWidget(self.step_combobox, 2, 3)
         try:
             self.tran_parameter[self.parameter_cnt] = str(root[2][4].text)
-        except BaseException:
+        except Exception:
             self.tran_parameter[self.parameter_cnt] = "sec"
 
         self.step_combobox.currentTextChanged.connect(self.step_combo_change)
@@ -781,7 +772,7 @@ class Analysis(QtWidgets.QWidget):
         self.trgrid.addWidget(self.stop_combobox, 3, 3)
         try:
             self.tran_parameter[self.parameter_cnt] = str(root[2][5].text)
-        except BaseException:
+        except Exception:
             self.tran_parameter[self.parameter_cnt] = "sec"
 
         self.stop_combobox.currentTextChanged.connect(self.stop_combo_change)
@@ -790,13 +781,7 @@ class Analysis(QtWidgets.QWidget):
         self.track_obj.TRAN_entry_var["ITEMS"] = self.tran_entry_var
         self.track_obj.TRAN_Parameter["ITEMS"] = self.tran_parameter
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # CSS handled by QSS — `cssClass="themedGroupBox"` (see style_*.qss)
         if check:
             try:
                 self.tran_entry_var[0].setText(root[2][0].text or "")
@@ -811,7 +796,7 @@ class Analysis(QtWidgets.QWidget):
                 index = self.stop_combobox.findText(root[2][5].text or "")
                 if index >= 0:
                     self.stop_combobox.setCurrentIndex(index)
-            except BaseException:
+            except Exception:
                 print("Transient Analysis XML Parse Error")
 
         return self.trbox
