@@ -30,21 +30,17 @@
 import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
-from PyQt6.QtCore import QThread, pyqtSignal
 from configuration.Appconfig import Appconfig
 import os
 import shutil
-import watchdog.events
-import watchdog.observers
 from os.path import expanduser
+from .DesignBus import DesignBus
 home = expanduser("~")
-# import inotify.adapters
 
 # declaring the global variables
-# verilogfile stores the name of the file
-# toggle flag stores the object of the toggling button
+# verilogFile[filecount] mirrors each design's path on disk. The DesignBus that
+# owns the design is its one writer; NgVeri / ModelGeneration read this slot.
 verilogFile = []
-toggle_flag = []
 
 
 # This function is called to accept TOS of makerchip
@@ -74,17 +70,24 @@ def makerchipTOSAccepted(display=True):
 class Maker(QtWidgets.QWidget):
 
     # initailising the varaibles
-    def __init__(self, filecount):
-        print(self)
-
+    def __init__(self, filecount, bus=None):
         QtWidgets.QWidget.__init__(self)
         self.count = 0
         self.text = ""
+        self.verilogfile = ""
         self.filecount = filecount
         self.entry_var = {}
+        self._applying = False
+        self.bus = None
+        self._owns_bus = False
         self.createMakerWidget()
         self.obj_Appconfig = Appconfig()
         verilogFile.append("")
+        # The design lives in a DesignBus. The Flow Navigator injects a shared
+        # one so Author/Verify/Convert are views on one design; standalone Maker
+        # owns its own.
+        self.set_design_bus(bus or DesignBus(self.filecount),
+                            take_ownership=bus is None)
 
     # Creating the various components of the Widget(Maker Tab)
     def createMakerWidget(self):
@@ -97,28 +100,46 @@ class Maker(QtWidgets.QWidget):
         # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         self.show()
 
-    def _stop_current_toggle(self):
-        global toggle_flag
-        # Stop observer first and wait for it to fully exit.  This ensures any
-        # in-flight on_modified callback (which re-adds toggle_flag and re-starts
-        # the toggle thread) has run to completion before we try to clear both.
-        if hasattr(self, 'observer') and self.observer.is_alive():
-            self.observer.stop()
-            self.observer.join(timeout=2)
-        # on_modified may have re-added the flag / re-started the toggle; clear both.
-        if self.refreshoption in toggle_flag:
-            toggle_flag.remove(self.refreshoption)
-        if hasattr(self, 'event_handler') and self.event_handler.toggle.isRunning():
-            self.event_handler.toggle.requestInterruption()
-            self.event_handler.toggle.wait(2000)
+    def set_design_bus(self, bus, take_ownership=False):
+        """Bind this Author view to a shared design. Disconnects any previous
+        bus, subscribes the editor, and renders the current design. The Flow
+        Navigator calls this to make all stages share one design."""
+        if self.bus is bus:
+            return
+        if self.bus is not None:
+            try:
+                self.bus.contentChanged.disconnect(self._render_from_bus)
+            except (TypeError, RuntimeError):
+                pass
+            if self._owns_bus:
+                self.bus.close()
+        self.bus = bus
+        self._owns_bus = take_ownership
+        self.bus.contentChanged.connect(self._render_from_bus)
+        self._render_from_bus(self.bus.get_content())
+
+    def _on_editor_changed(self):
+        """Editor edits flow straight into the shared design (in memory). Guarded
+        so rendering the bus back into the editor cannot loop."""
+        if self._applying or self.bus is None:
+            return
+        self.bus.set_content(self.entry_var[1].toPlainText())
+
+    def _render_from_bus(self, text):
+        """Show the shared design's current text + path. Guarded against the
+        editor's own textChanged echoing back into the bus."""
+        self.verilogfile = self.bus.path if self.bus is not None else ""
+        self._applying = True
+        try:
+            if self.entry_var[1].toPlainText() != text:
+                self.entry_var[1].setText(text)
+            self.entry_var[0].setText(self.verilogfile)
+        finally:
+            self._applying = False
 
     def closeEvent(self, event):
-        self._stop_current_toggle()
-        if hasattr(self, '_rc_toggle') and self._rc_toggle.isRunning():
-            self._rc_toggle.requestInterruption()
-            self._rc_toggle.wait(2000)
-        if hasattr(self, 'observer') and self.observer.is_alive():
-            self.observer.stop()
+        if self.bus is not None and self._owns_bus:
+            self.bus.close()
         super().closeEvent(event)
 
     # This function is to Add new verilog file
@@ -156,91 +177,19 @@ class Maker(QtWidgets.QWidget):
                 self.obj_Appconfig.print_info('No Verilog File Chosen')
                 return
 
-        with open(self.verilogfile) as fh:
-            self.text = fh.read()
-        self.entry_var[0].setText(self.verilogfile)
-        self.entry_var[1].setText(self.text)
-        global verilogFile
-
-        verilogFile[self.filecount] = self.verilogfile
-        self._stop_current_toggle()
-
-        self.observer = watchdog.observers.Observer()
-        self.event_handler = Handler(
-            self.verilogfile,
-            self.refreshoption,
-            self.observer)
-
-        self.observer.schedule(
-            self.event_handler,
-            path=self.verilogfile,
-            recursive=True)
-        self.observer.start()
-        # self.notify=notify(self.verilogfile,self.refreshoption)
-        # self.notify.start()
-        # open("filepath.txt","w").write(self.verilogfile)
+        # Loading routes through the shared design; the bus reads the file,
+        # mirrors the slot, arms the external-edit watch, and renders the editor.
+        self.bus.load_from_disk(self.verilogfile)
 
     def load_verilog(self, filepath):
-        self.verilogfile = filepath
-        self.text = open(self.verilogfile).read()
-        self.entry_var[0].setText(self.verilogfile)
-        self.entry_var[1].setText(self.text)
-        global verilogFile
-        verilogFile[self.filecount] = self.verilogfile
-        self._stop_current_toggle()
-
-        self.observer = watchdog.observers.Observer()
-        self.event_handler = Handler(
-            self.verilogfile,
-            self.refreshoption,
-            self.observer)
-
-        self.observer.schedule(
-            self.event_handler,
-            path=self.verilogfile,
-            recursive=True)
-        self.observer.start()
-
-    # This function is used to call refresh while
-    # running Ngspice to Verilog Converter
-    # (as the original one gets destroyed)
-    def refresh_change(self):
-        if self.refreshoption in toggle_flag:
-            if hasattr(self, '_rc_toggle') and self._rc_toggle.isRunning():
-                return
-            self._rc_toggle = toggle(self.refreshoption)
-            self._rc_toggle.start()
-
-    # It is used to refresh the file in eSim if its edited anywhere else
-    def refresh(self):
-        if not hasattr(self, 'verilogfile'):
-            return
-        with open(self.verilogfile) as fh:
-            self.text = fh.read()
-        self.entry_var[1].setText(self.text)
-        print("NgVeri File: " + self.verilogfile + " Refreshed")
-        self.obj_Appconfig.print_info(
-            "NgVeri File: " + self.verilogfile + " Refreshed")
-        self._stop_current_toggle()
-        self.observer = watchdog.observers.Observer()
-        self.event_handler = Handler(
-            self.verilogfile,
-            self.refreshoption,
-            self.observer)
-
-        self.observer.schedule(
-            self.event_handler,
-            path=self.verilogfile,
-            recursive=True)
-        self.observer.start()
+        self.bus.load_from_disk(filepath)
 
     # This function is used to save the edited file in eSim
     def save(self):
-        try:
-            wr = self.entry_var[1].toPlainText()
-            with open(self.verilogfile, "w+") as fh:
-                fh.write(wr)
-        except Exception as err:
+        if self.bus is None:
+            return
+        self.bus.set_content(self.entry_var[1].toPlainText())
+        if not self.bus.save_to_disk():
             self.msg = QtWidgets.QErrorMessage(self)
             self.msg.setModal(True)
             self.msg.setWindowTitle("Error Message")
@@ -248,7 +197,6 @@ class Maker(QtWidgets.QWidget):
                 "Error in saving verilog file. Please check if it is chosen."
             )
             self.msg.exec()
-            print("Error in saving verilog file: " + str(err))
 
     # This is used to run the makerchip-app
     def runmakerchip(self):
@@ -258,6 +206,11 @@ class Maker(QtWidgets.QWidget):
         try:
             if not makerchipTOSAccepted(True):
                 return
+
+            # Makerchip reads the design off disk; flush any in-editor edits
+            # first so it sees the current text, not a stale file.
+            if self.bus is not None:
+                self.bus.materialize()
 
             print("Running Makerchip IDE...........................")
             # self.file = open(self.verilogfile,"w")
@@ -458,12 +411,6 @@ Please check if verilog file is chosen.")
         self.optionsgrid.addWidget(self.addoptions, 0, 1)
         # self.optionsbox.setLayout(self.optionsgrid)
         # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0
-        self.refreshoption = QtWidgets.QPushButton("Refresh")
-        self.optionsgroupbtn.addButton(self.refreshoption)
-        self.refreshoption.clicked.connect(self.refresh)
-        self.optionsgrid.addWidget(self.refreshoption, 0, 2)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         self.saveoption = QtWidgets.QPushButton("Save")
         self.optionsgroupbtn.addButton(self.saveoption)
         self.saveoption.clicked.connect(self.save)
@@ -510,12 +457,18 @@ Please check if verilog file is chosen.")
             layout.setContentsMargins(0, 0, 0, 0)
             self.obj_VerilogVerifier = VerilogVerifier()
 
-            # Connect the signal directly to load_verilog
-            self.obj_VerilogVerifier.sendToNgVeri.connect(self.load_verilog)
+            # Share the one design: the dialog reads from / writes to the same
+            # bus the Author editor uses, so there is no disk hand-off. Edits
+            # made here are collected into the bus when the dialog closes, and
+            # the Author editor -- which renders the bus live -- updates itself.
+            self.obj_VerilogVerifier.set_design_bus(self.bus)
+            self.verifier_win.finished.connect(
+                lambda _=0: self.obj_VerilogVerifier.collect_into_bus())
 
             layout.addWidget(self.obj_VerilogVerifier)
             self.verifier_win.resize(1000, 700)
 
+        self.obj_VerilogVerifier.render_from_bus()
         self.verifier_win.show()
         self.verifier_win.raise_()
         self.verifier_win.activateWindow()
@@ -555,7 +508,8 @@ Please check if verilog file is chosen.")
         self.trgrid.addWidget(self.entry_var[self.count], 2, 1)
         self.entry_var[self.count].setMaximumWidth(1000)
         self.entry_var[self.count].setMaximumHeight(1000)
-        # self.entry_var[self.count].textChanged.connect(self.save)
+        # Author edits stream into the shared design (see _on_editor_changed).
+        self.entry_var[self.count].textChanged.connect(self._on_editor_changed)
         self.count += 1
 
         # CSS
@@ -567,109 +521,3 @@ Please check if verilog file is chosen.")
         ")
 
         return self.trbox
-
-
-class _FileModifiedNotifier(QtCore.QObject):
-    """Bridges watchdog background thread to main thread for GUI notifications."""
-    modified = pyqtSignal(str)
-
-
-# The Handler class is used to create a watch on the files using WatchDog
-class Handler(watchdog.events.PatternMatchingEventHandler):
-    # this function initialisses the variable and the objects of watchdog
-    def __init__(self, verilogfile, refreshoption, observer):
-        # Set the patterns for PatternMatchingEventHandler
-        watchdog.events.PatternMatchingEventHandler.__init__(
-            self, ignore_directories=True, case_sensitive=False)
-        self.verilogfile = verilogfile
-        self.refreshoption = refreshoption
-        self.obj_Appconfig = Appconfig()
-        self.observer = observer
-        self.toggle = toggle(self.refreshoption)
-        self._notifier = _FileModifiedNotifier()
-        self._notifier.modified.connect(self._show_modified_dialog)
-
-    def _show_modified_dialog(self, verilogfile):
-        msg = Dialogs.make_error_message(None)
-        msg.setWindowTitle("eSim Message")
-        msg.showMessage(
-            "NgVeri File: " + verilogfile + " modified. Please click on Refresh")
-        msg.exec()
-
-    # if a file is modified, toggle starts to toggle the refresh button
-    def on_modified(self, event):
-        print("Watchdog received modified event - % s." % event.src_path)
-        print("NgVeri File: " + self.verilogfile +
-              " modified. Please click on Refresh")
-        global toggle_flag
-        if self.refreshoption not in toggle_flag:
-            toggle_flag.append(self.refreshoption)
-        self.observer.stop()
-        if not self.toggle.isRunning():
-            self.toggle.start()
-        self._notifier.modified.emit(self.verilogfile)
-
-
-# class notify(QThread):
-#     def __init__(self,verilogfile,refreshoption):#,obj_Appconfig):
-#         QThread.__init__(self)
-#         self.verilogfile=verilogfile
-#         self.refreshoption=refreshoption
-#         self.obj_Appconfig = Appconfig()
-#         self.toggle=toggle(self.refreshoption)
-
-
-#     def __del__(self):
-#         self.wait()
-
-#     def run(self):
-#         i = inotify.adapters.Inotify()
-
-#         i.add_watch(self.verilogfile)
-
-#         for event in i.event_gen():
-#             if not self.refreshoption.isVisible():
-#                 break
-#             if event!=None:
-#                 print(event)
-#                 if "IN_CLOSE_WRITE" in event[1] :
-#                         msg = Dialogs.make_error_message(self)
-#                         msg.setModal(True)
-#                         msg.setWindowTitle("eSim Message")
-#                         msg.showMessage(
-#                             "NgVeri File: "+self.verilogfile+"\
-# modified. Please click on Refresh")
-#                         msg.exec()
-#                         print("NgVeri File: "+self.verilogfile+"\
-# modified. Please click on Refresh")
-#                         # self.obj_Appconfig.print_info("NgVeri File: \
-# "+self.verilogfile+" modified. Please click on Refresh")
-#                         global toggle_flag
-#                         toggle_flag.append(self.refreshoption)
-#                         #i.rm_watch()
-#                         self.toggle.start()
-#                         break
-
-
-# This class is used to toggle a button(change colour by toggling)
-class toggle(QThread):
-    changeStyle = pyqtSignal(str)
-
-    # initialising the threads
-    def __init__(self, option):
-        QThread.__init__(self)
-        self.option = option
-        self.changeStyle.connect(option.setStyleSheet)
-
-    # running the thread to toggle
-    def run(self):
-        while not self.isInterruptionRequested():
-            self.changeStyle.emit("background-color: red")
-            self.msleep(1000)
-            if self.isInterruptionRequested():
-                break
-            self.changeStyle.emit("background-color: none")
-            self.msleep(1000)
-            if self.option not in toggle_flag:
-                break
-        self.changeStyle.emit("")

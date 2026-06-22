@@ -220,7 +220,6 @@ class ConsoleEdit(QtWidgets.QTextEdit):
 
 
 class VerilogVerifier(QtWidgets.QWidget):
-    sendToNgVeri = QtCore.pyqtSignal(str)
     #: emitted after a compile+simulate run finishes cleanly, so the host
     #: (Flow Navigator) can mark Verify complete and nudge toward Convert.
     simulationSucceeded = QtCore.pyqtSignal()
@@ -232,6 +231,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.current_timestamps = None
         self.current_signals_data = None
         self.current_signal_types = None
+
+        # Shared design (injected by the Flow Navigator). This stage renders from
+        # / collects into it; it never reaches around to disk to sync.
+        self.bus = None
+        self._rendered_content = None
 
         # Async run state: the in-flight compile/sim worker thread and its
         # cancel token (None when idle). See _start_job / cancel_running_job.
@@ -340,7 +344,6 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_syntax.setEnabled(False)
         self.btn_stub.setEnabled(False)
         self.btn_simulate.setEnabled(False)
-        self.btn_send.setEnabled(False)
         self.btn_add_module.setEnabled(False)
         self.btn_auto_detect.setEnabled(False)
         self.hierarchy_list.setEnabled(False)
@@ -371,7 +374,6 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_syntax.setEnabled(True)
         self.btn_stub.setEnabled(True)
         self.btn_simulate.setEnabled(True)
-        self.btn_send.setEnabled(True)
         self.btn_add_module.setEnabled(True)
         self.btn_auto_detect.setEnabled(True)
         self.hierarchy_list.setEnabled(True)
@@ -674,10 +676,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_export_csv.setEnabled(False)
         controls_layout.addWidget(self.btn_export_csv)
         
-        self.btn_send = QtWidgets.QPushButton("Send to Makerchip")
-        self.btn_send.clicked.connect(self.send_to_makerchip)
-        controls_layout.addWidget(self.btn_send)
-        
+        # No "Send to Makerchip" button: the design is shared with the Author
+        # and Convert stages through the Flow Navigator, which syncs it
+        # automatically on tab switch (see render_from_bus / collect_into_bus).
+        # There is nothing to hand off.
+
         self.btn_unlock = QtWidgets.QPushButton("Locate Icarus Verilog...")
         self.btn_unlock.clicked.connect(self.attempt_manual_unlock)
         self.btn_unlock.setVisible(False)
@@ -1528,32 +1531,55 @@ class VerilogVerifier(QtWidgets.QWidget):
         if run.ok:
             self.simulationSucceeded.emit()
 
-    def send_to_makerchip(self):
-        self.btn_send.setEnabled(False)
-        
-        self.log("Auto-detecting hierarchy before sending to Makerchip...")
-        self.auto_detect_hierarchy()
-        
-        code = self.get_design_code()
-        
-        if not code or not code.strip():
-            self.log("Error: Design editor is empty.")
-            self.btn_send.setEnabled(True)
+    def set_design_bus(self, bus):
+        """Bind this stage to the shared design (called by the Flow Navigator)."""
+        self.bus = bus
+
+    def render_from_bus(self):
+        """Show the shared design in the single design tab. Called when this
+        stage is entered, so a design authored/loaded elsewhere shows up here
+        with no manual 'load' step. Idempotent: if the tab already holds the bus
+        content, leave it -- in-progress edits survive a re-entry."""
+        if self.bus is None:
             return
-            
+        code = self.bus.get_content()
+        if not code:
+            return
+        if self._rendered_content == code:
+            return
+        # Drop every existing design tab (the testbench is pinned and stays)
+        # and install the shared design as the single design tab.
+        for editor in list(self.design_views):
+            idx = self.editor_tabs.indexOf(editor)
+            if idx != -1:
+                self.close_tab(idx)
+        name = os.path.basename(self.bus.path) if self.bus.path else "design.v"
+        self.add_module_tab(name, code, filepath=self.bus.path or None)
+        self._rendered_content = code
+        self.log(f"Loaded design: {name}")
+
+    def collect_into_bus(self):
+        """Push the design under test into the shared design (in memory; NO
+        disk). Called when this stage is left. Skips the untouched default
+        template and empty / parse-less states, so merely passing through Verify
+        never overwrites the design with boilerplate. A design first authored
+        here is given a home under ~/eSim-Workspace/verified_verilog so Convert
+        can later materialize it."""
+        if self.bus is None:
+            return
+        self.auto_detect_hierarchy()
+        code = self.get_design_code()
+        if not code or not code.strip():
+            return
+        if code.strip() == DEFAULT_DESIGN.strip():
+            return
         module_name, _ = extract_ports(code)
         if not module_name:
-            self.log("Error: Could not extract module name from design.")
-            self.btn_send.setEnabled(True)
             return
-            
-        dest_dir = os.path.join(os.path.expanduser("~"), "eSim-Workspace", "verified_verilog")
-        os.makedirs(dest_dir, exist_ok=True)
-        
-        filepath = os.path.join(dest_dir, f"{module_name}.v")
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(code)
-            
-        self.log(f"Saved verified file to: {filepath}")
-        self.sendToNgVeri.emit(filepath)
-        self.btn_send.setEnabled(True)
+        self.bus.set_content(code)
+        if not self.bus.path:
+            dest = os.path.join(
+                os.path.expanduser("~"), "eSim-Workspace",
+                "verified_verilog", f"{module_name}.v")
+            self.bus.set_path(dest)
+        self._rendered_content = code

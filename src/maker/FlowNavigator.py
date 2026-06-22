@@ -2,19 +2,23 @@
 #             FILE: FlowNavigator.py
 #
 #      DESCRIPTION: Workflow-shaped shell for eSim's HDL -> ngspice-block
-#                   subsystem. Replaces the flat Makerchip / NgVeri / NGHDL
-#                   tab strip (and the flying "Verilog Simulator IDE" dialog)
-#                   with a Vivado/Quartus-style stage rail:
+#                   subsystem. Two languages, two distinct paths, picked by a
+#                   single segmented toggle so they never collide:
 #
-#                       Author  ->  Verify  ->  Convert  ->  Place
-#                                                 (VHDL: NGHDL)
+#                       Verilog:  Author  ->  Verify  ->  Convert
+#                       VHDL:     NGHDL  (its own self-contained tool)
 #
-#                   Each stage reuses the existing widget unchanged; the rail
-#                   just makes the edit -> verify -> build-block -> place flow
-#                   visible and exposes one stage at a time (progressive
-#                   disclosure). Heavy stages (the Verilog Simulator IDE and the
-#                   embedded NGHDL window) are built lazily and guarded so a
-#                   missing/broken tool can never take the dock down.
+#                   The Verilog path is a plain underline tab strip (free
+#                   navigation, no wizard gating, no completion ticks). The
+#                   VHDL path hands the whole panel to the embedded NGHDL
+#                   window. There is no separate "Place" stage -- Convert
+#                   already reports the KiCad library the generated symbol
+#                   lands in.
+#
+#                   Each stage reuses the existing widget unchanged. Heavy
+#                   stages (the Verilog Simulator IDE and the embedded NGHDL
+#                   window) are built lazily and guarded so a missing/broken
+#                   tool can never take the dock down.
 #
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # =========================================================================
@@ -22,173 +26,264 @@ from PyQt6 import QtCore, QtWidgets
 
 from . import Maker
 from . import NgVeri
+from .DesignBus import DesignBus
 
 
-# Stage identifiers (also the QStackedWidget order).
-AUTHOR, VERIFY, CONVERT, NGHDL, PLACE = range(5)
+# Verilog-path stage ids (also the content-stack order). NGHDL is the VHDL
+# path and lives outside this sequence.
+AUTHOR, VERIFY, CONVERT, NGHDL = range(4)
+
+VERILOG_STAGES = (AUTHOR, VERIFY, CONVERT)
+
+# Language modes for the top segmented toggle.
+VERILOG, VHDL = "verilog", "vhdl"
 
 
 class FlowNavigator(QtWidgets.QWidget):
-    """Stage-rail container for the HDL -> block workflow."""
+    """Two-path container for the HDL -> block workflow.
+
+    A language segment chooses Verilog or VHDL; the Verilog side exposes the
+    Author / Verify / Convert stages as plain tabs, the VHDL side embeds NGHDL.
+    """
 
     def __init__(self, filecount, parent=None):
         super().__init__(parent)
         self.filecount = filecount
         self._built = {}        # stage id -> True once its widget is realised
-        self._complete = set()  # stages the user has finished (rail check-mark)
+        self._mode = VERILOG    # active language path
+        self._current = AUTHOR  # active Verilog stage (kept across modes)
         self.obj_Maker = None
         self.obj_NgVeri = None
         self.obj_Verifier = None
+        # The one design every Verilog stage is a view on. Author and Verify
+        # render from / collect into it in memory; Convert materializes it to
+        # disk. The bus also watches the file for genuine external edits.
+        self.bus = DesignBus(filecount, self)
+        self.bus.externalChange.connect(self._on_external_change)
         self._build_ui()
 
     # ------------------------------------------------------------------ #
     #  Layout
     # ------------------------------------------------------------------ #
     def _build_ui(self):
-        outer = QtWidgets.QHBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Left: the flow rail.
-        self.rail = QtWidgets.QListWidget()
-        self.rail.setFixedWidth(190)
-        self.rail.setSpacing(2)
-        self.rail.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self.rail.setStyleSheet("""
-            QListWidget { background:#f4f6f8; border-right:1px solid #d0d5da;
-                          padding-top:8px; font-size:13px; }
-            QListWidget::item { padding:10px 12px; margin:1px 6px;
-                                border-radius:6px; color:#3a444e; }
-            QListWidget::item:selected { background:#1565c0; color:white;
-                                         font-weight:bold; }
-            QListWidget::item:hover:!selected { background:#e3e8ee; }
-        """)
-        self._stage_labels = [
-            "1  ·  Author", "2  ·  Verify", "3  ·  Convert",
-            "VHDL  ·  NGHDL", "4  ·  Place"]
-        hints = [
-            "Write / load your HDL module(s)",
-            "Compile and simulate (Icarus); view waveform",
-            "Build an ngspice code-model + KiCad symbol",
-            "VHDL path: author → simulate → model (GHDL)",
-            "Drop the generated block in your schematic"]
-        for label, hint in zip(self._stage_labels, hints):
-            item = QtWidgets.QListWidgetItem(label)
-            item.setToolTip(hint)
-            self.rail.addItem(item)
+        # --- Top bar -------------------------------------------------- #
+        # Left  : a segmented [ Verilog | VHDL ] language toggle (filled pill).
+        # Middle: the Verilog stage tabs (plain underline tabs, shown only in
+        #         Verilog mode -- in VHDL mode NGHDL owns the whole panel).
+        # Right : the contextual fullscreen toggle.
+        # Stages are freely clickable in any order: no chevrons, no Next
+        # button, no gating, no completion ticks. The strip is a guide, not a
+        # wizard. Styling follows eSim's own palette (neutral grey + #e65100
+        # brand orange), not the generic material blue.
+        self.tabbar = QtWidgets.QWidget()
+        self.tabbar.setObjectName("flowTabBar")
+        self.tabbar.setStyleSheet(
+            "QWidget#flowTabBar { background:#f7f8f9;"
+            " border-bottom:1px solid #d4d8dc; }")
+        tb = QtWidgets.QHBoxLayout(self.tabbar)
+        tb.setContentsMargins(10, 6, 10, 0)
+        tb.setSpacing(0)
 
-        # Right: a header + the stacked stage panels.
-        right = QtWidgets.QVBoxLayout()
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(0)
+        self._build_mode_toggle(tb)
 
-        header_bar = QtWidgets.QWidget()
-        header_bar.setStyleSheet(
-            "QWidget { background:#ffffff; border-bottom:1px solid #e0e4e8; }")
-        hb = QtWidgets.QHBoxLayout(header_bar)
-        hb.setContentsMargins(14, 6, 10, 6)
-        self.header = QtWidgets.QLabel()
-        self.header.setStyleSheet("color:#5a6570; font-size:13px;")
-        self.header.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        hb.addWidget(self.header)
-        hb.addStretch(1)
-        # One primary action per stage: advance the flow.
-        self.btn_next = QtWidgets.QPushButton("Next  ▸")
-        self.btn_next.setStyleSheet(
-            "QPushButton { background:#1565c0; color:white; border:none;"
-            " border-radius:5px; padding:5px 14px; font-weight:bold; }"
-            " QPushButton:disabled { background:#c4ccd4; }")
-        self.btn_next.clicked.connect(self._go_next)
-        hb.addWidget(self.btn_next)
-        right.addWidget(header_bar)
+        # A thin vertical divider sets the language segment apart from the
+        # stage tabs so the two controls never read as one strip.
+        divider = QtWidgets.QFrame()
+        divider.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        divider.setStyleSheet("color:#d4d8dc;")
+        tb.addSpacing(12)
+        tb.addWidget(divider)
+        tb.addSpacing(12)
 
+        self._build_stage_tabs(tb)
+
+        tb.addStretch(1)
+
+        # Contextual fullscreen toggle, in this panel's own header (not a
+        # global toolbar): fullscreen the Makerchip panel and dock it back.
+        from frontEnd.FullScreen import FullScreenToggle
+        tb.addWidget(FullScreenToggle())
+
+        outer.addWidget(self.tabbar)
+
+        # A non-modal bar shown ONLY when the design file is changed outside eSim
+        # (e.g. opened in another editor). It replaces the old modal "click
+        # Refresh" popup that fired on eSim's own writes during navigation.
+        outer.addWidget(self._build_reload_bar())
+
+        # --- Content -------------------------------------------------- #
+        # One holder per panel (Author/Verify/Convert/NGHDL). Heavy ones start
+        # empty and are swapped in on first visit (see _ensure_stage).
         self.stack = QtWidgets.QStackedWidget()
-        right.addWidget(self.stack, 1)
+        outer.addWidget(self.stack, 1)
 
-        # Stage panels in AUTHOR..PLACE order. Heavy ones start as a
-        # placeholder and are swapped in on first visit (see _ensure_stage).
         self._panels = {}
-        for stage in (AUTHOR, VERIFY, CONVERT, NGHDL, PLACE):
-            holder = QtWidgets.QStackedWidget()  # one-slot holder we can refill
+        for stage in (AUTHOR, VERIFY, CONVERT, NGHDL):
+            holder = QtWidgets.QStackedWidget()  # one-slot refillable holder
             self._panels[stage] = holder
             self.stack.addWidget(holder)
 
-        outer.addWidget(self.rail)
-        outer.addLayout(right, 1)
+        # Start on the Verilog path, Author stage.
+        self._mode_btns[VERILOG].setChecked(True)
+        self._tabs[AUTHOR].setChecked(True)
+        self._select_mode(VERILOG)
 
-        self.rail.currentRowChanged.connect(self._on_stage_changed)
-        self.rail.setCurrentRow(AUTHOR)
+    def _build_mode_toggle(self, tb):
+        """The [ Verilog | VHDL ] segmented control."""
+        self._mode_group = QtWidgets.QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._mode_btns = {}
+
+        # Per-end radii make the two buttons read as one pill.
+        base = ("QPushButton { border:1px solid #d4d8dc; background:#ffffff;"
+                " color:#5f6b75; font-size:13px; padding:8px 18px; }"
+                " QPushButton:hover { color:#2c333a; }"
+                " QPushButton:checked { background:#e65100; color:#ffffff;"
+                " border-color:#e65100; }")
+        ends = {
+            VERILOG: " QPushButton { border-top-left-radius:5px;"
+                     " border-bottom-left-radius:5px; }",
+            VHDL:    " QPushButton { border-top-right-radius:5px;"
+                     " border-bottom-right-radius:5px; border-left:none; }",
+        }
+        for mode, label, tip in (
+                (VERILOG, "Verilog", "Verilog flow: author, verify, convert"),
+                (VHDL, "VHDL", "VHDL flow: the NGHDL model creator")):
+            btn = QtWidgets.QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(tip)
+            btn.setStyleSheet(base + ends[mode])
+            self._mode_group.addButton(btn)
+            self._mode_btns[mode] = btn
+            tb.addWidget(btn)
+        self._mode_btns[VERILOG].clicked.connect(
+            lambda: self._select_mode(VERILOG))
+        self._mode_btns[VHDL].clicked.connect(
+            lambda: self._select_mode(VHDL))
+
+    def _build_stage_tabs(self, tb):
+        """The Verilog Author / Verify / Convert underline tabs."""
+        self._stage_tabs_w = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(self._stage_tabs_w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        labels = {AUTHOR: "Author", VERIFY: "Verify", CONVERT: "Convert"}
+        hints = {
+            AUTHOR:  "Write / load your Verilog module(s)",
+            VERIFY:  "Compile and simulate (Icarus); view the waveform",
+            CONVERT: "Build an ngspice code-model + KiCad symbol"}
+
+        # These are the panel's primary navigation, so they read big and bold.
+        # font-weight is kept CONSTANT (600) across states on purpose: bolding
+        # only on :checked made the selected label wider than the size hint Qt
+        # computed for the normal weight, so the text was clipped at the
+        # corners. The active stage is signalled by colour + a filled tint + a
+        # thick underline instead, which also reads as clearly important.
+        pill_qss = (
+            "QPushButton { border:none; background:transparent; color:#566069;"
+            " font-size:14px; font-weight:600; padding:10px 26px;"
+            " border-top-left-radius:6px; border-top-right-radius:6px;"
+            " border-bottom:3px solid transparent; }"
+            "QPushButton:hover { color:#2c333a; background:#eceff1; }"
+            "QPushButton:checked { color:#e65100; background:#fff3e9;"
+            " border-bottom:3px solid #e65100; }")
+
+        self._stage_group = QtWidgets.QButtonGroup(self)
+        self._stage_group.setExclusive(True)
+        self._tabs = {}
+        for stage in VERILOG_STAGES:
+            btn = QtWidgets.QPushButton(labels[stage])
+            btn.setCheckable(True)
+            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(hints[stage])
+            btn.setStyleSheet(pill_qss)
+            self._stage_group.addButton(btn, stage)
+            self._tabs[stage] = btn
+            row.addWidget(btn)
+        self._stage_group.idClicked.connect(self._goto_stage)
+        tb.addWidget(self._stage_tabs_w)
 
     # ------------------------------------------------------------------ #
-    #  Stage activation (lazy build + guard)
+    #  Mode + stage switching (lazy build + guard)
     # ------------------------------------------------------------------ #
-    def _on_stage_changed(self, stage):
-        if stage < 0:
-            return
-        self._ensure_stage(stage)
-        self.stack.setCurrentIndex(stage)
-        self._update_header(stage)
-        # Returning to Author re-arms Maker's file-watch toggle, exactly as the
-        # old tab-change signal did (the toggle thread is torn down elsewhere).
-        if stage == AUTHOR and self.obj_Maker is not None:
-            self.obj_Maker.refresh_change()
-
-    #: Linear common path (the VHDL/NGHDL branch sits outside it).
-    _LINEAR = (AUTHOR, VERIFY, CONVERT, PLACE)
-
-    def _next_stage(self, stage):
-        """The stage the Next button should advance to, or None at the end."""
-        if stage in self._LINEAR:
-            i = self._LINEAR.index(stage)
-            if i + 1 < len(self._LINEAR):
-                return self._LINEAR[i + 1]
-            return None
-        return PLACE   # from the NGHDL branch, rejoin at Place
-
-    def _go_next(self):
-        nxt = self._next_stage(self.rail.currentRow())
-        if nxt is not None:
-            self.rail.setCurrentRow(nxt)
-
-    def _update_header(self, stage):
-        crumbs = ["Author", "Verify", "Convert", "NGHDL (VHDL)", "Place"]
-        parts = []
-        for i, name in enumerate(crumbs):
-            if i == stage:
-                parts.append(f"<b>{name}</b>")
-            elif i in self._complete:
-                parts.append(f"<span style='color:#2e7d32'>✓ {name}</span>")
-            else:
-                parts.append(f"<span style='color:#9aa4ad'>{name}</span>")
-        sep = " &nbsp;&rsaquo;&nbsp; "
-        self.header.setText("Model Creation &nbsp;&mdash;&nbsp; " +
-                            sep.join(parts))
-
-        # One primary action per stage: label/disable the Next button.
-        nxt = self._next_stage(stage)
-        if nxt is None:
-            self.btn_next.setText("Done")
-            self.btn_next.setEnabled(False)
+    def _select_mode(self, mode):
+        """Switch language path. Verilog shows the stage tabs and the last
+        active stage; VHDL hides them and hands the panel to NGHDL."""
+        if mode == VHDL:
+            self._sync_out(self._current)   # flush the Verilog design first
+            self._mode = VHDL
+            self._stage_tabs_w.setVisible(False)
+            self._ensure_stage(NGHDL)
+            self.stack.setCurrentIndex(NGHDL)
         else:
-            self.btn_next.setText("Next: %s  ▸" % crumbs[nxt])
-            self.btn_next.setEnabled(True)
+            self._mode = VERILOG
+            self._stage_tabs_w.setVisible(True)
+            self._goto_stage(self._current)
 
-    def _mark_complete(self, stage):
-        """Flag a stage finished: a green ✓ in the rail + breadcrumb. Called
-        when Verify reports a clean simulation, so the user is steered to
-        Convert next (progressive disclosure)."""
-        if stage in self._complete:
-            self._update_header(self.rail.currentRow())
+    def _goto_stage(self, stage):
+        """Switch to a Verilog stage. Free navigation -- any stage, any order,
+        no gating. The one current design is carried between stages so they
+        always work on the same thing (see _sync_out / _sync_in). Safe from a
+        tab click or programmatically."""
+        if stage not in VERILOG_STAGES:
             return
-        self._complete.add(stage)
-        item = self.rail.item(stage)
-        if item is not None and not item.text().startswith("✓"):
-            item.setText("✓  " + self._stage_labels[stage])
-        self._update_header(self.rail.currentRow())
+        prev = self._current
+        self._current = stage
+        # Selecting a stage implies the Verilog path.
+        if self._mode != VERILOG:
+            self._mode = VERILOG
+            self._mode_btns[VERILOG].setChecked(True)
+            self._stage_tabs_w.setVisible(True)
+        btn = self._tabs.get(stage)
+        if btn is not None and not btn.isChecked():
+            btn.setChecked(True)
+        self._sync_out(prev)            # capture the stage we are leaving
+        self._ensure_stage(stage)
+        self._sync_in(stage)            # feed the shared design to the new one
+        self.stack.setCurrentIndex(stage)
+
+    # ------------------------------------------------------------------ #
+    #  Shared current-design model
+    #
+    #  There is ONE design, held in memory by ``self.bus`` (a DesignBus). Every
+    #  Verilog stage is a *view* on it: Author and Verify render from / collect
+    #  into it, Convert materializes it to a file at action time. Switching tabs
+    #  carries the design in memory -- no disk round-trip -- so navigating in any
+    #  order (or skipping Verify) always lands on the same current design, with
+    #  no "send"/hand-off step. Convert still reads Maker.verilogFile[filecount],
+    #  which the bus mirrors.
+    # ------------------------------------------------------------------ #
+    def _sync_out(self, stage):
+        """Collect a stage's edits into the shared design before leaving it (in
+        memory). Author streams its edits live, so only Verify needs collecting;
+        Convert never edits the source."""
+        if stage == VERIFY and self.obj_Verifier is not None:
+            try:
+                self.obj_Verifier.collect_into_bus()
+            except Exception:
+                pass
+
+    def _sync_in(self, stage):
+        """Show the shared design in the stage becoming visible. Author renders
+        live via the bus signal, so it needs nothing here; Verify re-renders;
+        Convert materializes the design to disk so its toolchain reads a current
+        file."""
+        try:
+            if stage == VERIFY and self.obj_Verifier is not None:
+                self.obj_Verifier.render_from_bus()
+            elif stage == CONVERT:
+                self.bus.materialize()
+        except Exception:
+            pass
 
     def _set_panel(self, stage, widget):
         holder = self._panels[stage]
-        # Wrap big editors in a scroll area, mirroring the old tabbed layout.
         while holder.count():
             holder.removeWidget(holder.widget(0))
         holder.addWidget(widget)
@@ -206,8 +301,6 @@ class FlowNavigator(QtWidgets.QWidget):
                 self._set_panel(CONVERT, self._scroll(self._make_convert()))
             elif stage == NGHDL:
                 self._set_panel(NGHDL, self._make_nghdl())
-            elif stage == PLACE:
-                self._set_panel(PLACE, self._make_place())
         except Exception as e:       # never let one stage take down the dock
             self._built[stage] = False
             self._set_panel(stage, self._placeholder(
@@ -221,34 +314,77 @@ class FlowNavigator(QtWidgets.QWidget):
         return area
 
     # ------------------------------------------------------------------ #
+    #  External-edit reload bar (non-modal)
+    # ------------------------------------------------------------------ #
+    def _build_reload_bar(self):
+        self._reload_bar = QtWidgets.QFrame()
+        self._reload_bar.setObjectName("reloadBar")
+        self._reload_bar.setStyleSheet(
+            "QFrame#reloadBar { background:#fff3e9;"
+            " border-bottom:1px solid #e65100; }"
+            " QLabel { color:#8a3b00; }")
+        row = QtWidgets.QHBoxLayout(self._reload_bar)
+        row.setContentsMargins(12, 6, 12, 6)
+        self._reload_label = QtWidgets.QLabel()
+        row.addWidget(self._reload_label)
+        row.addStretch(1)
+        reload_btn = QtWidgets.QPushButton("Reload")
+        reload_btn.clicked.connect(self._do_reload)
+        keep_btn = QtWidgets.QPushButton("Keep mine")
+        keep_btn.clicked.connect(self._dismiss_reload)
+        row.addWidget(reload_btn)
+        row.addWidget(keep_btn)
+        self._reload_bar.setVisible(False)
+        return self._reload_bar
+
+    def _on_external_change(self, path):
+        """The design file changed on disk outside eSim. Offer a reload instead
+        of nagging modally -- and never clobber unsaved edits automatically."""
+        import os
+        self._reload_label.setText(
+            f"⚠  {os.path.basename(path)} was changed on disk outside eSim.")
+        self._reload_bar.setVisible(True)
+
+    def _do_reload(self):
+        self._reload_bar.setVisible(False)
+        if self.bus.path:
+            self.bus.load_from_disk(self.bus.path)
+            self._sync_in(self._current)   # re-render the visible stage
+
+    def _dismiss_reload(self):
+        self._reload_bar.setVisible(False)
+
+    def closeEvent(self, event):
+        if self.bus is not None:
+            self.bus.close()
+        super().closeEvent(event)
+
+    # ------------------------------------------------------------------ #
     #  Stage factories
     # ------------------------------------------------------------------ #
     def _make_author(self):
-        """Author stage = the existing Maker widget (load .v / edit / TL-Verilog
-        + Makerchip web IDE, now just one tool among the author actions). Its
-        green 'Verilog Simulator IDE' button no longer opens a flying dialog --
-        it navigates to the Verify stage instead."""
-        self.obj_Maker = Maker.Maker(self.filecount)
-        # Hook: Maker.open_verifier defers to this instead of a QDialog.
-        self.obj_Maker._verify_hook = lambda: self.rail.setCurrentRow(VERIFY)
+        """Author stage = the existing Maker widget (load .v / edit / TLV
+        + Makerchip web IDE). Its 'Verilog Simulator IDE' button no longer
+        opens a flying dialog -- it navigates to the Verify stage instead."""
+        self.obj_Maker = Maker.Maker(self.filecount, bus=self.bus)
+        self.obj_Maker._verify_hook = lambda: self._goto_stage(VERIFY)
         return self.obj_Maker
 
     def _make_verify(self):
         """Verify stage = the Verilog Simulator IDE, embedded (no flying
-        window). Its 'Send to Makerchip' feeds the Author file model and then
-        advances the flow to Convert."""
+        window). It edits the shared current design: the Flow Navigator feeds
+        it the design on entry and collects its edits back on exit (see
+        _sync_in / _sync_out), so there is no manual 'send' step."""
         from .VerilogVerifier import VerilogVerifier
         self.obj_Verifier = VerilogVerifier()
-        self.obj_Verifier.sendToNgVeri.connect(self._on_verified)
-        # A clean simulation marks Verify done and steers toward Convert.
-        self.obj_Verifier.simulationSucceeded.connect(
-            lambda: self._mark_complete(VERIFY))
+        self.obj_Verifier.set_design_bus(self.bus)
         return self.obj_Verifier
 
     def _make_convert(self):
         """Convert stage = the existing NgVeri widget. Both convert backends --
         legacy Verilator (static Ngveri.cm) and d_cosim Icarus -- are offered
-        side by side, equal billing."""
+        side by side, equal billing. On success it reports the KiCad library
+        the symbol lands in, so there is no separate 'Place' stage."""
         self.obj_NgVeri = NgVeri.NgVeri(self.filecount)
         return self.obj_NgVeri
 
@@ -257,37 +393,6 @@ class FlowNavigator(QtWidgets.QWidget):
         and guarded exactly as before."""
         from ngspice_ghdl import Mainwindow
         return Mainwindow(embedded=True)
-
-    def _make_place(self):
-        text = (
-            "<h3>Place your generated block</h3>"
-            "<p>Once <b>Convert</b> reports success, your block is a symbol in "
-            "the eSim KiCad libraries:</p>"
-            "<ul>"
-            "<li><b>eSim_Ngveri</b> — legacy Verilator models</li>"
-            "<li><b>eSim_NgVeriCosim</b> — d_cosim (Icarus) models</li>"
-            "<li><b>eSim_Nghdl</b> — VHDL (NGHDL) models</li>"
-            "</ul>"
-            "<p>In KiCad's schematic editor, press <b>A</b> to add a symbol and "
-            "pick it from that library, wire it up, then run <b>Simulate</b> "
-            "back in eSim.</p>")
-        return self._placeholder(text, "")
-
-    # ------------------------------------------------------------------ #
-    #  Cross-stage wiring
-    # ------------------------------------------------------------------ #
-    def _on_verified(self, filepath):
-        """A design was verified and sent on: load it into the Author model
-        (so the Convert stage picks it up via the existing file flow) and jump
-        to Convert."""
-        if self.obj_Maker is not None:
-            try:
-                self.obj_Maker.load_verilog(filepath)
-            except Exception:
-                pass
-        self._mark_complete(VERIFY)   # sending implies it verified
-        self._ensure_stage(CONVERT)
-        self.rail.setCurrentRow(CONVERT)
 
     # ------------------------------------------------------------------ #
     def _placeholder(self, message, detail):
