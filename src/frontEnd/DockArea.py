@@ -73,85 +73,24 @@ class DockArea(QtWidgets.QMainWindow):
         return None
 
     def on_dock_activated(self, dock_widget):
-        """Handle when any dock becomes active."""
+        """Handle when any dock becomes active. The console is on-demand now
+        (the status bar carries the latest line), so we only auto-collapse for
+        plotting docks and never force it back open."""
         main_view = self.get_main_view_reference()
         if not main_view:
             return
-            
-        # Check if activated dock is a plotting dock
+
         if dock_widget in self.active_plotting_docks:
             main_view.collapse_console_area()
-        else:
-            main_view.restore_console_area()
 
     def apply_fullscreen_feature(self, dock_widget, original_widget):
-        """Wraps a dock's inner widget with a Fullscreen pop-out button."""
-        title = dock_widget.windowTitle()
-        wrapper = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        top_bar = QtWidgets.QHBoxLayout()
-        top_bar.addStretch()
-        fs_btn = QtWidgets.QPushButton("\U0001f5d7 Fullscreen")
-        fs_btn.setStyleSheet("""
-            QPushButton {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-                font-weight: 600;
-                color: #495057;
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 4px 12px;
-                margin: 2px 5px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-            QPushButton:pressed {
-                background-color: #dee2e6;
-            }
-        """)
-        top_bar.addWidget(fs_btn)
-
-        layout.addLayout(top_bar)
-        layout.addWidget(original_widget)
-
-        dock_widget.setWidget(wrapper)
-
-        popout_state = {"win": None}
-
-        def toggle_popout():
-            if not popout_state["win"]:
-                win = QtWidgets.QDialog(self.window())
-                win.setWindowTitle(title)
-                win.setWindowFlags(
-                    win.windowFlags()
-                    | QtCore.Qt.WindowType.WindowMaximizeButtonHint
-                    | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
-
-                win_layout = QtWidgets.QVBoxLayout(win)
-                win_layout.setContentsMargins(0, 0, 0, 0)
-                win_layout.addWidget(wrapper)
-
-                fs_btn.setText("\U0001f86e Dock to eSim")
-
-                def on_close(event):
-                    dock_widget.setWidget(wrapper)
-                    fs_btn.setText("\U0001f5d7 Fullscreen")
-                    popout_state["win"] = None
-                    event.accept()
-
-                win.closeEvent = on_close
-                popout_state["win"] = win
-                win.resize(1000, 700)
-                win.showMaximized()
-            else:
-                popout_state["win"].close()
-
-        fs_btn.clicked.connect(toggle_popout)
+        """Mount a dock's content. Fullscreen is no longer dock chrome at all:
+        it is a small per-panel control living in each working panel's own
+        header (see frontEnd.FullScreen.FullScreenToggle), so this just mounts
+        the widget and gives the dock a stable objectName."""
+        if not dock_widget.objectName():
+            dock_widget.setObjectName(dock_widget.windowTitle() or "dock")
+        dock_widget.setWidget(original_widget)
 
     def createTestEditor(self):
         """This function create widget for Library Editor"""
@@ -607,7 +546,10 @@ class DockArea(QtWidgets.QMainWindow):
             self.msg.exec()
             return
         projName = os.path.basename(projDir)
-        dockName = f'Makerchip-{projName}-'
+        # Tab/dock label, matching the launcher action "Model Creation
+        # (Verilog / VHDL)" and the sibling docks' "<Tool>-<proj>-<n>" form
+        # (Simulation-RLC-2, Plotting-RLC-3).
+        dockName = f'Model Creation-{projName}-'
 
         self.makerWidget = QtWidgets.QWidget()
         self.makerLayout = QtWidgets.QVBoxLayout()
@@ -624,11 +566,13 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(dock['Welcome'],
                               dock[dockName + str(count)])
 
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
+        # No generic '.QWidget' box here: the legacy rounded-grey border boxed
+        # every plain QWidget inside the panel (notably FlowNavigator's stage
+        # tab strip, strangling the Author/Verify/Convert selector). The
+        # FlowNavigator supplies its own header styling, so the panel sits
+        # edge-to-edge with zero margins.
+        self.makerLayout.setContentsMargins(0, 0, 0, 0)
+        self.makerLayout.setSpacing(0)
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()

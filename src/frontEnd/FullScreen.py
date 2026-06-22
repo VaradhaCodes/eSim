@@ -1,0 +1,103 @@
+# =========================================================================
+#             FILE: FullScreen.py
+#
+#      DESCRIPTION: A small, contextual "go fullscreen" control for a docked
+#                   panel. It is meant to live in the panel's OWN header
+#                   (the Makerchip flow strip, the Plotting toolbar, the
+#                   KicadToNgspice tab corner) -- never a global toolbar -- so
+#                   the affordance sits where the user is actually working and
+#                   reads as "fullscreen THIS, then dock it back".
+#
+#                   On activation it reparents the host dock's content into a
+#                   frameless top-level window and shows it *truly* fullscreen
+#                   (the whole screen, not merely the app's work area). The
+#                   same button flips to an exit affordance; Esc and F11 also
+#                   exit. Docking back returns the content to its QDockWidget,
+#                   which keeps its original tab slot.
+#
+#  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
+# =========================================================================
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+class FullScreenToggle(QtWidgets.QToolButton):
+    """Per-panel fullscreen toggle. Drop one into any panel's header; it finds
+    its host QDockWidget at click time, so no wiring is needed."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._win = None
+        self._dock = None
+        self._content = None
+        self.setAutoRaise(True)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(
+            "QToolButton { border:none; background:transparent; padding:2px 6px; }")
+        self._set_state(full=False)
+        self.clicked.connect(self.toggle)
+
+    # ------------------------------------------------------------------ #
+    def _set_state(self, full):
+        std = QtWidgets.QStyle.StandardPixmap
+        self.setIcon(self.style().standardIcon(
+            std.SP_TitleBarNormalButton if full else std.SP_TitleBarMaxButton))
+        self.setToolTip("Exit fullscreen  (Esc)" if full
+                        else "Fullscreen this panel  (Esc to exit)")
+
+    def _resolve_host(self):
+        """Walk up to the enclosing QDockWidget; the widget just beneath it is
+        the content to reparent."""
+        content = self
+        node = self.parentWidget()
+        while node is not None:
+            if isinstance(node, QtWidgets.QDockWidget):
+                return node, content
+            content = node
+            node = node.parentWidget()
+        return None, None
+
+    # ------------------------------------------------------------------ #
+    def toggle(self):
+        if self._win is not None:
+            self._exit()
+        else:
+            self._enter()
+
+    def _enter(self):
+        dock, content = self._resolve_host()
+        if dock is None or content is None:
+            return
+        self._dock, self._content = dock, content
+
+        win = QtWidgets.QWidget()
+        win.setWindowTitle(dock.windowTitle())
+        lay = QtWidgets.QVBoxLayout(win)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(content)          # reparents content out of the dock
+
+        # Esc / F11 (and an external Alt+F4) all route through the close path.
+        for key in ("Escape", "F11"):
+            sc = QtGui.QShortcut(QtGui.QKeySequence(key), win)
+            sc.activated.connect(win.close)
+        win.closeEvent = self._make_close_handler()
+
+        self._win = win
+        self._set_state(full=True)
+        win.showFullScreen()
+
+    def _make_close_handler(self):
+        def _on_close(event):
+            if self._win is not None:
+                self._win = None
+                if self._dock is not None and self._content is not None:
+                    # Back into the dock -- it kept its tab slot all along.
+                    self._dock.setWidget(self._content)
+                    self._dock.show()
+                    self._dock.raise_()
+                self._set_state(full=False)
+            event.accept()
+        return _on_close
+
+    def _exit(self):
+        if self._win is not None:
+            self._win.close()

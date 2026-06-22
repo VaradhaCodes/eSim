@@ -73,6 +73,7 @@ class Application(QtWidgets.QMainWindow):
         # Initialize all widget
         self.setCentralWidget(self.obj_Mainview)
         self.initToolBar()
+        self.initMenuAndStatus()
 
         self.setGeometry(self.obj_appconfig._app_xpos,
                          self.obj_appconfig._app_ypos,
@@ -150,6 +151,14 @@ class Application(QtWidgets.QMainWindow):
         self.topToolbar.addAction(self.wrkspce)
         self.topToolbar.addAction(self.helpfile)
         self.topToolbar.addAction(self.devdocs)
+
+        # Project Snapshots (was the left-face timeline). Inline with the other
+        # top-toolbar icons, before the spacer/logo, same size/look.
+        self.act_snapshots = QtGui.QAction(
+            QtGui.QIcon(init_path + 'images/history.png'),
+            '<b>Project Snapshots</b>', self)
+        self.act_snapshots.triggered.connect(self.show_snapshots)
+        self.topToolbar.addAction(self.act_snapshots)
 
         # ## This part is meant for SoC Generation which is currently  ##
         # ## under development and will be will be required in future. ##
@@ -258,6 +267,47 @@ class Application(QtWidgets.QMainWindow):
         self.lefttoolbar.addAction(self.conToeSim)
         self.lefttoolbar.setOrientation(QtCore.Qt.Orientation.Vertical)
         self.lefttoolbar.setIconSize(QSize(40, 40))
+
+    def initMenuAndStatus(self):
+        """No menu bar -- eSim is icon-driven. The snapshots panel is a
+        top-toolbar icon (added in initToolBar), and the full console log
+        toggles from a status-bar button while the status bar shows the latest
+        log line."""
+        # Status bar: mirrors the newest print_info/warning/error line; the
+        # button toggles the full console log panel.
+        bar = self.statusBar()
+        self.obj_appconfig.__class__.statusbar = bar
+        self.btn_log = QtWidgets.QToolButton()
+        self.btn_log.setText('Console Log  ▴')
+        self.btn_log.setCheckable(True)
+        self.btn_log.setAutoRaise(True)
+        self.btn_log.setToolTip('Show / hide the full console log')
+        self.btn_log.toggled.connect(self._toggle_console_btn)
+        bar.addPermanentWidget(self.btn_log)
+        bar.showMessage('eSim ready')
+
+    def _toggle_console_btn(self, show):
+        self.obj_Mainview.toggle_console(show)
+        self.btn_log.setText('Console Log  ▾' if show else 'Console Log  ▴')
+
+    def show_snapshots(self):
+        """Open the Project Snapshots (timeline) panel on demand. It used to
+        occupy the left face; now it is a non-modal dialog parented to the main
+        window (so it can never hide behind it)."""
+        te = self.obj_Mainview.obj_timeExplorer
+        dlg = getattr(self, '_snap_dlg', None)
+        if dlg is None:
+            dlg = QtWidgets.QDialog(self)
+            dlg.setWindowTitle('Project Snapshots')
+            lay = QtWidgets.QVBoxLayout(dlg)
+            lay.setContentsMargins(0, 0, 0, 0)
+            dlg.resize(360, 480)
+            self._snap_dlg = dlg
+        # (Re)mount the kept TimeExplorer instance into the dialog.
+        dlg.layout().addWidget(te)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def plotFlagPopBox(self):
         """This function displays a pop-up box with message- Do you want Ngspice plots? and oprions Yes and NO.
@@ -844,11 +894,13 @@ class MainView(QtWidgets.QWidget):
         self.middleContainerLayout.addWidget(self.middleSplit)
         self.middleContainer.setLayout(self.middleContainerLayout)
 
-        # Adding content of left split
+        # Adding content of left split. The TimeExplorer (snapshots) used to
+        # sit here under the project tree; it now lives in the View menu
+        # (Application.show_snapshots), so the project tree gets the full
+        # column. The instance is still created above and kept loaded.
         self.leftPanel = QtWidgets.QVBoxLayout()
         self.leftPanelWidget = QtWidgets.QWidget()
         self.leftPanel.addWidget(self.obj_projectExplorer)
-        self.leftPanel.addWidget(self.obj_timeExplorer)
         self.leftPanelWidget.setLayout(self.leftPanel)
         self.leftSplit.addWidget(self.leftPanelWidget)
         self.leftSplit.addWidget(self.middleContainer)
@@ -856,23 +908,33 @@ class MainView(QtWidgets.QWidget):
         # Adding to main Layout
         self.mainLayout.addWidget(self.leftSplit)
         self.leftSplit.setSizes([int(self.width() / 4.5), self.height()])
-        self.middleSplit.setSizes([self.width(), int(self.height() / 2)])
+        # Console starts collapsed: the dock area owns the full work height and
+        # the status bar carries the latest message. Expand on demand via the
+        # View menu / status-bar log button (toggle_console).
+        self.collapse_console_area()
         self.setLayout(self.mainLayout)
 
     def collapse_console_area(self):
-        """Collapse the console area to minimal height."""
-        current_sizes = self.middleSplit.sizes()
-        total_height = sum(current_sizes)
-        minimal_console_height = 0
-        dock_area_height = total_height - minimal_console_height
-        self.middleSplit.setSizes([dock_area_height, minimal_console_height])
+        """Collapse the console panel; the dock area takes the full height."""
+        total = sum(self.middleSplit.sizes()) or self.height()
+        self.middleSplit.setSizes([total, 0])
 
     def restore_console_area(self):
-        """Restore the console area to normal height."""
-        total_height = sum(self.middleSplit.sizes())
-        dock_area_height = int(total_height * 0.7)  # 70% for dock area
-        console_height = total_height - dock_area_height  # 30% for console
-        self.middleSplit.setSizes([dock_area_height, console_height])
+        """Expand the console panel to ~28% of the work-area height."""
+        total = sum(self.middleSplit.sizes()) or self.height()
+        console = int(total * 0.28)
+        self.middleSplit.setSizes([total - console, console])
+
+    def is_console_visible(self):
+        sizes = self.middleSplit.sizes()
+        return len(sizes) > 1 and sizes[1] > 4
+
+    def toggle_console(self, show):
+        """Show/hide the full console log panel (View menu / status bar)."""
+        if show:
+            self.restore_console_area()
+        else:
+            self.collapse_console_area()
 
 
 # It is main function of the module and starts the application

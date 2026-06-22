@@ -373,6 +373,13 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         toolbar_row.addWidget(self.nav_toolbar)
         toolbar_row.addWidget(_fig_btn)
         toolbar_row.addWidget(self._focus_btn)
+        toolbar_row.addStretch(1)
+        # Contextual fullscreen toggle (panel header, not a global toolbar):
+        # fullscreen this plotting panel and dock it back.
+        from frontEnd.FullScreen import FullScreenToggle
+        self._fs_btn = FullScreenToggle()
+        self._fs_btn.setFixedSize(_tb_h, _tb_h)
+        toolbar_row.addWidget(self._fs_btn)
         center_layout.addLayout(toolbar_row)
         # Wrap canvas in QScrollArea so stacked-view with many panes scrolls
         # vertically instead of squashing every signal to ~30 pixels. Canvas

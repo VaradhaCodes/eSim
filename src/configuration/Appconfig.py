@@ -77,6 +77,10 @@ class Appconfig(QtWidgets.QWidget):
 
     noteArea = {"Note": []}
 
+    #: Set by Application to its QStatusBar. print_* mirror their latest line
+    #: here so the full console panel can stay collapsed by default.
+    statusbar = None
+
     parser_esim = ConfigParser()
     parser_esim.read(
         os.path.join(user_home, '.esim', 'config.ini')
@@ -160,12 +164,25 @@ class Appconfig(QtWidgets.QWidget):
 
     def print_info(self, info):
         self.noteArea['Note'].append('[INFO]: ' + info)
+        self._echo_status('[INFO]: ' + info)
 
     def print_warning(self, warning):
         self.noteArea['Note'].append('[WARNING]: ' + warning)
+        self._echo_status('[WARNING]: ' + warning)
 
     def print_error(self, error):
         self.noteArea['Note'].append('[ERROR]: ' + error)
+        self._echo_status('[ERROR]: ' + error)
+
+    def _echo_status(self, msg):
+        """Mirror the newest log line to the status bar (if Application has
+        wired one), so the bottom console panel can stay collapsed."""
+        bar = Appconfig.statusbar
+        if bar is not None:
+            try:
+                bar.showMessage(' '.join(msg.split()), 0)
+            except RuntimeError:        # bar was destroyed (app closing)
+                Appconfig.statusbar = None
 
     def save_current_project(self):
         try:
