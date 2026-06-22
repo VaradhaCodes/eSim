@@ -11,6 +11,12 @@ from configparser import ConfigParser
 from Appconfig import Appconfig
 from createKicadLibrary import AutoSchematic
 from model_generation import ModelGeneration
+# Vendored, byte-identical copies of eSim's helpers (drift-guarded by tests).
+# NGHDL is packaged separately and must never import eSim, so the model
+# removal here uses these local copies, exactly as the symbol writer does.
+import kicad_symlib
+import model_teardown
+from RemoveItemsDialog import RemoveItemsDialog
 
 
 class Mainwindow(QtWidgets.QWidget):
@@ -69,8 +75,18 @@ class Mainwindow(QtWidgets.QWidget):
         self.browsebtn.clicked.connect(self.browseFile)
         self.addbtn = QtWidgets.QPushButton('Add Files')
         self.addbtn.clicked.connect(self.addFiles)
-        self.removebtn = QtWidgets.QPushButton('Remove Files')
+        # "Remove Supporting File" un-stages a dependency .vhdl from the
+        # pre-upload list -- it does NOT uninstall a built model. Model
+        # uninstall is the separate "Remove Models" button below.
+        self.removebtn = QtWidgets.QPushButton('Remove Supporting File')
+        self.removebtn.setToolTip(
+            "Un-stage a dependency .vhdl from the upload list above. "
+            "Does NOT uninstall an installed model -- use 'Remove Models'.")
         self.removebtn.clicked.connect(self.removeFiles)
+        self.removemodelbtn = QtWidgets.QPushButton('Remove Models')
+        self.removemodelbtn.setToolTip(
+            "Uninstall one or more NGHDL models created on this machine.")
+        self.removemodelbtn.clicked.connect(self.openRemoveModels)
         self.ledit = QtWidgets.QLineEdit(self)
         self.ledit.setPlaceholderText("Path to .vhdl file")
         self.sedit = QtWidgets.QTextEdit(self)
@@ -96,6 +112,9 @@ class Mainwindow(QtWidgets.QWidget):
         # button is only shown in the standalone window.
         if not self.embedded:
             optionsgrid.addWidget(self.exitbtn, 1, 3)
+        # Model uninstall sits on its own row so it reads as a distinct action
+        # from the upload/staging buttons above.
+        optionsgrid.addWidget(self.removemodelbtn, 2, 0, 1, 4)
         optionsbox.setLayout(optionsgrid)
 
         filesbox = QtWidgets.QGroupBox("Supporting files")
@@ -166,6 +185,130 @@ class Mainwindow(QtWidgets.QWidget):
     def removeFiles(self):
         self.fileRemover = FileRemover(self)
 
+    # ------------------------------------------------------------------ #
+    #  NGHDL model uninstall. Mirrors eSim's NgVeri._remove_nghdl_model
+    #  against the ghdl/ tree, but uses NGHDL's OWN vendored helpers
+    #  (model_teardown + kicad_symlib) so it works standalone, without
+    #  importing eSim.
+    # ------------------------------------------------------------------ #
+    def _ghdl_home(self):
+        '''<DIGITAL_MODEL>/ghdl -- where per-model source dirs and the NGHDL
+        modpath.lst live (same value createModelDirectory computes).'''
+        return os.path.join(
+            self.parser.get('NGHDL', 'DIGITAL_MODEL'), "ghdl")
+
+    def _list_nghdl_models(self):
+        '''Installed NGHDL model names, from ghdl/modpath.lst -- the
+        authoritative, always-present list of what ngspice has linked.'''
+        modpath = os.path.join(self._ghdl_home(), "modpath.lst")
+        try:
+            with open(modpath) as f:
+                return sorted({ln.strip() for ln in f if ln.strip()})
+        except OSError:
+            return []
+
+    def openRemoveModels(self):
+        '''Open the checkbox remover listing only NGHDL models and tear down
+        whatever the user picks.'''
+        proc = getattr(self, "process", None)
+        if proc is not None and proc.state() != QtCore.QProcess.ProcessState.NotRunning:
+            QtWidgets.QMessageBox.information(
+                self, "Remove Models",
+                "A build is in progress. Please wait for it to finish.")
+            return
+        names = self._list_nghdl_models()
+        if not names:
+            QtWidgets.QMessageBox.information(
+                self, "Remove Models", "There are no NGHDL models to remove.")
+            return
+        # Same searchable, multi-select picker the eSim NgVeri tab uses, so the
+        # remove-model UX is uniform across the app. Badge every row "Nghdl" for
+        # the shared colour legend; the dialog only collects the choice, the
+        # teardown still happens in _remove_nghdl_models.
+        dlg = RemoveItemsDialog(
+            "Remove NGHDL Models", names,
+            badges={name: "Nghdl" for name in names},
+            item_noun="model", parent=self)
+        if dlg.exec():
+            self._remove_nghdl_models(dlg.selected_items())
+
+    def _remove_nghdl_models(self, names):
+        '''Tear down each selected NGHDL model -- ghdl/modpath.lst line,
+        eSim_Nghdl KiCad symbol, Nghdl/<name>.xml, and the source + release
+        per-model dirs -- then rebuild ghdl.cm once so ngspice unlinks them.'''
+        ghdl_home = self._ghdl_home()
+        xml_loc = Appconfig.xml_loc
+        removed_any = False
+        for text in names:
+            if not text or not str(text).strip():
+                continue
+            self.termedit.append('Removing NGHDL model "' + str(text) + '"')
+
+            # Drop from ghdl/modpath.lst (absent file/line => no crash).
+            if model_teardown._strip_modpath_line(
+                    os.path.join(ghdl_home, "modpath.lst"), text):
+                self.termedit.append('  dropped from ghdl/modpath.lst')
+
+            # Strip the symbol + the orphan param XML (both idempotent).
+            try:
+                sym_path = model_teardown._nghdl_sym_path(self.src_home)
+                parts = kicad_symlib._read_parts(sym_path)
+                if parts.pop(str(text), None) is not None:
+                    kicad_symlib._write_lib(sym_path, parts)
+                    self.termedit.append('  removed eSim_Nghdl symbol')
+                xml = os.path.join(xml_loc, 'Nghdl', str(text) + '.xml')
+                try:
+                    os.remove(xml)
+                    self.termedit.append('  removed Nghdl/' + str(text) +
+                                         '.xml')
+                except FileNotFoundError:
+                    pass
+            except Exception as err:
+                self.termedit.append("  WARN: symbol/XML removal failed: " +
+                                     str(err))
+
+            # Drop both per-model dirs (guarded against blank/unsafe names).
+            for label, base in (
+                    ("source", ghdl_home),
+                    ("release", os.path.join(
+                        self.release_dir, "src/xspice/icm/ghdl"))):
+                model_dir = model_teardown._safe_model_subdir(base, text)
+                if model_dir is None:
+                    self.termedit.append("  WARN: refusing unsafe " + label +
+                                         " dir for " + repr(text))
+                    continue
+                try:
+                    shutil.rmtree(model_dir)
+                    self.termedit.append("  removed " + label + " dir")
+                except FileNotFoundError:
+                    pass
+                except OSError as err:
+                    self.termedit.append("  WARN: could not remove " + label +
+                                         " dir: " + str(err))
+            removed_any = True
+
+        if removed_any:
+            self._rebuild_ghdl_cm()
+
+    def _rebuild_ghdl_cm(self):
+        '''Rebuild + reinstall ghdl.cm so ngspice unlinks every model already
+        stripped from ghdl/modpath.lst. Prune ghost lines first (a single
+        orphaned entry makes cmpp abort the whole build), then reuse the async
+        make chain in rebuild-only mode (no schematic symbol is created).'''
+        ghdl_home = self._ghdl_home()
+        dropped = model_teardown._prune_modpath(
+            os.path.join(ghdl_home, "modpath.lst"), ghdl_home)
+        for name in dropped:
+            self.termedit.append('Pruned stale model "' + name +
+                                 '" from ghdl/modpath.lst (build dir missing).')
+        # runMake/_createSchematicLib reference these; set them so the rebuild
+        # path never depends on a prior uploadModel() having run.
+        self.cur_dir = os.getcwd()
+        self.errorFlag = False
+        self.uploadbtn.setEnabled(False)
+        self.termedit.append("Rebuilding ghdl.cm ...")
+        self.runMake(rebuild_only=True)
+
     # Check extensions of all supporting files
     def checkSupportFiles(self):
         nonvhdl_count = 0
@@ -204,8 +347,21 @@ class Mainwindow(QtWidgets.QWidget):
             )
             if ret == QtWidgets.QMessageBox.StandardButton.Ok:
                 print("Overwriting existing model " + self.modelname)
-                shutil.rmtree(model_path, ignore_errors=True)
-                os.mkdir(model_path)
+                # A real rmtree (errors surfaced, not swallowed): a partial
+                # failure left by ignore_errors=True keeps the dir alive and
+                # the following mkdir then crashes with FileExistsError. Abort
+                # cleanly instead, and makedirs(exist_ok=True) so a stray race
+                # can't re-trigger that crash.
+                try:
+                    shutil.rmtree(model_path)
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    QtWidgets.QMessageBox.critical(
+                        self, "Error",
+                        "Could not overwrite the existing model: " + str(e))
+                    return False
+                os.makedirs(model_path, exist_ok=True)
             else:
                 print("Model creation cancelled by user")
                 return False
@@ -322,8 +478,12 @@ class Mainwindow(QtWidgets.QWidget):
             self.errorFlag = True
         self.termedit.append(str(stderror.data(), encoding='utf-8'))
 
-    def runMake(self):
+    def runMake(self, rebuild_only=False):
         print("run Make Called")
+        # rebuild_only=True is the post-removal path: build+install the icm
+        # tree to refresh ghdl.cm, but skip the schematic-symbol creation in
+        # _createSchematicLib (there is no new model to draw a symbol for).
+        self._rebuild_only = rebuild_only
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         # Keep the icm path so make/make install run there via QProcess's
         # own working directory - we never chdir eSim's process into it.
@@ -406,6 +566,15 @@ class Mainwindow(QtWidgets.QWidget):
                 os.chdir(_cwd)
 
         os.chdir(self.cur_dir)
+        # Post-removal rebuild: ghdl.cm is refreshed (copied on nt / installed
+        # on posix); there is no model to draw, so skip symbol creation.
+        if getattr(self, "_rebuild_only", False):
+            self.termedit.append("ghdl.cm rebuilt.")
+            self._rebuild_only = False
+            self.uploadbtn.setEnabled(True)
+            self.exitbtn.setEnabled(True)
+            self.removemodelbtn.setEnabled(True)
+            return
         if Appconfig.esimFlag == 1:
             if not self.errorFlag:
                 print('Creating library files................................')

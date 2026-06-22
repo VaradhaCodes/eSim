@@ -1,14 +1,17 @@
 """Tests for the NGHDL (GHDL) model-removal core.
 
-The teardown logic lives in maker.model_teardown as pure, dependency-free
-functions (NgVeri.py itself drags in Qt + hdlparse, so it is not importable in
-a bare test env). These tests pin the irreversible bits -- modpath line strip,
-ghost prune, backend resolution, the blank/`..` rmtree guard -- plus an
-end-to-end add->remove->add->remove cycle that composes those helpers with the
-shared kicad_symlib symbol writer exactly as NgVeri._remove_nghdl_model does.
+The teardown logic lives in model_teardown as pure, dependency-free functions
+(the GUI callers drag in Qt + hdlparse, so they are not importable in a bare
+test env). These tests pin the irreversible bits -- modpath line strip, ghost
+prune, backend resolution, the blank/`..` rmtree guard -- plus an end-to-end
+add->remove->add->remove cycle that composes those helpers with the shared
+kicad_symlib symbol writer exactly as the NGHDL app's _remove_nghdl_models
+does. The model_teardown module is byte-identical between src/maker and
+nghdl/src (drift-guarded below), so this one suite covers both copies.
 
 All pure file ops: no GHDL, ngspice, Qt, or NGHDL install required.
 """
+import filecmp
 import os
 import shutil
 
@@ -157,7 +160,7 @@ def _add(env, name):
 
 
 def _remove(env, name):
-    """Replicate NgVeri._remove_nghdl_model using the same helpers."""
+    """Replicate the NGHDL app's _remove_nghdl_models using the same helpers."""
     sym, xml_dir, mp, ghdl, rel = env
     mt._strip_modpath_line(mp, name)
     parts = ksym._read_parts(sym)
@@ -206,3 +209,47 @@ def test_add_remove_cycle_is_clean(tmp_path):
         assert not any(_present(env, "churn").values())
         # bystander intact throughout
         assert all(_present(env, "keeper").values())
+
+
+# ── drift guard: eSim canonical == NGHDL vendored copy ──────────────────────
+
+def test_vendored_teardown_is_byte_identical():
+    canonical = mt.__file__
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(canonical)))
+    vendored = os.path.join(repo_root, "nghdl", "src", "model_teardown.py")
+    assert os.path.exists(vendored), (
+        "NGHDL vendored copy missing: " + vendored)
+    assert filecmp.cmp(canonical, vendored, shallow=False), (
+        "src/maker/model_teardown.py and nghdl/src/model_teardown.py have "
+        "drifted; edit one and copy it verbatim to the other.")
+
+
+def _repo_root():
+    return os.path.dirname(os.path.dirname(os.path.dirname(mt.__file__)))
+
+
+def test_vendored_remove_dialog_is_byte_identical():
+    # The searchable remove-model picker is shared with the NGHDL standalone app
+    # by vendoring (it cannot import eSim). Its dual-layout Dialogs import keeps
+    # both copies truly identical, so a plain byte compare guards the drift.
+    root = _repo_root()
+    canonical = os.path.join(root, "src", "maker", "RemoveItemsDialog.py")
+    vendored = os.path.join(root, "nghdl", "src", "RemoveItemsDialog.py")
+    assert os.path.exists(vendored), (
+        "NGHDL vendored copy missing: " + vendored)
+    assert filecmp.cmp(canonical, vendored, shallow=False), (
+        "src/maker/RemoveItemsDialog.py and nghdl/src/RemoveItemsDialog.py "
+        "have drifted; edit one and copy it verbatim to the other.")
+
+
+def test_vendored_dialogs_is_byte_identical():
+    # RemoveItemsDialog needs Dialogs.warning; NGHDL has no configuration pkg,
+    # so Dialogs.py (PyQt6-only) is vendored beside it for the flat-import path.
+    root = _repo_root()
+    canonical = os.path.join(root, "src", "configuration", "Dialogs.py")
+    vendored = os.path.join(root, "nghdl", "src", "Dialogs.py")
+    assert os.path.exists(vendored), (
+        "NGHDL vendored copy missing: " + vendored)
+    assert filecmp.cmp(canonical, vendored, shallow=False), (
+        "src/configuration/Dialogs.py and nghdl/src/Dialogs.py have drifted; "
+        "edit one and copy it verbatim to the other.")
