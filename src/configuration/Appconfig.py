@@ -206,3 +206,34 @@ class Appconfig(QtWidgets.QWidget):
         except Exception as e:
             print("Error: ", str(e))
         return None
+
+    def load_preferences(self):
+        """Return the persisted Aurora theme preferences, with safe defaults
+        when ~/.esim/preferences.json is absent or unreadable."""
+        prefs = {"theme_mode": "System", "accent_color": "default",
+                 "secondary_accent_color": "system",
+                 "internal_bg_color": "system"}
+        try:
+            path = os.path.join(self.user_home, ".esim", "preferences.json")
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    prefs.update(json.load(f))
+        except Exception as e:
+            print("Error loading preferences: ", str(e))
+        return prefs
+
+    def save_preferences(self, theme_mode, accent_color,
+                         secondary_accent_color="system",
+                         internal_bg_color="system"):
+        """Persist the Aurora theme preferences to ~/.esim/preferences.json."""
+        try:
+            path = os.path.join(self.user_home, ".esim", "preferences.json")
+            with open(path, "w") as f:
+                json.dump({
+                    "theme_mode": theme_mode,
+                    "accent_color": accent_color,
+                    "secondary_accent_color": secondary_accent_color,
+                    "internal_bg_color": internal_bg_color,
+                }, f, indent=2)
+        except Exception as e:
+            print("Failed to save preferences:", str(e))

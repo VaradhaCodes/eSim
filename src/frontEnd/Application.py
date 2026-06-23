@@ -145,6 +145,18 @@ class Application(QtWidgets.QMainWindow):
         self.devdocs.setShortcut('Ctrl+D')
         self.devdocs.triggered.connect(self.dev_docs)
 
+        # Preferences: Aurora theme (Dark/Light/System) + accent picker.
+        # Gear icon is theme-aware; theme_utils.apply_theme also refreshes it.
+        from frontEnd.icon_paths import settings_icon
+        self.preferences_action = QtGui.QAction(
+            settings_icon(), '<b>Preferences</b>', self
+        )
+        self.preferences_action.setShortcut('Ctrl+,')
+        self.preferences_action.setToolTip(
+            'Preferences (Ctrl+,) — theme & accent'
+        )
+        self.preferences_action.triggered.connect(self.open_preferences)
+
         self.topToolbar = self.addToolBar('Top Tool Bar')
         self.topToolbar.setObjectName('topToolbar')
         self.topToolbar.addAction(self.newproj)
@@ -153,6 +165,7 @@ class Application(QtWidgets.QMainWindow):
         self.topToolbar.addAction(self.wrkspce)
         self.topToolbar.addAction(self.helpfile)
         self.topToolbar.addAction(self.devdocs)
+        self.topToolbar.addAction(self.preferences_action)
 
         # Project Snapshots (was the left-face timeline). Inline with the other
         # top-toolbar icons, before the spacer/logo, same size/look.
@@ -498,6 +511,13 @@ class Application(QtWidgets.QMainWindow):
         self.obj_appconfig.print_info('DevDocs is called')
         print("Current Project is : ", self.obj_appconfig.current_project)
         webbrowser.open("https://esim.readthedocs.io/en/latest/index.html")
+
+    def open_preferences(self):
+        """Open the Aurora Preferences dialog (theme + accent picker). The
+        dialog live-applies via app.apply_theme(), wired in main()."""
+        from frontEnd.PreferencesDialog import PreferencesDialog
+        dlg = PreferencesDialog(self)
+        dlg.exec()
 
     @QtCore.pyqtSlot(QtCore.QProcess.ExitStatus, int)
     def plotSimulationData(self, exitStatus, exitCode):
@@ -852,10 +872,22 @@ def main(args):
     app = QtWidgets.QApplication(args)
     app.setApplicationName("eSim")
 
-    # Aurora design system: apply the global theme once, before any widgets
-    # are built. Guarded so a theming failure can never block app startup.
+    # Aurora design system: attach a bound apply_theme to the app instance so
+    # the Preferences dialog can live-apply, theme once before widgets build,
+    # and follow OS light/dark changes. Guarded so theming cannot block startup.
     try:
-        theme_utils.apply_theme(app)
+        def _apply_theme(*_args):
+            theme_utils.apply_theme(app)
+        app.apply_theme = _apply_theme
+        _apply_theme()
+        QtGui.QGuiApplication.styleHints().colorSchemeChanged.connect(_apply_theme)
+        # Bundled Inter font for the Aurora type scale (QSS has fallbacks).
+        font_path = os.path.join(
+            os.path.dirname(__file__), '..', '..', 'images', 'fonts',
+            'Inter-VariableFont_slnt,wght.ttf'
+        )
+        if os.path.exists(font_path):
+            QtGui.QFontDatabase.addApplicationFont(font_path)
     except Exception as e:
         print("Theme load failed, continuing unthemed:", str(e))
 
