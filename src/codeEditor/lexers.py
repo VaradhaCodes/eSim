@@ -287,6 +287,41 @@ class SpiceLexer(QsciLexerCustom):
         return after < n and line[after] == "="
 
 
+# SystemVerilog keywords the stock QScintilla Verilog lexer (whose primary
+# keyword set is Verilog-2001 era) doesn't know, so ``logic``, ``always_ff``,
+# the SV integer types, ``typedef``/``enum``/``struct`` etc. would otherwise
+# render as plain identifiers.  Scoped to synthesizable RTL constructs (this
+# tool's domain); verification/OOP keywords (class, assert, constraint, …) are
+# deliberately omitted so they can't recolour identifiers in legacy code.
+_SYSTEMVERILOG_KEYWORDS = (
+    "logic bit byte int shortint longint shortreal void chandle string "
+    "enum struct union packed typedef var const ref "
+    "always_ff always_comb always_latch final "
+    "unique unique0 priority iff inside "
+    "foreach return break continue do "
+    "interface endinterface modport package endpackage program endprogram "
+    "import export extern timeunit timeprecision"
+)
+
+
+class VerilogLexer(QsciLexerVerilog):
+    """Verilog/SystemVerilog lexer with a refreshed keyword set.
+
+    The stock primary keyword set predates SystemVerilog and also ships a
+    data defect (``endprimitiveendspecify`` with no separating space, so
+    neither word is recognised).  This repairs that join and folds in the
+    common SystemVerilog keywords on top of whatever QScintilla ships.
+    """
+
+    def keywords(self, kset):
+        if kset == 1:                       # primary keyword set (style 5)
+            base = super().keywords(kset) or ""
+            base = base.replace(
+                "endprimitiveendspecify", "endprimitive endspecify")
+            return base + " " + _SYSTEMVERILOG_KEYWORDS
+        return super().keywords(kset)
+
+
 def language_for(file_path):
     """Return a short language label for *file_path*."""
     ext = _ext(file_path)
@@ -326,7 +361,7 @@ def make_lexer(file_path, font, parent=None):
     if lang == "SPICE":
         lexer = SpiceLexer(parent)
     elif lang == "Verilog":
-        lexer = QsciLexerVerilog(parent)
+        lexer = VerilogLexer(parent)
     elif lang == "VHDL":
         lexer = QsciLexerVHDL(parent)
 

@@ -46,6 +46,12 @@ class FlowNavigator(QtWidgets.QWidget):
     Author / Verify / Convert stages as plain tabs, the VHDL side embeds NGHDL.
     """
 
+    #: re-emitted from the Verify stage's VerilogVerifier.waveformReady so the
+    #: host (DockArea) can give the plot its own full-width eSim tab. The signal
+    #: exists on the navigator from construction even though the verifier is
+    #: built lazily, so the host can connect once when the dock is created.
+    waveformRequested = QtCore.pyqtSignal(object)
+
     def __init__(self, filecount, parent=None):
         super().__init__(parent)
         self.filecount = filecount
@@ -248,6 +254,12 @@ class FlowNavigator(QtWidgets.QWidget):
         self._sync_in(stage)            # feed the shared design to the new one
         self.stack.setCurrentIndex(stage)
 
+    def goto_verify(self):
+        """Bring the Verify stage forward. Used by the waveform tab's 'Back to
+        Verify' control so closing/leaving the plot lands on the editor that
+        produced it (not whatever stage happens to be current)."""
+        self._goto_stage(VERIFY)
+
     # ------------------------------------------------------------------ #
     #  Shared current-design model
     #
@@ -378,6 +390,8 @@ class FlowNavigator(QtWidgets.QWidget):
         from .VerilogVerifier import VerilogVerifier
         self.obj_Verifier = VerilogVerifier()
         self.obj_Verifier.set_design_bus(self.bus)
+        # Bubble the waveform up to the host so it docks as its own eSim tab.
+        self.obj_Verifier.waveformReady.connect(self.waveformRequested)
         return self.obj_Verifier
 
     def _make_convert(self):

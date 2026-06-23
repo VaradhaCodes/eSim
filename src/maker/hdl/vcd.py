@@ -71,8 +71,11 @@ def parse_vcd_for_plot(vcd_content):
             if line.startswith('$var'):
                 parts = line.split()
                 if len(parts) >= 5:
+                    try:
+                        size = int(parts[2])
+                    except ValueError:
+                        continue          # malformed $var; skip, don't abort
                     var_type = parts[1]
-                    size = int(parts[2])
                     symbol = parts[3]
                     name = parts[4]
                     vars_map[symbol] = {'name': name, 'size': size, 'type': var_type}
@@ -82,24 +85,37 @@ def parse_vcd_for_plot(vcd_content):
                   or line.startswith('$dumpall')):
                 in_header = False
 
-        if not in_header or line.startswith('#') or (line and line[0] in '01zZxXbB'):
-            if line.startswith('#'):
+        if not in_header or line.startswith('#') or (line and line[0] in '01zZxXbBrR'):
+            first = line[0]
+            if first == '#':
                 if current_changes:
                     time_series.append((current_time, current_changes.copy()))
                     current_changes.clear()
-                current_time = int(line[1:])
-            else:
-                if line[0] in 'bB':
-                    parts = line.split()
-                    val = parts[0][1:]
-                    symbol = parts[1]
-                    current_changes[symbol] = val
-                    symbol_to_val[symbol] = val
-                else:
-                    val = line[0]
-                    symbol = line[1:]
-                    current_changes[symbol] = val
-                    symbol_to_val[symbol] = val
+                try:
+                    current_time = int(line[1:])
+                except ValueError:
+                    continue          # tolerate a malformed time marker
+            elif first in 'bBrR':
+                # Vector ('b1010 sym') or real ('r3.14 sym') value change.
+                # Reals were previously dropped entirely: their leading 'r'
+                # wasn't in the dispatch set, so a $var real signal stayed 'x'
+                # for the whole run.
+                parts = line.split()
+                if len(parts) < 2:
+                    continue          # malformed change line; skip
+                val = parts[0][1:]
+                symbol = parts[1]
+                current_changes[symbol] = val
+                symbol_to_val[symbol] = val
+            elif first in '01xXzZ':
+                # Scalar change: '<value><identifier>'. Restricting to real
+                # value chars keeps stray header tail lines ($dumpall, $end…)
+                # from being mis-parsed as a change of a bogus symbol.
+                symbol = line[1:]
+                if not symbol:
+                    continue
+                current_changes[symbol] = first
+                symbol_to_val[symbol] = first
 
     if current_changes:
         time_series.append((current_time, current_changes.copy()))
@@ -140,6 +156,14 @@ def parse_vcd_for_plot(vcd_content):
             if raw_val in ('x', 'X', 'z', 'Z'):
                 formatted_val = raw_val
                 dec_val = 0
+            elif info.get('type') == 'real':
+                # Real values are decimal floats, not base-2 — plot the float
+                # and show it verbatim (format_vcd_val would mangle it to 0/hex).
+                try:
+                    dec_val = float(raw_val)
+                except ValueError:
+                    dec_val = 0
+                formatted_val = raw_val
             else:
                 formatted_val = format_vcd_val(raw_val, size, name)
                 try:
@@ -156,3 +180,35 @@ def parse_vcd_for_plot(vcd_content):
     signal_types = {info['name']: info['type'] for info in vars_map.values()}
 
     return timestamps, signals_data, signal_types, raw_signals_data, timescale
+
+
+def to_csv(timestamps, raw_signals, timescale="Time"):
+    """Render parsed waveform data as CSV text.
+
+    Pure counterpart of the IDE's Export CSV (the GUI only picks a path and
+    writes the string). Column order: clk/clock/reset/rst first, then the rest
+    alphabetically. Consecutive rows whose signal values are unchanged are
+    collapsed, but the first and last samples are always emitted so the trace's
+    start and end are never lost.
+
+    ``raw_signals`` maps signal name -> per-timestamp value list (the
+    ``raw_signals_data`` returned by :func:`parse_vcd_for_plot`).
+    """
+    all_signals = list(raw_signals.keys())
+    priority = [s for s in ('clk', 'clock', 'reset', 'rst') if s in all_signals]
+    signals = priority + sorted(s for s in all_signals if s not in priority)
+
+    timescale_norm = re.sub(r'\s+', '', timescale or "Time")
+    lines = [','.join([f"Time ({timescale_norm})"] + signals)]
+
+    last_vals = None
+    total = len(timestamps)
+    for i, t in enumerate(timestamps):
+        row_vals = [str(raw_signals[s][i]) for s in signals]
+        is_last = (i == total - 1)
+        if last_vals is not None and row_vals == last_vals and not is_last:
+            continue
+        last_vals = row_vals
+        lines.append(','.join([str(t)] + row_vals))
+
+    return '\n'.join(lines) + '\n'

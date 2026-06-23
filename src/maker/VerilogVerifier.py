@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -11,6 +12,7 @@ WIN_MIN = QtCore.Qt.WindowType.WindowMinimizeButtonHint
 ORIENT_HORIZ = QtCore.Qt.Orientation.Horizontal
 FONT_BOLD = QtGui.QFont.Weight.Bold
 TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
+TOOLBTN_INSTANT = QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
 
 import numpy as np
 from ngspiceSimulation.plot_window import plotWindow
@@ -27,13 +29,22 @@ from codeEditor import lexers, theme
 try:
     from . import CosimConfig
     from .hdl import icarus, jobs
-    from .hdl.vcd import parse_vcd_for_plot
-    from .hdl.ports import extract_ports, generate_stub_testbench
+    from .hdl.vcd import parse_vcd_for_plot, to_csv
+    from .hdl.ports import (extract_ports, generate_stub_testbench,
+                            order_modules, strip_comments)
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
     from maker.hdl import icarus, jobs
-    from maker.hdl.vcd import parse_vcd_for_plot
-    from maker.hdl.ports import extract_ports, generate_stub_testbench
+    from maker.hdl.vcd import parse_vcd_for_plot, to_csv
+    from maker.hdl.ports import (extract_ports, generate_stub_testbench,
+                                 order_modules, strip_comments)
+
+# Wall-clock caps for the toolchain so a runaway testbench (e.g. a clock with
+# no $finish) can't hang the worker thread indefinitely. Generous: this tool's
+# designs are small, so a compile/sim that blows these is almost always a stuck
+# run, not a slow one. The user can still Cancel sooner.
+COMPILE_TIMEOUT_S = 60
+SIM_TIMEOUT_S = 120
 
 class VcdPlotWindow(plotWindow):
     def __init__(self, timestamps, signals_data, signal_types, project_name="Verilog Simulation", parent=None):
@@ -224,6 +235,12 @@ class VerilogVerifier(QtWidgets.QWidget):
     #: (Flow Navigator) can mark Verify complete and nudge toward Convert.
     simulationSucceeded = QtCore.pyqtSignal()
 
+    #: emitted with a freshly-built VcdPlotWindow when a run produces a
+    #: waveform. The host (Flow Navigator -> DockArea) gives the plot a real,
+    #: full-width home as its own eSim dock tab, instead of cramming it into the
+    #: bottom split. Carries the plot widget; the host owns/parents it.
+    waveformReady = QtCore.pyqtSignal(object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -242,6 +259,14 @@ class VerilogVerifier(QtWidgets.QWidget):
         self._active_job = None
         self._active_cancel = None
         self._busy_buttons = []
+        # Temp dir of the in-flight run, tracked so it can be reaped even if the
+        # stage is torn down mid-run (the done/fail closures may never fire).
+        self._active_tmpdir = None
+        # Filled by _design_sources at each compile: the on-disk source name
+        # iverilog will echo in diagnostics -> the editor that holds it. Lets
+        # error highlighting / jump-to-line survive labels the diagnostic regex
+        # can't carry (spaces, parens — e.g. a duplicate-disambiguated tab).
+        self._compile_editors = {}
 
         self.init_ui()
 
@@ -336,20 +361,14 @@ class VerilogVerifier(QtWidgets.QWidget):
             self.unlock_ui()
 
     def lock_ui(self):
-        self.editor_tabs.setEnabled(False)
-        self.btn_load_source.setEnabled(False)
-        self.btn_load_tb.setEnabled(False)
-        self.btn_save_file.setEnabled(False)
-        self.btn_save_as.setEnabled(False)
-        self.btn_syntax.setEnabled(False)
-        self.btn_stub.setEnabled(False)
-        self.btn_simulate.setEnabled(False)
-        self.btn_add_module.setEnabled(False)
-        self.btn_auto_detect.setEnabled(False)
-        self.hierarchy_list.setEnabled(False)
-        
+        # Disable every editing/build/run affordance in one sweep (buttons,
+        # menu actions and the F5 shortcut all share setEnabled); the only live
+        # control is "Locate Icarus Verilog".
+        for w in self._lockable:
+            w.setEnabled(False)
+
         self.btn_unlock.setVisible(True)
-        
+
         msg = (
             "Icarus Verilog Dependency Missing\n"
             "---------------------------------\n"
@@ -366,25 +385,17 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console.setStyleSheet("QTextEdit { background-color: #f8d7da; color: #721c24; padding: 10px; border: 1px solid #f5c6cb; font-family: Consolas, monospace; font-size: 11pt; }")
 
     def unlock_ui(self):
-        self.editor_tabs.setEnabled(True)
-        self.btn_load_source.setEnabled(True)
-        self.btn_load_tb.setEnabled(True)
-        self.btn_save_file.setEnabled(True)
-        self.btn_save_as.setEnabled(True)
-        self.btn_syntax.setEnabled(True)
-        self.btn_stub.setEnabled(True)
-        self.btn_simulate.setEnabled(True)
-        self.btn_add_module.setEnabled(True)
-        self.btn_auto_detect.setEnabled(True)
-        self.hierarchy_list.setEnabled(True)
-        
+        for w in self._lockable:
+            w.setEnabled(True)
+
         self.btn_unlock.setVisible(False)
-        
+
         self.console.clear()
         self.console.setStyleSheet(
-            "QTextEdit { background-color: #fcfcfc; color: #495057; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; font-family: Consolas, monospace; font-size: 11pt; }"
+            "QTextEdit { background-color: #ffffff; color: #24292E; "
+            "border: 1px solid #dee2e6; padding: 8px; }"
         )
-        self.log("System Unlocked. Icarus Verilog detected.")
+        self.log("Icarus Verilog found. Tools ready.")
 
     def init_ui(self):
         self.setStyleSheet("""
@@ -408,6 +419,47 @@ class VerilogVerifier(QtWidgets.QWidget):
             QPushButton:pressed {
                 background-color: #dee2e6;
                 border-color: #adb5bd;
+            }
+            QPushButton#primaryAction {
+                background-color: #198754;
+                border: 1px solid #157347;
+                color: #ffffff;
+            }
+            QPushButton#primaryAction:hover {
+                background-color: #157347;
+                border-color: #146c43;
+                color: #ffffff;
+            }
+            QPushButton#primaryAction:pressed {
+                background-color: #146c43;
+                border-color: #13653f;
+            }
+            QPushButton#primaryAction:disabled {
+                background-color: #a3cfbb;
+                border-color: #a3cfbb;
+                color: #f8f9fa;
+            }
+            QToolButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 6px;
+                padding: 6px 22px 6px 16px;
+                color: #495057;
+                font-weight: 600;
+                font-size: 13px;
+            }
+            QToolButton:hover {
+                background-color: #e9ecef;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+            QToolButton:disabled {
+                color: #adb5bd;
+            }
+            QToolButton::menu-indicator {
+                subcontrol-position: right center;
+                subcontrol-origin: padding;
+                right: 8px;
             }
             QTabWidget::pane {
                 border: 1px solid #dee2e6;
@@ -472,49 +524,6 @@ class VerilogVerifier(QtWidgets.QWidget):
         top_layout = QtWidgets.QVBoxLayout(top_container)
         top_layout.setContentsMargins(0, 0, 0, 0)
         
-        def setup_popout(widget_to_pop, parent_container, insert_index=0, title="", extra_widgets=None):
-            popout_btn = QtWidgets.QPushButton("🗗 Fullscreen")
-            popout_btn.setStyleSheet("font-weight: bold; color: #444444; padding: 2px 6px; border: 1px solid transparent;")
-            popout_btn.setFlat(True)
-            if isinstance(widget_to_pop, QtWidgets.QTabWidget):
-                if extra_widgets:
-                    corner_widget = QtWidgets.QWidget()
-                    layout = QtWidgets.QHBoxLayout(corner_widget)
-                    layout.setContentsMargins(0, 0, 0, 0)
-                    for w in extra_widgets:
-                        layout.addWidget(w)
-                    layout.addWidget(popout_btn)
-                    widget_to_pop.setCornerWidget(corner_widget)
-                else:
-                    widget_to_pop.setCornerWidget(popout_btn)
-                
-            popout_state = {"win": None}
-            
-            def toggle_popout():
-                if not popout_state["win"]:
-                    win = QtWidgets.QDialog(self.window())
-                    win.setWindowTitle(title)
-                    win.setWindowFlags(win.windowFlags() | WIN_MAX | WIN_MIN)
-                    layout = QtWidgets.QVBoxLayout(win)
-                    layout.setContentsMargins(0, 0, 0, 0)
-                    layout.addWidget(widget_to_pop)
-                    popout_btn.setText("🡮 Dock to IDE")
-                    
-                    def on_close(event):
-                        parent_container.insertWidget(insert_index, widget_to_pop)
-                        popout_btn.setText("🗗 Fullscreen")
-                        popout_state["win"] = None
-                        event.accept()
-                        
-                    win.closeEvent = on_close
-                    popout_state["win"] = win
-                    win.resize(1000, 700)
-                    win.showMaximized()
-                else:
-                    popout_state["win"].close()
-                    
-            popout_btn.clicked.connect(toggle_popout)
-
         top_h_splitter = QtWidgets.QSplitter(ORIENT_HORIZ)
         top_layout.addWidget(top_h_splitter)
         
@@ -563,57 +572,20 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_add_module.setFlat(True)
         self.btn_add_module.clicked.connect(self.add_module_tab)
         corner_layout.addWidget(self.btn_add_module)
-        
-        self.popout_btn = QtWidgets.QPushButton("🗗 Fullscreen")
-        self.popout_btn.setStyleSheet("""
-            QPushButton {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-                font-weight: 600;
-                color: #495057;
-                background-color: transparent;
-                border: 1px solid transparent;
-                border-radius: 4px;
-                padding: 4px 10px;
-                margin: 2px 4px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #ced4da;
-                color: #212529;
-            }
-        """)
-        corner_layout.addWidget(self.popout_btn)
-        
+
+        # No per-widget "Fullscreen" pop-out here: the whole Model Creation
+        # panel already has a native fullscreen toggle in the Flow Navigator
+        # header, and the waveform now opens as its own full-width eSim tab
+        # (see waveformReady), so the editor never needs a popout crutch.
         self.editor_tabs.setCornerWidget(corner_widget)
-        
-        # Override setup_popout to use our existing button
-        popout_state = {"win": None}
-        def toggle_popout():
-            if not popout_state["win"]:
-                win = QtWidgets.QDialog(self.window())
-                win.setWindowTitle("Verilog Code Editor")
-                win.setWindowFlags(win.windowFlags() | WIN_MAX | WIN_MIN)
-                layout = QtWidgets.QVBoxLayout(win)
-                layout.setContentsMargins(0, 0, 0, 0)
-                layout.addWidget(self.editor_tabs)
-                self.popout_btn.setText("🡮 Dock to IDE")
-                
-                def on_close(event):
-                    top_h_splitter.insertWidget(1, self.editor_tabs)
-                    self.popout_btn.setText("🗗 Fullscreen")
-                    popout_state["win"] = None
-                    event.accept()
-                    
-                win.closeEvent = on_close
-                popout_state["win"] = win
-                win.resize(1000, 700)
-                win.showMaximized()
-            else:
-                popout_state["win"].close()
-        self.popout_btn.clicked.connect(toggle_popout)
 
         top_h_splitter.addWidget(self.editor_tabs)
-        top_h_splitter.setSizes([200, 800])
+        # The editor is the work surface; the hierarchy sidebar stays a slim,
+        # fixed companion. Stretch 0/1 means every pixel of a wider window goes
+        # to the editor, not the sidebar. Sidebar is still drag-collapsible.
+        top_h_splitter.setStretchFactor(0, 0)
+        top_h_splitter.setStretchFactor(1, 1)
+        top_h_splitter.setSizes([180, 820])
 
         # Design editor (Module 1)
         self.design_views = []
@@ -632,37 +604,79 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.update_tb_tab_name()
 
         
-        # Controls panel under editors
+        # Controls panel under editors. Two zones, like a real IDE's build bar:
+        # file actions fold into one "File" menu on the left (they're occasional
+        # and keyboard-driven); the right cluster holds the build/run actions a
+        # user actually touches every cycle, ending in the primary Simulate.
         controls_layout = QtWidgets.QHBoxLayout()
         top_layout.addLayout(controls_layout)
-        
-        self.btn_load_source = QtWidgets.QPushButton("Load Source .v")
-        self.btn_load_source.clicked.connect(self.load_source_files)
-        controls_layout.addWidget(self.btn_load_source)
-        
-        self.btn_load_tb = QtWidgets.QPushButton("Load TB .v")
-        self.btn_load_tb.clicked.connect(self.load_tb_file)
-        controls_layout.addWidget(self.btn_load_tb)
-        
-        self.btn_save_file = QtWidgets.QPushButton("Save")
-        self.btn_save_file.clicked.connect(self.save_file)
-        controls_layout.addWidget(self.btn_save_file)
-        
-        self.btn_save_as = QtWidgets.QPushButton("Save As")
-        self.btn_save_as.clicked.connect(self.save_as_file)
-        controls_layout.addWidget(self.btn_save_as)
-        
+
+        # --- File menu: open/save/export, demoted off the main bar -----------
+        # These are QActions so the same object carries the menu entry, its
+        # keyboard shortcut, and its enabled state (one source of truth for the
+        # lock flow). Standard editor shortcuts so power users never open it.
+        self.act_open_source = QtGui.QAction("Open Source .v…", self)
+        self.act_open_source.setShortcut(QtGui.QKeySequence.StandardKey.Open)
+        self.act_open_source.triggered.connect(self.load_source_files)
+
+        self.act_open_tb = QtGui.QAction("Open Testbench .v…", self)
+        self.act_open_tb.triggered.connect(self.load_tb_file)
+
+        self.act_save = QtGui.QAction("Save", self)
+        self.act_save.setShortcut(QtGui.QKeySequence.StandardKey.Save)
+        self.act_save.triggered.connect(self.save_file)
+
+        self.act_save_as = QtGui.QAction("Save As…", self)
+        self.act_save_as.setShortcut(QtGui.QKeySequence.StandardKey.SaveAs)
+        self.act_save_as.triggered.connect(self.save_as_file)
+
+        # Export is rare and only meaningful after a sim; it lives in the menu,
+        # disabled until a run produces data (see render_waveform / export_csv).
+        self.act_export_csv = QtGui.QAction("Export Waveform CSV…", self)
+        self.act_export_csv.triggered.connect(self.export_csv)
+        self.act_export_csv.setEnabled(False)
+
+        file_menu = QtWidgets.QMenu(self)
+        file_menu.addAction(self.act_open_source)
+        file_menu.addAction(self.act_open_tb)
+        file_menu.addSeparator()
+        file_menu.addAction(self.act_save)
+        file_menu.addAction(self.act_save_as)
+        file_menu.addSeparator()
+        file_menu.addAction(self.act_export_csv)
+        # The shortcuts must fire from anywhere in the panel, not only while the
+        # (collapsed) menu is open, so attach the actions to the widget too.
+        self.addActions([self.act_open_source, self.act_open_tb,
+                         self.act_save, self.act_save_as])
+
+        self.file_button = QtWidgets.QToolButton()
+        self.file_button.setText("File")
+        self.file_button.setMenu(file_menu)
+        self.file_button.setPopupMode(TOOLBTN_INSTANT)
+        controls_layout.addWidget(self.file_button)
+
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.Shape.VLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        controls_layout.addWidget(sep)
+
+        # --- Build-prep actions (visible, secondary) -------------------------
         self.btn_syntax = QtWidgets.QPushButton("Check Syntax")
         self.btn_syntax.clicked.connect(self.check_syntax)
         controls_layout.addWidget(self.btn_syntax)
-        
+
         self.btn_stub = QtWidgets.QPushButton("Auto-Generate Testbench")
         self.btn_stub.clicked.connect(self.auto_generate_tb)
         controls_layout.addWidget(self.btn_stub)
-        
-        self.btn_simulate = QtWidgets.QPushButton("Simulate")
-        self.btn_simulate.clicked.connect(self.simulate_and_wave)
-        controls_layout.addWidget(self.btn_simulate)
+
+        # Push the run cluster to the right edge -- the eye lands on Simulate.
+        controls_layout.addStretch(1)
+
+        # Shown only when iverilog can't be found; lets the user point at it.
+        self.btn_unlock = QtWidgets.QPushButton("Locate Icarus Verilog…")
+        self.btn_unlock.clicked.connect(self.attempt_manual_unlock)
+        self.btn_unlock.setVisible(False)
+        controls_layout.addWidget(self.btn_unlock)
 
         # Shown only while a compile/sim runs on the worker thread; clicking it
         # kills the underlying iverilog/vvp process via the active CancelToken.
@@ -671,21 +685,32 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_cancel.setVisible(False)
         controls_layout.addWidget(self.btn_cancel)
 
-        self.btn_export_csv = QtWidgets.QPushButton("Export CSV")
-        self.btn_export_csv.clicked.connect(self.export_csv)
-        self.btn_export_csv.setEnabled(False)
-        controls_layout.addWidget(self.btn_export_csv)
-        
+        # The primary action: accented and right-anchored. F5 = run, the near-
+        # universal "go" key, so it works without reaching for the mouse.
+        self.btn_simulate = QtWidgets.QPushButton("▶  Simulate")
+        self.btn_simulate.setObjectName("primaryAction")
+        self.btn_simulate.clicked.connect(self.simulate_and_wave)
+        controls_layout.addWidget(self.btn_simulate)
+
+        self.sc_simulate = QtGui.QShortcut(QtGui.QKeySequence("F5"), self)
+        self.sc_simulate.activated.connect(self.simulate_and_wave)
+
         # No "Send to Makerchip" button: the design is shared with the Author
         # and Convert stages through the Flow Navigator, which syncs it
         # automatically on tab switch (see render_from_bus / collect_into_bus).
         # There is nothing to hand off.
 
-        self.btn_unlock = QtWidgets.QPushButton("Locate Icarus Verilog...")
-        self.btn_unlock.clicked.connect(self.attempt_manual_unlock)
-        self.btn_unlock.setVisible(False)
-        controls_layout.addWidget(self.btn_unlock)
-        
+        # Single source of truth for the iverilog lock: everything that must be
+        # dead while the toolchain is missing. QWidgets, QActions and QShortcut
+        # all share setEnabled(), so one loop in lock_ui/unlock_ui covers them.
+        self._lockable = [
+            self.editor_tabs, self.hierarchy_list, self.btn_add_module,
+            self.btn_auto_detect, self.btn_syntax, self.btn_stub,
+            self.btn_simulate, self.file_button, self.sc_simulate,
+            self.act_open_source, self.act_open_tb,
+            self.act_save, self.act_save_as,
+        ]
+
         main_splitter.addWidget(top_container)
         
         # Find/Replace Toolbar
@@ -720,14 +745,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
         shortcut.activated.connect(self.show_find_toolbar)
         
-        # 2. Bottom widget containing console log and Waveform viewer
-        bottom_container = QtWidgets.QWidget()
-        bottom_layout = QtWidgets.QHBoxLayout(bottom_container)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
-        
-        bottom_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        bottom_layout.addWidget(bottom_splitter)
-        
+        # 2. Bottom band: the console log. The waveform used to live beside it
+        #    in a horizontal split; it now opens as its own full-width eSim tab
+        #    (waveformReady), so the console is this band's only child and goes
+        #    straight into the splitter -- no wrapper container needed.
         # Console output styled like Vivado TCL Console
         self.console_tabs = QtWidgets.QTabWidget()
         self.console = ConsoleEdit()
@@ -735,40 +756,51 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console.setPlaceholderText("Console logs will appear here...\nDouble-click a syntax error (e.g. design.v:5: error) to jump directly to the line.")
         self.console.setFont(QtGui.QFont("Consolas", 11))
         self.console.error_clicked.connect(self.jump_to_error)
-        self.console.setStyleSheet("""
-            QTextEdit {
-                background-color: #0c101f;
-                color: #39ff14;
-                border: 1px solid #2d3548;
-                padding: 8px;
-            }
-        """)
+        self.console.setStyleSheet(
+            "QTextEdit { background-color: #ffffff; color: #24292E; "
+            "border: 1px solid #dee2e6; padding: 8px; }"
+        )
         self.console_tabs.addTab(self.console, "Console Output")
-        bottom_splitter.addWidget(self.console_tabs)
-        
+
+        # Copy lives in the console tab's corner now that there is no popout bar.
         self.btn_copy_console = QtWidgets.QPushButton("📋 Copy")
         self.btn_copy_console.setFlat(True)
         self.btn_copy_console.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(self.console.toPlainText()))
-        
-        setup_popout(self.console_tabs, bottom_splitter, 0, "Verilog Console Output", extra_widgets=[self.btn_copy_console])
-        
-        # Inline Waveform viewer (native eSim plotWindow)
-        self.wave_tabs = QtWidgets.QTabWidget()
-        self.load_empty_waveform()
-        bottom_splitter.addWidget(self.wave_tabs)
-        setup_popout(self.wave_tabs, bottom_splitter, 1, "Waveform Viewer")
-        
-        main_splitter.addWidget(bottom_container)
-        
-        main_splitter.setSizes([450, 250])
-        bottom_splitter.setSizes([400, 400])
-        
+        self.console_tabs.setCornerWidget(self.btn_copy_console)
+
+        main_splitter.addWidget(self.console_tabs)
+
+        # Editor dominates; the console keeps a calm, roughly-fixed band and the
+        # editor absorbs all extra height as the window grows (Vivado/VS Code
+        # behaviour). Stretch factors -- not magic pixels -- drive the resize;
+        # the initial split only seeds a sensible ~3:1 starting proportion.
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 0)
+        main_splitter.setSizes([600, 200])
+
         # Check for Icarus Verilog on boot and lock if missing
         self.check_iverilog_lock()
+
+    def _unique_tab_name(self, name):
+        """Disambiguate a tab label so no two design tabs share one. Tab labels
+        are the keys the hierarchy list and get_design_code match on, so a
+        collision (e.g. loading two ``top.v`` from different folders) would
+        otherwise drop a module. ``foo.v`` -> ``foo (2).v``."""
+        existing = {self.editor_tabs.tabText(i)
+                    for i in range(self.editor_tabs.count())}
+        if name not in existing:
+            return name
+        stem, dot, ext = name.rpartition('.')
+        base, suffix = (stem, '.' + ext) if dot else (name, '')
+        n = 2
+        while f"{base} ({n}){suffix}" in existing:
+            n += 1
+        return f"{base} ({n}){suffix}"
 
     def add_module_tab(self, name=None, content="", filepath=None):
         if not name:
             name = f"module_{len(self.design_views) + 1}.v"
+        name = self._unique_tab_name(name)
 
         # Name the editor after the tab so the lexer (Verilog vs VHDL) is chosen
         # from its extension, matching the project code editor.
@@ -914,62 +946,49 @@ class VerilogVerifier(QtWidgets.QWidget):
             self.hierarchy_list.setItemWidget(item, widget)
 
     def auto_detect_hierarchy(self):
-        import re
-        
-        modules = {}
+        # Order the design tabs top-down (a module before the modules it
+        # instantiates). The heuristic -- comment/string stripping, balanced
+        # #(...) param overrides, duplicate-name and cycle tolerance -- lives in
+        # the pure, tested ``order_modules``; this method only feeds it the tab
+        # labels + code and renders the result.
+        named_codes = []
         for i in range(self.editor_tabs.count()):
-            if self.editor_tabs.widget(i) not in getattr(self, 'design_views', []):
+            widget = self.editor_tabs.widget(i)
+            if widget not in getattr(self, 'design_views', []):
                 continue
-            name = self.editor_tabs.tabText(i)
-            editor = self.editor_tabs.widget(i)
-            code = editor.toPlainText()
-            
-            # Find module definition name
-            match = re.search(r'module\s+(\w+)\s*[\(#]', code)
-            mod_name = match.group(1) if match else name
-            
-            modules[name] = {
-                'mod_name': mod_name,
-                'code': code,
-                'dependencies': set()
-            }
-            
-        # Find instantiations
-        for name, data in modules.items():
-            for other_name, other_data in modules.items():
-                if name == other_name: continue
-                # Very simple heuristic: if other module's name appears as a word in this code
-                # and isn't the module definition itself
-                if re.search(rf'\b{other_data["mod_name"]}\b\s+\w+', data['code']):
-                    data['dependencies'].add(other_name)
-                    
-        # Topological sort
-        sorted_names = []
-        visited = set()
-        
-        def visit(n):
-            if n in visited: return
-            visited.add(n)
-            for dep in modules[n]['dependencies']:
-                visit(dep)
-            sorted_names.insert(0, n)
-            
-        for name in modules.keys():
-            visit(name)
-            
-        self.update_hierarchy_list(sorted_names)
+            named_codes.append((self.editor_tabs.tabText(i),
+                                widget.toPlainText()))
+        if not named_codes:
+            self.update_hierarchy_list([])
+            return
+        self.update_hierarchy_list(order_modules(named_codes))
 
     def log(self, text):
-        self.console.append(text)
-        self.console.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+        """Append a tool status line in muted text."""
+        cursor = self.console.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        fmt = QtGui.QTextCharFormat()
+        fmt.setForeground(QtGui.QColor("#555555"))
+        cursor.insertText(text.rstrip("\n") + "\n", fmt)
+        self.console.setTextCursor(cursor)
+        self.console.ensureCursorVisible()
 
-    def load_empty_waveform(self):
-        if hasattr(self, 'btn_export_csv'):
-            self.btn_export_csv.setEnabled(False)
-        self.wave_tabs.clear()
-        placeholder = QtWidgets.QLabel("No Waveform Data Available")
-        placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.wave_tabs.addTab(placeholder, "Waveform Viewer")
+    def log_sim(self, text):
+        """Append raw simulator output at full text contrast."""
+        cursor = self.console.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        fmt = QtGui.QTextCharFormat()
+        fmt.setForeground(QtGui.QColor("#24292E"))
+        cursor.insertText(text.rstrip("\n") + "\n", fmt)
+        self.console.setTextCursor(cursor)
+        self.console.ensureCursorVisible()
+
+    def clear_waveform_state(self):
+        """Reset the 'have waveform data' state. The plot itself now lives in a
+        separate eSim tab owned by the host, so there is no inline view to
+        clear -- only the Export CSV affordance to disable."""
+        if hasattr(self, 'act_export_csv'):
+            self.act_export_csv.setEnabled(False)
 
     def get_current_editor(self):
         return self.editor_tabs.currentWidget()
@@ -1002,29 +1021,35 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.find_next()
 
     def jump_to_error(self, line_num, filename):
-        """Jump to the error line, searching all tabs by their exact label (basename match).
+        """Jump to the error line for the source iverilog named.
 
-        Since simulate_and_wave now writes each module as its own named file,
-        iverilog error output will contain the actual tab label (e.g. alu.v:3:).
-        We do a clean two-step lookup: exact label match first, then canonical
-        testbench alias, then give up without falling back to design_views[0].
+        Resolve the editor by the compile-time source name first (what the
+        diagnostic actually carries — sanitised, possibly unlike the visible
+        label), then the exact tab label, then the canonical testbench aliases.
+        Give up rather than fall back to design_views[0]: a wrong jump is worse
+        than no jump.
         """
         editor = None
         tab_idx = -1
         basename = os.path.basename(filename)
 
-        # Step 1: exact tab label match (handles any module filename)
-        for i in range(self.editor_tabs.count()):
-            label = self.editor_tabs.tabText(i)
-            if label == basename:
-                editor = self.editor_tabs.widget(i)
-                tab_idx = i
-                break
+        # Step 1: the compile-time name map (what iverilog actually echoes —
+        # sanitised, so it may differ from the visible tab label).
+        editor = getattr(self, '_compile_editors', {}).get(basename)
 
-        # Step 2: canonical testbench aliases that iverilog may use
+        # Step 2: exact tab label match (handles any module filename)
+        if editor is None:
+            for i in range(self.editor_tabs.count()):
+                if self.editor_tabs.tabText(i) == basename:
+                    editor = self.editor_tabs.widget(i)
+                    break
+
+        # Step 3: canonical testbench aliases that iverilog may use
         if editor is None and basename in ('tb.v', 'tb_design.v'):
             editor = self.tb_view
-            tab_idx = self.editor_tabs.indexOf(self.tb_view)
+
+        if editor is not None:
+            tab_idx = self.editor_tabs.indexOf(editor)
 
         # Do not fall back to design_views[0] — a wrong jump is worse than no jump
         if editor is None:
@@ -1041,19 +1066,18 @@ class VerilogVerifier(QtWidgets.QWidget):
             v.clear_error_highlights()
         self.tb_view.clear_error_highlights()
 
-        # Build a map of tab_label -> editor for all design tabs + testbench
-        tab_editors = {}
-        for i in range(self.editor_tabs.count()):
-            w = self.editor_tabs.widget(i)
-            label = self.editor_tabs.tabText(i)
-            tab_editors[label] = w
-        # Also register canonical compile names used by iverilog for testbench.
-        # Note: 'design.v' is intentionally NOT registered here — since simulate_and_wave
-        # and check_syntax both write per-tab named files, no error should ever reference
-        # the generic 'design.v'. If it appears, it is from old code paths and should not
-        # silently redirect to design_views[0].
+        # Map the on-disk source name iverilog echoes -> the editor holding it.
+        # _compile_editors is authoritative (it IS the name written at compile
+        # time, sanitised so the regex below can carry it). Tab labels are added
+        # only as a fallback; 'design.v' is intentionally NOT registered — both
+        # run paths write per-tab named files, so a generic 'design.v' would be
+        # stale and must not silently redirect to design_views[0].
+        tab_editors = dict(getattr(self, '_compile_editors', {}))
         tab_editors['tb.v'] = self.tb_view
         tab_editors['tb_design.v'] = self.tb_view
+        for i in range(self.editor_tabs.count()):
+            tab_editors.setdefault(self.editor_tabs.tabText(i),
+                                   self.editor_tabs.widget(i))
 
         matches = re.finditer(r'([\w./-]+\.(?:v|sv)):(\d+):', log_text)
         for match in matches:
@@ -1071,25 +1095,38 @@ class VerilogVerifier(QtWidgets.QWidget):
         hints = []
         log_lower = log_text.lower()
         if "syntax error" in log_lower:
-            hints.append("💡 Hint (Syntax Error): You might be missing a semicolon (;), misspelled a keyword, or forgot an 'endmodule'.")
+            hints.append("note: check for missing ';', misspelled keyword, or unclosed module")
         if "unknown module type" in log_lower:
-            hints.append("💡 Hint (Unknown Module): You instantiated a module that hasn't been defined. Check for typos or ensure all required modules are present.")
+            hints.append("note: module instantiated but not defined — check spelling and that all source files are loaded")
         if "is not a valid l-value" in log_lower:
-            hints.append("💡 Hint (Invalid L-Value): You cannot assign to a 'wire' inside an 'always' block (use a 'reg' instead). Or you tried to use a 'reg' in an 'assign' statement.")
+            hints.append("note: cannot drive a wire from an 'always' block; declare as 'reg', or use 'assign' for combinational logic")
         if "undeclared identifier" in log_lower or "not declared" in log_lower:
-            hints.append("💡 Hint (Undeclared Identifier): You forgot to declare a 'wire' or 'reg' for a signal, or there is a typo in its name.")
+            hints.append("note: signal used but not declared — add a 'wire' or 'reg' declaration")
         if "unconnected" in log_lower and "port" in log_lower:
-            hints.append("💡 Hint (Unconnected Port): A port on a module instance is left unconnected. This might be intentional, but double check your port mappings.")
+            hints.append("note: unconnected port on module instance — verify port map is complete")
         if "expecting" in log_lower and "endmodule" in log_lower:
-            hints.append("💡 Hint (Expecting Endmodule): Your module structure is incomplete. Make sure every 'module' has a matching 'endmodule'.")
+            hints.append("note: incomplete module structure — every 'module' must have a matching 'endmodule'")
         if "multiple drivers" in log_lower:
-            hints.append("💡 Hint (Multiple Drivers): You are trying to assign a value to the same signal from more than one place (like two 'always' blocks, or an 'always' block and an 'assign').")
-            
-        if hints:
-            self.log("\n--- AI Syntax Analysis & Hints ---")
-            for hint in hints:
-                self.log(hint)
+            hints.append("note: signal driven from multiple sources — check for conflicting 'always' blocks or 'assign' statements")
 
+        if hints:
+            self.log("Diagnostics:")
+            for hint in hints:
+                self.log("  " + hint)
+
+
+    @staticmethod
+    def _read_text(filepath):
+        """Read an HDL source file as text. Prefers UTF-8 but falls back to
+        latin-1 (which can't raise on byte content) so a file saved in a legacy
+        encoding loads -- mojibake the user can see and fix beats a hard failure
+        and an empty tab."""
+        with open(filepath, 'rb') as f:
+            raw = f.read()
+        try:
+            return raw.decode('utf-8')
+        except UnicodeDecodeError:
+            return raw.decode('latin-1')
 
     def load_source_files(self):
         filepaths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open Verilog Source Files", "", "Verilog Files (*.v *.sv);;All Files (*)")
@@ -1102,8 +1139,7 @@ class VerilogVerifier(QtWidgets.QWidget):
 
             for filepath in filepaths:
                 try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        code = f.read()
+                    code = self._read_text(filepath)
                     name = os.path.basename(filepath)
                     self.add_module_tab(name, code, filepath=filepath)
                     self.log(f"Loaded source file: {name}")
@@ -1114,8 +1150,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         filepath, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open Verilog Testbench File", "", "Verilog Files (*.v *.sv);;All Files (*)")
         if filepath:
             try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    code = f.read()
+                code = self._read_text(filepath)
                 self.tb_view.setPlainText(code)
                 self.tb_view.filepath = filepath
                 self.editor_tabs.setCurrentIndex(self.editor_tabs.count() - 1)
@@ -1125,7 +1160,9 @@ class VerilogVerifier(QtWidgets.QWidget):
 
     def update_tb_tab_name(self):
         import re
-        text = self.tb_view.toPlainText()
+        # Strip comments/strings first so a 'module' word in a banner comment
+        # can't rename the tab (the same hijack extract_ports now guards against).
+        text = strip_comments(self.tb_view.toPlainText())
         match = re.search(r'\bmodule\s+(\w+)', text)
         idx = self.editor_tabs.indexOf(self.tb_view)
         if match:
@@ -1166,22 +1203,24 @@ class VerilogVerifier(QtWidgets.QWidget):
             except Exception as e:
                 self.log(f"Failed to save file: {e}")
 
-    def render_waveform(self, timestamps, signals_data, signal_types, popup=False):
+    def render_waveform(self, timestamps, signals_data, signal_types):
         self.current_timestamps = timestamps
         self.current_signals_data = signals_data
         self.current_signal_types = signal_types
-        
+
         if not timestamps or not signals_data:
-            self.load_empty_waveform()
+            self.clear_waveform_state()
             return
-            
-        # Instantiate the native eSim plotWindow adapted for VCD
-        self.plot_window = VcdPlotWindow(timestamps, signals_data, signal_types, "Verilog Simulation", self)
-        
-        self.wave_tabs.clear()
-        self.wave_tabs.addTab(self.plot_window, "Waveform Viewer")
-        
-        self.btn_export_csv.setEnabled(True)
+
+        # Build the native eSim plotWindow adapted for VCD, parentless: the host
+        # (Flow Navigator -> DockArea) takes ownership when it docks the plot as
+        # its own full-width tab, so the verifier keeps no reference that could
+        # dangle once that tab is closed/destroyed.
+        plot = VcdPlotWindow(timestamps, signals_data, signal_types,
+                             "Verilog Simulation")
+
+        self.act_export_csv.setEnabled(True)
+        self.waveformReady.emit(plot)
             
     def export_csv(self):
         if not hasattr(self, 'current_timestamps') or not self.current_timestamps:
@@ -1199,43 +1238,12 @@ class VerilogVerifier(QtWidgets.QWidget):
             return
             
         try:
+            raw_signals_dict = getattr(self, 'current_raw_signals_data',
+                                       self.current_signals_data)
+            timescale = getattr(self, 'current_timescale', "Time")
+            csv_text = to_csv(self.current_timestamps, raw_signals_dict, timescale)
             with open(filename, 'w', encoding='utf-8') as f:
-                raw_signals_dict = getattr(self, 'current_raw_signals_data', self.current_signals_data)
-                timescale = getattr(self, 'current_timescale', "Time")
-                
-                # Order signals: clk and reset first, then alphabetical
-                all_signals = list(raw_signals_dict.keys())
-                priority = []
-                for s in ['clk', 'clock', 'reset', 'rst']:
-                    if s in all_signals:
-                        priority.append(s)
-                
-                other_signals = sorted([s for s in all_signals if s not in priority])
-                signals = priority + other_signals
-                
-                # Normalize timescale string (strip extra spaces, e.g. '1 ns / 1 ps' -> '1ns/1ps')
-                timescale_norm = re.sub(r'\s+', '', timescale)
-                header = [f"Time ({timescale_norm})"] + signals
-                f.write(','.join(header) + '\n')
-
-                last_row_vals = None
-                total_rows = len(self.current_timestamps)
-
-                for i, t in enumerate(self.current_timestamps):
-                    row_vals = []
-                    for sig in signals:
-                        row_vals.append(str(raw_signals_dict[sig][i]))
-
-                    # Skip duplicate unchanged rows, but ALWAYS write the last row
-                    is_last = (i == total_rows - 1)
-                    if last_row_vals is not None and row_vals == last_row_vals and not is_last:
-                        continue
-                        
-                    last_row_vals = row_vals
-                    
-                    row = [str(t)] + row_vals
-                    f.write(','.join(row) + '\n')
-                    
+                f.write(csv_text)
             self.log(f"Successfully exported CSV to: {filename}")
         except Exception as e:
             self.log(f"Error exporting CSV: {e}")
@@ -1264,19 +1272,45 @@ class VerilogVerifier(QtWidgets.QWidget):
         return self.tb_view.toPlainText()
 
     # Button Event Handlers
+    @staticmethod
+    def _safe_source_name(label):
+        """A diagnostics-safe compile filename for a tab label.
+
+        iverilog echoes the source filename in its errors, and both the
+        squiggle (highlight_errors_from_log) and double-click jump match it with
+        a ``[\\w./-]`` regex. A label with spaces or parens — e.g. the
+        ``foo (2).v`` that S5's duplicate disambiguation can produce — would not
+        match, so the error would land nowhere. Sanitise to word chars while
+        keeping the .v/.sv extension."""
+        base = label if label.endswith(('.v', '.sv')) else label + '.v'
+        root, ext = os.path.splitext(base)
+        root = re.sub(r'[^\w.-]', '_', root) or 'design'
+        return root + ext
+
     def _design_sources(self):
-        """Ordered (filename, code) for each design tab, named by its tab label
-        so iverilog diagnostics reference the tab the user actually sees. The
-        name always ends in .v/.sv so highlight_errors_from_log can match it."""
+        """Ordered (filename, code) for each design tab, plus a refreshed
+        ``self._compile_editors`` mapping that filename back to its editor.
+
+        Names are sanitised (see :meth:`_safe_source_name`) so diagnostics map
+        cleanly, and de-collided after sanitising (two labels can sanitise to
+        the same name) so no module silently overwrites another on disk."""
         sources = []
+        self._compile_editors = {}
+        used = set()
         for i in range(self.editor_tabs.count()):
             widget = self.editor_tabs.widget(i)
             if widget not in getattr(self, 'design_views', []):
                 continue
-            tab_name = self.editor_tabs.tabText(i)
-            safe_name = tab_name if tab_name.endswith(('.v', '.sv')) \
-                else tab_name + '.v'
-            sources.append((safe_name, widget.toPlainText()))
+            name = self._safe_source_name(self.editor_tabs.tabText(i))
+            if name in used:
+                root, ext = os.path.splitext(name)
+                n = 2
+                while f"{root}_{n}{ext}" in used:
+                    n += 1
+                name = f"{root}_{n}{ext}"
+            used.add(name)
+            self._compile_editors[name] = widget
+            sources.append((name, widget.toPlainText()))
         return sources
 
     # ------------------------------------------------------------------ #
@@ -1284,6 +1318,15 @@ class VerilogVerifier(QtWidgets.QWidget):
     # ------------------------------------------------------------------ #
     def _job_running(self):
         return self._active_job is not None and self._active_job.isRunning()
+
+    def _cleanup_tmpdir(self):
+        """Reap the in-flight run's temp dir. Idempotent (ignore_errors + nulls
+        the handle) so it's safe to call from the done/fail closures AND as a
+        closeEvent backstop for a run torn down before those fire."""
+        d = self._active_tmpdir
+        self._active_tmpdir = None
+        if d:
+            shutil.rmtree(d, ignore_errors=True)
 
     def _start_job(self, work, on_done, on_fail, cancel, busy):
         """Run ``work()`` on a worker thread; deliver its result to ``on_done``
@@ -1332,12 +1375,15 @@ class VerilogVerifier(QtWidgets.QWidget):
             if self._active_cancel is not None:
                 self._active_cancel.cancel()
             self._active_job.wait(3000)
+        # Backstop the temp dir: if we tore down mid-run, the done/fail closures
+        # that normally reap it never fired.
+        self._cleanup_tmpdir()
         super().closeEvent(event)
 
     def check_syntax(self):
         if self._job_running():
             return
-        self.log("\n--- Checking Syntax ---")
+        self.log("Checking syntax...")
 
         # Clear previous error highlights
         for v in self.design_views:
@@ -1353,7 +1399,7 @@ class VerilogVerifier(QtWidgets.QWidget):
             self.log("Error: 'iverilog' was not found. Please install it or specify the path.")
             return
 
-        self.log(f"--- Using compiler at: {iverilog} ---")
+        self.log(f"iverilog: {iverilog}")
 
         sources = self._design_sources()
         tb_code = self.get_tb_code()
@@ -1361,29 +1407,34 @@ class VerilogVerifier(QtWidgets.QWidget):
             sources.append(("tb_design.v", tb_code))
 
         tmpdir = tempfile.mkdtemp()
+        self._active_tmpdir = tmpdir
         cancel = icarus.CancelToken()
 
         def work():
-            return icarus.compile_design(
-                iverilog, sources, tmpdir, std="-g2012", warnings=True,
-                cancel=cancel)
+            try:
+                return icarus.compile_design(
+                    iverilog, sources, tmpdir, std="-g2012", warnings=True,
+                    timeout=COMPILE_TIMEOUT_S, cancel=cancel)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(
+                    f"Compilation exceeded {COMPILE_TIMEOUT_S}s and was stopped.")
 
         def done(res):
             try:
                 if cancel.cancelled:
                     self.log("Syntax check cancelled.")
                 elif res.ok:
-                    self.log("Syntax OK (compiled successfully with iverilog)")
+                    self.log("Syntax OK.")
                 else:
-                    self.log("Syntax errors found:")
-                    self.log(res.stderr)
+                    self.log("Compilation errors:")
+                    self.log_sim(res.stderr)
                     self.highlight_errors_from_log(res.stderr)
             finally:
-                shutil.rmtree(tmpdir, ignore_errors=True)
+                self._cleanup_tmpdir()
 
         def fail(msg):
             self.log(f"Syntax check error: {msg}")
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            self._cleanup_tmpdir()
 
         self._start_job(work, done, fail, cancel,
                         busy=[self.btn_syntax, self.btn_simulate])
@@ -1441,7 +1492,7 @@ class VerilogVerifier(QtWidgets.QWidget):
     def simulate_and_wave(self):
         if self._job_running():
             return
-        self.log("\n--- Starting Simulation ---")
+        self.log("Running simulation...")
 
         design_code = self.get_design_code()
         if not design_code or not design_code.strip():
@@ -1466,22 +1517,30 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.log(f"Compiling {len(sources) - 1} module(s) + testbench...")
 
         tmpdir = tempfile.mkdtemp()
+        self._active_tmpdir = tmpdir
         cancel = icarus.CancelToken()
         libdir = CosimConfig.iverilog_libdir()
 
         def work():
-            return icarus.build_and_simulate(
-                iverilog, vvp, sources, tmpdir, libdir=libdir, cancel=cancel)
+            try:
+                return icarus.build_and_simulate(
+                    iverilog, vvp, sources, tmpdir, libdir=libdir,
+                    compile_timeout=COMPILE_TIMEOUT_S,
+                    sim_timeout=SIM_TIMEOUT_S, cancel=cancel)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(
+                    f"Simulation exceeded {SIM_TIMEOUT_S}s and was stopped. "
+                    "Add a $finish to your testbench or shorten the run.")
 
         def done(run):
             try:
                 self._render_sim_result(run, cancelled=cancel.cancelled)
             finally:
-                shutil.rmtree(tmpdir, ignore_errors=True)
+                self._cleanup_tmpdir()
 
         def fail(msg):
             self.log(f"Simulation error: {msg}")
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            self._cleanup_tmpdir()
 
         self._start_job(work, done, fail, cancel,
                         busy=[self.btn_simulate, self.btn_syntax])
@@ -1494,37 +1553,35 @@ class VerilogVerifier(QtWidgets.QWidget):
             return
 
         if not run.compile.ok:
-            self.log("Compilation Failed:")
-            self.log(run.compile.stderr)
+            self.log("Compilation failed:")
+            self.log_sim(run.compile.stderr)
             self.highlight_errors_from_log(run.compile.stderr)
             return
 
         sim = run.sim
-        self.log("Simulation console output:")
         if sim.stdout:
-            self.log(sim.stdout)
+            self.log_sim(sim.stdout)
         if sim.stderr:
-            self.log(sim.stderr)
+            self.log_sim(sim.stderr)
 
         if not sim.ok:
-            self.log(f"Error: vvp crashed or failed with exit code {sim.returncode}")
+            self.log(f"vvp: exited with code {sim.returncode}")
             if sim.returncode in [3221225781, -1073741515]:
-                self.log("IT LOOKS LIKE A MISSING DLL ERROR (0xC0000135).")
-                self.log("Please try to reinstall Icarus Verilog and ensure the "
-                         "'Install MinGW Dependencies (DLL Files)' option is CHECKED.")
+                self.log("note: exit code 0xC0000135 — missing DLL. "
+                         "Reinstall Icarus Verilog with 'Install MinGW Dependencies' checked.")
 
         if run.vcd_content:
-            self.log("Parsing VCD file...")
+            self.log("Parsing VCD...")
             try:
                 timestamps, signals_data, signal_types, raw_signals, timescale = parse_vcd_for_plot(run.vcd_content)
                 self.current_raw_signals_data = raw_signals
                 self.current_timescale = timescale
-                self.render_waveform(timestamps, signals_data, signal_types, popup=True)
-                self.log("Simulation completed and waveform rendered successfully.")
+                self.render_waveform(timestamps, signals_data, signal_types)
+                self.log("Waveform ready.")
             except Exception as ex:
-                self.log(f"Error parsing VCD file: {ex}")
+                self.log(f"Error: failed to parse VCD — {ex}")
         else:
-            self.log("Error: No VCD file produced. Make sure your testbench contains "
+            self.log("No VCD output. Verify testbench includes "
                      '$dumpfile("sim_out.vcd") and $dumpvars(0, ...).')
 
         # Compile + simulate both succeeded: let the host advance the flow.

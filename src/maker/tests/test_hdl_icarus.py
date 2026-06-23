@@ -136,3 +136,20 @@ def test_cancel_before_bind_kills_immediately():
     tok.bind(proc)                   # bind must kill it right away
     proc.wait(5)
     assert proc.poll() is not None
+
+
+# --- timeout: a runaway sim must not hang the worker forever ------------- #
+
+@posix_only
+def test_run_cmd_times_out_without_cancel():
+    # subprocess.run path (no cancel token).
+    with pytest.raises(subprocess.TimeoutExpired):
+        icarus._run_cmd(['sleep', '5'], None, 0.2, None)
+
+
+@posix_only
+def test_run_cmd_times_out_with_cancel_and_reaps_proc():
+    # Popen path (cancel token bound): the timeout branch kills + reaps.
+    tok = icarus.CancelToken()
+    with pytest.raises(subprocess.TimeoutExpired):
+        icarus._run_cmd(['sleep', '5'], None, 0.2, tok)

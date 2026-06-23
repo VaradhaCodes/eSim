@@ -44,6 +44,9 @@ CURRENT_HL = "#FF9632"       # current match highlight
 SEARCH_INDICATOR = 8
 CURRENT_INDICATOR = 9
 
+#: stable Scintilla message id (lexer property setter)
+_SCI_SETPROPERTY = getattr(QsciScintilla, "SCI_SETPROPERTY", 4004)
+
 _FONT_PREFS = [
     "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code",
     "Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono",
@@ -61,17 +64,43 @@ def editor_font(size=11):
     return font
 
 
+def _mute(hex_colour, amount=0.55):
+    """Blend *hex_colour* toward the paper so inactive code recedes.
+
+    The Verilog lexer emits dedicated "Inactive …" styles for the dead
+    branch of a `` `ifdef ``; rendering them in full strength makes
+    compiled-out code shout as loudly as live code.  Fading each toward
+    the background keeps it readable but clearly secondary.
+    """
+    fg, bg = QColor(hex_colour), QColor(PAPER)
+
+    def mix(a, b):
+        return round(a + (b - a) * amount)
+
+    return QColor(mix(fg.red(), bg.red()),
+                  mix(fg.green(), bg.green()),
+                  mix(fg.blue(), bg.blue())).name()
+
+
 def _classify(desc):
     """Map a lexer style description to (colour, bold, italic)."""
     d = desc.lower()
+    if d.startswith("inactive"):
+        # Dead `` `ifdef `` branch: classify the underlying token, then
+        # fade it and drop any bold so it reads as compiled-out.
+        colour, _bold, italic = _classify(d[len("inactive"):].strip())
+        return _mute(colour), False, italic
     if "comment" in d:
         return COMMENT, False, True
     if "instance" in d or "device" in d:
         return INSTANCE, True, False
     if "node" in d or "net" in d:
         return NODE, False, False
-    if any(k in d for k in (
-            "keyword", "command", "directive", "system task")):
+    if "system task" in d:
+        # Built-in tasks ($display, $finish, …) read as support
+        # functions, not control keywords -- colour them apart.
+        return FUNCTION, False, False
+    if any(k in d for k in ("keyword", "command", "directive")):
         return KEYWORD, True, False
     if "preprocessor" in d or "macro" in d:
         return PREPROC, False, False
@@ -112,8 +141,23 @@ def apply(editor, lexer, font=None):
             styled.setBold(bold)
             styled.setItalic(italic)
             lexer.setFont(styled, style)
+        _tune_lexer(editor, lexer)
 
     _apply_chrome(editor, font)
+
+
+def _tune_lexer(editor, lexer):
+    """Normalise lexer tokenisation that would otherwise defeat theming."""
+    if lexer.language() == "Verilog":
+        # By default the Verilog lexer lumps a whole port declaration
+        # (`input wire clk`) into one "port" style spanning the direction
+        # keyword, the net type and the signal name -- so they can't be
+        # coloured independently and currently fall through to plain
+        # text.  Disabling port styling lets `input`/`output`/`wire`/`reg`
+        # colour as the keywords they are and the names as identifiers.
+        editor.SendScintilla(
+            _SCI_SETPROPERTY, b"lexer.verilog.portstyling", b"0")
+        editor.recolor()
 
 
 def _apply_chrome(editor, font):

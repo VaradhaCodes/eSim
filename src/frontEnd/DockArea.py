@@ -23,6 +23,26 @@ count = 1
 dock = {}
 
 
+class WaveformDock(QtWidgets.QDockWidget):
+    """The Verilog waveform's own eSim tab.
+
+    Deletes itself on close (the plot widget is heavy, so it must not linger
+    across repeated simulate/close cycles) and emits ``closed`` first so the
+    host can drop its bookkeeping and return focus to the Verify stage.
+    """
+
+    closed = QtCore.pyqtSignal()
+
+    def __init__(self, title, parent=None):
+        super().__init__(title, parent)
+        self.setObjectName(title)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+
+    def closeEvent(self, event):
+        self.closed.emit()
+        super().closeEvent(event)
+
+
 class DockArea(QtWidgets.QMainWindow):
     """
     This class contains function for designing UI of all the editors
@@ -43,6 +63,9 @@ class DockArea(QtWidgets.QMainWindow):
         self.obj_appconfig = Appconfig()
         # Track plotting docks
         self.active_plotting_docks = set()
+        # Verilog waveform tab per Model Creation dock (source dock -> wave
+        # dock), so a re-simulate reuses one viewer instead of stacking tabs.
+        self._wave_docks = {}
 
         for dockName in dockList:
             dock[dockName] = QtWidgets.QDockWidget(dockName)
@@ -553,7 +576,8 @@ class DockArea(QtWidgets.QMainWindow):
 
         self.makerWidget = QtWidgets.QWidget()
         self.makerLayout = QtWidgets.QVBoxLayout()
-        self.makerLayout.addWidget(makerchip(self))
+        maker = makerchip(self)
+        self.makerLayout.addWidget(maker)
 
         self.makerWidget.setLayout(self.makerLayout)
         dock[dockName +
@@ -565,6 +589,15 @@ class DockArea(QtWidgets.QMainWindow):
                            dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'],
                               dock[dockName + str(count)])
+
+        # Verify-stage waveforms open as their own full-width eSim tab next to
+        # this Model Creation dock. Bind the source dock + its navigator so
+        # "Back to Verify" (and tab-close) return to the exact instance that
+        # produced the plot, even with several Model Creation docks open.
+        source_dock = dock[dockName + str(count)]
+        maker.flow.waveformRequested.connect(
+            lambda plot, src=source_dock, flow=maker.flow:
+            self._show_waveform_dock(plot, src, flow))
 
         # No generic '.QWidget' box here: the legacy rounded-grey border boxed
         # every plain QWidget inside the panel (notably FlowNavigator's stage
@@ -579,6 +612,92 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)].raise_()
 
         count = count + 1
+
+    def _show_waveform_dock(self, plot, source_dock, flow):
+        """Host a Verilog simulation waveform as its own full-width eSim tab.
+
+        A re-simulate reuses the source dock's existing waveform tab (swapping
+        in the new plot) instead of stacking tabs -- matching how Vivado /
+        ModelSim keep a single waveform viewer that updates. The tab carries a
+        "Back to Verify" control; that button and closing the tab both return to
+        the Verify stage that produced the plot.
+        """
+        existing = self._wave_docks.get(source_dock)
+        if existing is not None:
+            # Swap the plot inside the live tab and bring it forward.
+            old = existing._wave_plot
+            if old is not None:
+                existing._wave_layout.removeWidget(old)
+                old.deleteLater()
+            existing._wave_layout.addWidget(plot, 1)
+            existing._wave_plot = plot
+            existing.setVisible(True)
+            existing.raise_()
+            return
+
+        wave_dock = WaveformDock("Waveform-" + source_dock.windowTitle(), self)
+
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # A slim header with the single round-trip control back to the editor.
+        # objectName + selector so the band reliably paints (a bare-property
+        # sheet on a plain QWidget often does not) and matches the Flow
+        # Navigator's own header palette.
+        header = QtWidgets.QWidget()
+        header.setObjectName("waveHeader")
+        header.setStyleSheet(
+            "QWidget#waveHeader { background:#f7f8f9;"
+            " border-bottom:1px solid #d4d8dc; }")
+        hrow = QtWidgets.QHBoxLayout(header)
+        hrow.setContentsMargins(10, 6, 10, 6)
+        back_btn = QtWidgets.QPushButton("← Back to Verify")
+        back_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        back_btn.setStyleSheet(
+            "QPushButton { border:1px solid #d4d8dc; background:#ffffff;"
+            " color:#5f6b75; padding:5px 14px; border-radius:5px; }"
+            " QPushButton:hover { color:#2c333a; border-color:#e65100; }")
+        back_btn.clicked.connect(
+            lambda: self._return_to_verify(source_dock, flow))
+        hrow.addWidget(back_btn)
+        hrow.addStretch(1)
+        layout.addWidget(header)
+        layout.addWidget(plot, 1)
+
+        # Remember the swappable plot + its layout for reuse on re-simulate.
+        wave_dock._wave_plot = plot
+        wave_dock._wave_layout = layout
+
+        self.apply_fullscreen_feature(wave_dock, container)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+                           wave_dock)
+        self.tabifyDockWidget(dock['Welcome'], wave_dock)
+
+        self._wave_docks[source_dock] = wave_dock
+
+        # Closing the tab drops the mapping and returns to Verify; the dock
+        # deletes itself (WA_DeleteOnClose), so nothing leaks across cycles.
+        def _on_closed():
+            if self._wave_docks.get(source_dock) is wave_dock:
+                del self._wave_docks[source_dock]
+            self._return_to_verify(source_dock, flow)
+        wave_dock.closed.connect(_on_closed)
+
+        wave_dock.setVisible(True)
+        wave_dock.setFocus()
+        wave_dock.raise_()
+
+    def _return_to_verify(self, source_dock, flow):
+        """Bring the Model Creation dock that owns this plot forward and select
+        its Verify stage."""
+        try:
+            flow.goto_verify()
+        except Exception:
+            pass
+        source_dock.setVisible(True)
+        source_dock.raise_()
 
     def usermanual(self):
         """This function creates a widget for user manual."""
