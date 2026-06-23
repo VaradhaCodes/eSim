@@ -49,29 +49,6 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.treewidget.setHeaderItem(header)
         self.treewidget.setColumnHidden(1, True)
 
-        # CSS
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-
-        self.treewidget.setStyleSheet(" \
-            QTreeView { border-radius: 15px; border: 1px \
-            solid gray; padding: 5px; width: 200px; height: 150px;  }\
-            QTreeView::branch:has-siblings:!adjoins-item { \
-            border-image: url(" + init_path + "images/vline.png) 0;} \
-            QTreeView::branch:has-siblings:adjoins-item { \
-            border-image: url(" + init_path + "images/branch-more.png) 0; } \
-            QTreeView::branch:!has-children:!has-siblings:adjoins-item { \
-            border-image: url(" + init_path + "images/branch-end.png) 0; } \
-            QTreeView::branch:has-children:!has-siblings:closed, \
-            QTreeView::branch:closed:has-children:has-siblings { \
-            border-image: none; \
-            image: url(" + init_path + "images/branch-closed.png); } \
-            QTreeView::branch:open:has-children:!has-siblings, \
-            QTreeView::branch:open:has-children:has-siblings  { \
-            border-image: none; \
-            image: url(" + init_path + "images/branch-open.png); } \
-        ")
 
         self.loadProjects()
         self.window.addWidget(self.treewidget)

@@ -27,10 +27,6 @@ class TimeExplorer(QtWidgets.QWidget):
         self.treewidget.setHeaderLabels(["Timeline", ""])
         self.treewidget.setColumnWidth(0, 150)
 
-        self.treewidget.setStyleSheet(" \
-            QTreeView { border-radius: 15px; border: 1px \
-            solid gray; padding: 5px; width: 200px; height: 150px;  }\
-        ")
 
         self.layout.addWidget(self.treewidget)
 
