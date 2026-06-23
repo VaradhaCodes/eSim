@@ -38,6 +38,7 @@ from frontEnd import ProjectExplorer
 from frontEnd import TimeExplorer
 from frontEnd import Workspace
 from frontEnd import DockArea
+from frontEnd import theme_utils
 from projManagement.openProject import OpenProjectInfo
 from projManagement.newProject import NewProjectInfo
 from projManagement.Kicad import Kicad
@@ -949,6 +950,13 @@ def main(args):
     # Native dialog behavior is now controlled per-dialog via QFileDialog.Option.
     app = QtWidgets.QApplication(args)
     app.setApplicationName("eSim")
+
+    # Aurora design system: apply the global theme once, before any widgets
+    # are built. Guarded so a theming failure can never block app startup.
+    try:
+        theme_utils.apply_theme(app)
+    except Exception as e:
+        print("Theme load failed, continuing unthemed:", str(e))
 
     appView = Application()
     last_project_path = appView.obj_appconfig.load_last_project()
