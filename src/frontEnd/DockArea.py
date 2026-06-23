@@ -76,11 +76,6 @@ class DockArea(QtWidgets.QMainWindow):
             # Adding to main Layout
             self.welcomeWidget.setLayout(self.welcomeLayout)
             dock[dockName].setWidget(self.welcomeWidget)
-            # CSS
-            dock[dockName].setStyleSheet(" \
-            QWidget { border-radius: 15px; border: 1px solid gray;\
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName])
 
         # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
@@ -222,11 +217,6 @@ class DockArea(QtWidgets.QMainWindow):
                               dock[dockName
                                    + str(count)])
 
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray; padding: 0px;\
-            width: 200px; height: 150px;  } \
-        ")
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -363,11 +353,6 @@ class DockArea(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName + str(count)])
         self.tabifyDockWidget(dock['Welcome'], dock[dockName + str(count)])
 
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-            .QWidget { border-radius: 15px; border: 1px solid gray;\
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -414,11 +399,6 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(dock['Welcome'],
                               dock[dockName + str(count)])
 
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-            .QWidget { border-radius: 15px; border: 1px solid gray; \
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -481,11 +461,6 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(dock['Welcome'],
                               dock[dockName + str(count)])
 
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
 
         dock[dockName + str(count)].setVisible(True)
         dock[dockName + str(count)].setFocus()
@@ -527,11 +502,6 @@ class DockArea(QtWidgets.QMainWindow):
             self.tabifyDockWidget(dock['Welcome'],
                                 dock[dockName + str(count)])
 
-            # CSS
-            dock[dockName + str(count)].setStyleSheet(" \
-            .QWidget { border-radius: 15px; border: 1px solid gray;\
-                padding: 5px; width: 200px; height: 150px;  } \
-            ")
 
             dock[dockName + str(count)].setVisible(True)
             dock[dockName + str(count)].setFocus()
@@ -648,17 +618,13 @@ class DockArea(QtWidgets.QMainWindow):
         # Navigator's own header palette.
         header = QtWidgets.QWidget()
         header.setObjectName("waveHeader")
-        header.setStyleSheet(
-            "QWidget#waveHeader { background:#f7f8f9;"
-            " border-bottom:1px solid #d4d8dc; }")
+        # Theme-aware: #waveHeader is styled in style_{dark,light}.qss so it
+        # tracks the active theme instead of the old hard-coded light palette.
         hrow = QtWidgets.QHBoxLayout(header)
         hrow.setContentsMargins(10, 6, 10, 6)
         back_btn = QtWidgets.QPushButton("← Back to Verify")
         back_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        back_btn.setStyleSheet(
-            "QPushButton { border:1px solid #d4d8dc; background:#ffffff;"
-            " color:#5f6b75; padding:5px 14px; border-radius:5px; }"
-            " QPushButton:hover { color:#2c333a; border-color:#e65100; }")
+        back_btn.setProperty("cssClass", "secondary")
         back_btn.clicked.connect(
             lambda: self._return_to_verify(source_dock, flow))
         hrow.addWidget(back_btn)
@@ -716,11 +682,6 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(dock['Welcome'],
                               dock['User Manual-' + str(count)])
 
-        # CSS
-        dock['User Manual-' + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
 
         dock['User Manual-' + str(count)].setVisible(True)
         dock['User Manual-' + str(count)].setFocus()
@@ -754,11 +715,6 @@ class DockArea(QtWidgets.QMainWindow):
         dock[dockName + str(count)].setFocus()
         dock[dockName + str(count)].raise_()
 
-        # CSS
-        dock[dockName + str(count)].setStyleSheet(" \
-        .QWidget { border-radius: 15px; border: 1px solid gray;\
-            padding: 5px; width: 200px; height: 150px;  } \
-        ")
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
             self.obj_appconfig.dock_dict[temp].append(

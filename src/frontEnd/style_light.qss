@@ -1442,3 +1442,9 @@ QProgressBar#progressBar::chunk {
         stop:0 #0077A8, stop:1 #005E86);
     border-radius: 7px;
 }
+
+/* Verilog waveform tab header (Back-to-Verify strip) — see DockArea.py. */
+QWidget#waveHeader {
+    background: #F3F7FC;
+    border-bottom: 1px solid #DCE6F1;
+}

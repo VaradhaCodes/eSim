@@ -146,6 +146,7 @@ class Application(QtWidgets.QMainWindow):
         self.devdocs.triggered.connect(self.dev_docs)
 
         self.topToolbar = self.addToolBar('Top Tool Bar')
+        self.topToolbar.setObjectName('topToolbar')
         self.topToolbar.addAction(self.newproj)
         self.topToolbar.addAction(self.openproj)
         self.topToolbar.addAction(self.closeproj)
@@ -256,6 +257,7 @@ class Application(QtWidgets.QMainWindow):
 
         # Adding Action Widget to tool bar
         self.lefttoolbar = QtWidgets.QToolBar('Left ToolBar')
+        self.lefttoolbar.setObjectName('leftToolBar')
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, self.lefttoolbar)
         self.lefttoolbar.addAction(self.kicad)
         self.lefttoolbar.addAction(self.conversion)
@@ -778,108 +780,7 @@ class MainView(QtWidgets.QWidget):
         self.obj_appconfig.noteArea['Note'].append('\n')
 
         # Enhanced CSS with proper scrollbar styling
-        self.noteArea.setStyleSheet("""
-        QTextEdit {
-            border-radius: 15px;
-            border: 1px solid gray;
-            padding: 5px;
-            background-color: white;
-        }
-    
-        QScrollBar:vertical {
-            border: 1px solid #999999;
-            background: #f0f0f0;
-            width: 16px;
-            margin: 16px 0 16px 0;
-            border-radius: 3px;
-        }
-    
-        QScrollBar::handle:vertical {
-            background: #606060;
-            min-height: 20px;
-            border-radius: 3px;
-            margin: 1px;
-        }
-    
-        QScrollBar::handle:vertical:hover {
-            background: #505050;
-        }
-    
-        QScrollBar::add-line:vertical {
-            border: 1px solid #999999;
-            background: #d0d0d0;
-            height: 15px;
-            width: 16px;
-            subcontrol-position: bottom;
-            subcontrol-origin: margin;
-            border-radius: 2px;
-        }
-    
-        QScrollBar::sub-line:vertical {
-            border: 1px solid #999999;
-            background: #d0d0d0;
-            height: 15px;
-            width: 16px;
-            subcontrol-position: top;
-            subcontrol-origin: margin;
-            border-radius: 2px;
-        }
-    
-        QScrollBar::add-line:vertical:hover,
-        QScrollBar::sub-line:vertical:hover {
-            background: #c0c0c0;
-        }
-    
-        QScrollBar::add-page:vertical,
-        QScrollBar::sub-page:vertical {
-            background: none;
-        }
-    
-        QScrollBar::up-arrow:vertical {
-            width: 8px;
-            height: 8px;
-            background-color: #606060;
-        }
-    
-        QScrollBar::down-arrow:vertical {
-            width: 8px;
-            height: 8px;
-            background-color: #606060;
-        }
-    
-        QScrollBar:horizontal {
-            border: 1px solid #999999;
-            background: #f0f0f0;
-            height: 16px;
-            margin: 0 16px 0 16px;
-            border-radius: 3px;
-        }
-    
-        QScrollBar::handle:horizontal {
-            background: #606060;
-            min-width: 20px;
-            border-radius: 3px;
-            margin: 1px;
-        }
-    
-        QScrollBar::handle:horizontal:hover {
-            background: #505050;
-        }
-    
-        QScrollBar::add-line:horizontal,
-        QScrollBar::sub-line:horizontal {
-            border: 1px solid #999999;
-            background: #d0d0d0;
-            width: 15px;
-            height: 16px;
-                border-radius: 2px;
-        }
-    
-        QScrollBar::add-line:horizontal:hover,
-            QScrollBar::sub-line:horizontal:hover {
-                background: #c0c0c0;
-            }
-        """)
+        self.noteArea.setObjectName("mainNoteConsole")
 
         self.obj_dockarea = DockArea.DockArea()
         self.obj_projectExplorer = ProjectExplorer.ProjectExplorer()
