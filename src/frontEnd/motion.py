@@ -202,7 +202,29 @@ class TactileButtonFilter(QtCore.QObject):
             pass
 
 
+def motion_enabled():
+    """True when the user opted into animated button glows (default off).
+
+    Hover/press glows drive continuous repaints + a per-button drop-shadow, so
+    they stay opt-in for performance. Read straight from the prefs file to keep
+    this module free of an Appconfig import; absent/unreadable means off.
+    """
+    import os
+    import json
+    try:
+        path = os.path.join(
+            os.path.expanduser("~"), ".esim", "preferences.json")
+        with open(path) as fh:
+            return bool(json.load(fh).get("enable_motion", False))
+    except Exception:
+        return False
+
+
 def install_button_motion(root):
+    # Single gate for every call site: when motion is off, install nothing so
+    # no glow animations or extra graphics effects are ever created.
+    if not motion_enabled():
+        return
     filt = TactileButtonFilter(root)
     root._esim_press_motion_filter = filt
     for w in root.findChildren((QtWidgets.QPushButton, QtWidgets.QToolButton)):

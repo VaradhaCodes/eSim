@@ -212,7 +212,8 @@ class Appconfig(QtWidgets.QWidget):
         when ~/.esim/preferences.json is absent or unreadable."""
         prefs = {"theme_mode": "System", "accent_color": "default",
                  "secondary_accent_color": "system",
-                 "internal_bg_color": "system"}
+                 "internal_bg_color": "system",
+                 "enable_motion": False}
         try:
             path = os.path.join(self.user_home, ".esim", "preferences.json")
             if os.path.exists(path):

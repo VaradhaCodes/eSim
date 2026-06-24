@@ -470,6 +470,20 @@ class PreferencesDialog(QtWidgets.QDialog):
         hint.setWordWrap(True)
         form.addRow(hint)
 
+        # Interface animation group: the Aurora button glows are opt-in because
+        # they drive continuous repaints. Default off (see Appconfig defaults).
+        motion_group = QtWidgets.QGroupBox("Interface Animation")
+        motion_group.setProperty("cssClass", "themedGroupBox")
+        motion_gl = QtWidgets.QVBoxLayout(motion_group)
+        motion_gl.setSpacing(10)
+        self.motion_checkbox = QtWidgets.QCheckBox(
+            "Enable button glow animations")
+        self.motion_checkbox.setToolTip(
+            "Animated hover/press glows on buttons and dialogs. Off by default "
+            "for performance; takes effect the next time a dialog opens.")
+        motion_gl.addWidget(self.motion_checkbox)
+        form.addRow(motion_group)
+
         return page
 
     # ------------------------------------------------------------------ helpers
@@ -655,11 +669,15 @@ class PreferencesDialog(QtWidgets.QDialog):
             self.font_family_combo.setCurrentIndex(idx)
         self.font_size_spin.setValue(int(self.prefs.get("editor_font_size", 11)))
         self.tab_width_spin.setValue(int(self.prefs.get("editor_tab_width", 4)))
+        self.motion_checkbox.setChecked(
+            bool(self.prefs.get("enable_motion", False)))
 
         # Live-apply editor changes too.
         self.font_family_combo.currentFontChanged.connect(lambda *_: self._live_apply())
         self.font_size_spin.valueChanged.connect(lambda *_: self._live_apply())
         self.tab_width_spin.valueChanged.connect(lambda *_: self._live_apply())
+        # Persist the motion toggle; install happens next dialog open.
+        self.motion_checkbox.toggled.connect(lambda *_: self._live_apply())
 
     # ------------------------------------------------------------------ actions
     def _choose_primary_color(self):
@@ -735,6 +753,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             "editor_font_family":          self.font_family_combo.currentText(),
             "editor_font_size":            int(self.font_size_spin.value()),
             "editor_tab_width":            int(self.tab_width_spin.value()),
+            "enable_motion":               self.motion_checkbox.isChecked(),
         }
 
     def _apply_preferences(self):
