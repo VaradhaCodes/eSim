@@ -14,6 +14,7 @@ import os
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration import Dialogs
 
+from codeEditor import theme
 from codeEditor.FindBar import FindBar
 from codeEditor.InfoBar import InfoBar
 from codeEditor.PlainEditor import PlainEditor
@@ -26,7 +27,7 @@ except ImportError:                       # QScintilla not installed
     HAS_QSCI = False
 
 
-STYLE = """
+STYLE_LIGHT = """
 QMainWindow, #editorCentral { background: #FFFFFF; }
 QMenuBar { background: #F6F8FA; border-bottom: 1px solid #E1E4E8;
            padding: 2px 4px; }
@@ -92,6 +93,87 @@ QToolButton#infoClose:hover { background: #E7C766; color: #4D3A05; }
 """
 
 
+# Dark mirror of STYLE_LIGHT, tuned to the Aurora dark palette (deep navy
+# surfaces, cyan accent) so the floating editor window matches the rest of the
+# app when the theme is dark.  Picked by _apply_chrome_theme() from the live
+# QApplication palette and re-applied on PaletteChange.
+STYLE_DARK = """
+QMainWindow, #editorCentral { background: #050812; }
+QMenuBar { background: #0A1020; border-bottom: 1px solid rgba(83,215,255,0.12);
+           color: #D3DEEF; padding: 2px 4px; }
+QMenuBar::item { padding: 4px 10px; background: transparent;
+                 border-radius: 6px; }
+QMenuBar::item:selected { background: rgba(83,215,255,0.14); color: #F8FBFF; }
+QMenu { background: #0E1728; border: 1px solid rgba(83,215,255,0.16);
+        color: #D3DEEF; border-radius: 8px; padding: 4px; }
+QMenu::item { padding: 5px 22px; border-radius: 5px; }
+QMenu::item:selected { background: rgba(83,215,255,0.16); color: #F8FBFF; }
+QMenu::separator { height: 1px; background: rgba(83,215,255,0.12);
+                   margin: 4px 8px; }
+QTabWidget::pane { border: 0; border-top: 1px solid rgba(83,215,255,0.12); }
+QTabBar { qproperty-drawBase: 0; }
+QTabBar::tab { background: #0A1020; color: #94A8C3;
+               padding: 6px 10px 6px 12px; margin-right: 2px;
+               border-top-left-radius: 8px;
+               border-top-right-radius: 8px; }
+QTabBar::tab:selected { background: #0E1728; color: #F8FBFF;
+                        border: 1px solid rgba(83,215,255,0.16);
+                        border-bottom: 0; }
+QTabBar::tab:hover { background: rgba(83,215,255,0.08); }
+QStatusBar { background: #0A1020;
+             border-top: 1px solid rgba(83,215,255,0.12); color: #94A8C3; }
+QStatusBar QLabel { color: #94A8C3; padding: 0 8px; }
+#findBar { background: rgba(13,23,40,0.96);
+           border: 1px solid rgba(83,215,255,0.20); border-radius: 8px; }
+#findBar QLineEdit { border: 1px solid rgba(83,215,255,0.18);
+                     border-radius: 6px; padding: 4px 8px; background: #0E1728;
+                     color: #E6EDF7;
+                     selection-background-color: #0E7490; }
+#findBar QLineEdit:focus { border: 1px solid #53D7FF; }
+#findBar QLineEdit[noMatch="true"] { border: 1px solid #FB7185;
+                     background: rgba(40,20,30,0.6); }
+#findCount { color: #94A8C3; }
+QToolButton#findToggle, QToolButton#findTool {
+    border: 1px solid transparent; border-radius: 6px;
+    padding: 3px 7px; color: #94A8C3; font-weight: 600; }
+QToolButton#findToggle:hover, QToolButton#findTool:hover {
+    background: rgba(83,215,255,0.12); color: #F8FBFF; }
+QToolButton#findToggle:checked {
+    background: rgba(83,215,255,0.18); border: 1px solid rgba(83,215,255,0.30);
+    color: #8BEAFF; }
+QToolButton#findClose:hover { background: rgba(251,113,133,0.24);
+    color: #FDA4AF; }
+QToolButton#findExpand { border: 1px solid rgba(83,215,255,0.18);
+    border-radius: 6px; background: #0E1728; color: #94A8C3; font-size: 15px;
+    font-weight: 700; padding: 0 6px; }
+QToolButton#findExpand:hover { background: rgba(83,215,255,0.12);
+    color: #F8FBFF; }
+QToolButton#findExpand:checked { color: #8BEAFF;
+    background: rgba(83,215,255,0.18); border: 1px solid rgba(83,215,255,0.30); }
+#findBar QPushButton { border: 1px solid rgba(83,215,255,0.18);
+                       border-radius: 6px; padding: 4px 12px;
+                       background: #0E1728; color: #E6EDF7; }
+#findBar QPushButton:hover { background: rgba(83,215,255,0.12);
+                             color: #F8FBFF; }
+QToolButton#tabClose { border: none; border-radius: 9px;
+                       color: #94A8C3; font-size: 14px;
+                       padding: 0; }
+QToolButton#tabClose:hover { background: #FB7185; color: #050812; }
+#infoBar { background: rgba(60,48,16,0.96);
+           border-bottom: 1px solid rgba(201,162,39,0.40); }
+QLabel#infoTitle { color: #F6D88A; font-weight: 700; background: transparent; }
+QLabel#infoMessage { color: #E7C766; background: transparent; }
+QPushButton#infoAction { border: 1px solid rgba(201,162,39,0.50);
+    border-radius: 6px; padding: 5px 14px; background: rgba(246,216,138,0.16);
+    color: #F6D88A; font-weight: 600; }
+QPushButton#infoAction:hover { background: rgba(246,216,138,0.26); }
+QToolButton#infoClose { border: none; border-radius: 6px; padding: 2px 6px;
+    color: #E7C766; font-size: 14px; }
+QToolButton#infoClose:hover { background: rgba(231,199,102,0.30);
+    color: #F6D88A; }
+"""
+
+
 #: Every live EditorWindow, so eSim can flush unsaved buffers (e.g.
 #: right before a simulation run reads the netlist off disk).
 _OPEN_WINDOWS = set()
@@ -135,7 +217,7 @@ class EditorWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("eSim Editor")
         self.resize(960, 680)
-        self.setStyleSheet(STYLE)
+        self._apply_chrome_theme()
         self._open_tabs = {}              # normalised path -> editor
 
         self._settings = QtCore.QSettings("eSim", "CodeEditor")
@@ -611,6 +693,19 @@ class EditorWindow(QtWidgets.QMainWindow):
         y = self.tabs.tabBar().height() + 6
         bar.move(max(margin, x), y)
         bar.raise_()
+
+    def _apply_chrome_theme(self):
+        """Paint the window chrome to match the active Aurora theme."""
+        self.setStyleSheet(
+            STYLE_DARK if theme.is_dark_theme() else STYLE_LIGHT)
+
+    def changeEvent(self, event):
+        # The app palette flips dark<->light on a theme switch; repaint the
+        # chrome so the floating editor tracks it live (the per-tab editors
+        # re-theme themselves via their own changeEvent).
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            self._apply_chrome_theme()
+        super().changeEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

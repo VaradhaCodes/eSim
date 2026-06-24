@@ -38,10 +38,11 @@ def test_standard_editor_shortcuts(verifier):
 
 
 def test_simulate_is_the_single_primary_action(verifier):
-    assert verifier.btn_simulate.objectName() == "primaryAction"
+    # Aurora paints the accented primary via the verifierPrimary cssClass.
+    assert verifier.btn_simulate.property("cssClass") == "verifierPrimary"
     # No other control claims the primary accent.
     primaries = [b for b in verifier.findChildren(QtWidgets.QPushButton)
-                 if b.objectName() == "primaryAction"]
+                 if b.property("cssClass") == "verifierPrimary"]
     assert primaries == [verifier.btn_simulate]
 
 

@@ -186,6 +186,15 @@ class HdlEditor(QsciScintilla):
         self.setIndicatorForegroundColor(
             QtGui.QColor("#e51400"), self.ERROR_INDICATOR)
 
+    def changeEvent(self, event):
+        # Re-theme the editor content when the app palette flips dark<->light
+        # so the Verilog tabs track the Aurora theme live, matching the project
+        # code editor. Guard on _mono: the event can arrive mid-construction.
+        if (event.type() == QtCore.QEvent.Type.PaletteChange
+                and hasattr(self, "_mono")):
+            theme.apply(self, self._lexer, self._mono)
+        super().changeEvent(event)
+
     # -- QPlainTextEdit-compatible text accessors (keep call sites terse) --
     def toPlainText(self):
         return self.text()
@@ -382,7 +391,7 @@ class VerilogVerifier(QtWidgets.QWidget):
             "Once installed, use the 'Locate Icarus Verilog' button below to enable the tool."
         )
         self.console.setPlainText(msg)
-        self.console.setStyleSheet("QTextEdit { background-color: #f8d7da; color: #721c24; padding: 10px; border: 1px solid #f5c6cb; font-family: Consolas, monospace; font-size: 11pt; }")
+        self._set_console_error(True)
 
     def unlock_ui(self):
         for w in self._lockable:
@@ -391,129 +400,31 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_unlock.setVisible(False)
 
         self.console.clear()
-        self.console.setStyleSheet(
-            "QTextEdit { background-color: #ffffff; color: #24292E; "
-            "border: 1px solid #dee2e6; padding: 8px; }"
-        )
+        self._set_console_error(False)
         self.log("Icarus Verilog found. Tools ready.")
 
+    def _set_console_error(self, on):
+        """Toggle the console between normal and error Aurora styling.
+
+        Swaps the objectName so the global QSS (#verilogConsole vs
+        #verilogConsoleError) repaints it; an explicit unpolish/polish is
+        needed because Qt only re-evaluates selectors on demand. Replaces the
+        old hard-coded inline light stylesheets so the console follows the
+        active theme.
+        """
+        self.console.setObjectName(
+            "verilogConsoleError" if on else "verilogConsole")
+        self.console.style().unpolish(self.console)
+        self.console.style().polish(self.console)
+
     def init_ui(self):
-        self.setStyleSheet("""
-            QWidget {
-                font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            }
-            QPushButton {
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 16px;
-                color: #495057;
-                font-weight: 600;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-            QPushButton:pressed {
-                background-color: #dee2e6;
-                border-color: #adb5bd;
-            }
-            QPushButton#primaryAction {
-                background-color: #198754;
-                border: 1px solid #157347;
-                color: #ffffff;
-            }
-            QPushButton#primaryAction:hover {
-                background-color: #157347;
-                border-color: #146c43;
-                color: #ffffff;
-            }
-            QPushButton#primaryAction:pressed {
-                background-color: #146c43;
-                border-color: #13653f;
-            }
-            QPushButton#primaryAction:disabled {
-                background-color: #a3cfbb;
-                border-color: #a3cfbb;
-                color: #f8f9fa;
-            }
-            QToolButton {
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 22px 6px 16px;
-                color: #495057;
-                font-weight: 600;
-                font-size: 13px;
-            }
-            QToolButton:hover {
-                background-color: #e9ecef;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-            QToolButton:disabled {
-                color: #adb5bd;
-            }
-            QToolButton::menu-indicator {
-                subcontrol-position: right center;
-                subcontrol-origin: padding;
-                right: 8px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #dee2e6;
-                background-color: #ffffff;
-                border-radius: 4px;
-                border-top-left-radius: 0px;
-            }
-            QTabBar::tab {
-                background: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-bottom: none;
-                padding: 8px 16px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                color: #6c757d;
-                font-weight: 500;
-            }
-            QTabBar::tab:selected {
-                background: #ffffff;
-                color: #212529;
-                font-weight: bold;
-                border-top: 3px solid #007bff;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #e9ecef;
-                color: #495057;
-            }
-            QListWidget {
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                background-color: #ffffff;
-                alternate-background-color: #f8f9fa;
-                font-size: 13px;
-            }
-            QListWidget::item {
-                border-radius: 4px;
-                margin: 2px;
-            }
-            QListWidget::item:selected {
-                background-color: #e7f1ff;
-                color: #0c63e4;
-                font-weight: bold;
-            }
-            QSplitter::handle {
-                background-color: #e9ecef;
-                margin: 2px;
-                border-radius: 2px;
-            }
-            QSplitter::handle:hover {
-                background-color: #ced4da;
-            }
-        """)
-        
+        # Aurora theme drives the look now: tag the root so the global QSS
+        # (#verilogRoot + its child selectors) paints this surface, and let the
+        # app sheet style the buttons / tabs / lists / splitters the old
+        # hard-light inline stylesheet used to hand-paint. Stripping it lets the
+        # panel follow dark/light theme switches instead of staying white.
+        self.setObjectName("verilogRoot")
+
         main_layout = QtWidgets.QVBoxLayout(self)
         
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
@@ -521,6 +432,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # 1. Top widget containing the tabbed editors
         top_container = QtWidgets.QWidget()
+        top_container.setObjectName("verilogTopContainer")
         top_layout = QtWidgets.QVBoxLayout(top_container)
         top_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -529,10 +441,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Sidebar for module hierarchy
         sidebar_widget = QtWidgets.QWidget()
+        sidebar_widget.setObjectName("verilogSidebar")
         sidebar_layout = QtWidgets.QVBoxLayout(sidebar_widget)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         
         lbl_sidebar = QtWidgets.QLabel("Module Hierarchy")
+        lbl_sidebar.setObjectName("verilogSidebarTitle")
         lbl_sidebar.setFont(QtGui.QFont("Segoe UI", 10, FONT_BOLD))
         sidebar_layout.addWidget(lbl_sidebar)
         
@@ -541,6 +455,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         sidebar_layout.addWidget(self.btn_auto_detect)
         
         self.hierarchy_list = QtWidgets.QListWidget()
+        self.hierarchy_list.setObjectName("verilogHierarchyList")
         self.hierarchy_list.itemDoubleClicked.connect(self.hierarchy_double_clicked)
         self.hierarchy_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.hierarchy_list.customContextMenuRequested.connect(self.show_hierarchy_context_menu)
@@ -688,7 +603,9 @@ class VerilogVerifier(QtWidgets.QWidget):
         # The primary action: accented and right-anchored. F5 = run, the near-
         # universal "go" key, so it works without reaching for the mouse.
         self.btn_simulate = QtWidgets.QPushButton("▶  Simulate")
-        self.btn_simulate.setObjectName("primaryAction")
+        # Aurora paints the accented primary button via the verifierPrimary
+        # cssClass (replaces the old #primaryAction inline-styled green).
+        self.btn_simulate.setProperty("cssClass", "verifierPrimary")
         self.btn_simulate.clicked.connect(self.simulate_and_wave)
         controls_layout.addWidget(self.btn_simulate)
 
@@ -715,6 +632,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         # Find/Replace Toolbar
         self.find_widget = QtWidgets.QWidget()
+        self.find_widget.setObjectName("verilogFindBar")
         find_layout = QtWidgets.QHBoxLayout(self.find_widget)
         find_layout.setContentsMargins(0, 0, 0, 0)
         
@@ -751,15 +669,16 @@ class VerilogVerifier(QtWidgets.QWidget):
         #    straight into the splitter -- no wrapper container needed.
         # Console output styled like Vivado TCL Console
         self.console_tabs = QtWidgets.QTabWidget()
+        self.console_tabs.setObjectName("verilogBottomContainer")
         self.console = ConsoleEdit()
         self.console.setReadOnly(True)
         self.console.setPlaceholderText("Console logs will appear here...\nDouble-click a syntax error (e.g. design.v:5: error) to jump directly to the line.")
         self.console.setFont(QtGui.QFont("Consolas", 11))
         self.console.error_clicked.connect(self.jump_to_error)
-        self.console.setStyleSheet(
-            "QTextEdit { background-color: #ffffff; color: #24292E; "
-            "border: 1px solid #dee2e6; padding: 8px; }"
-        )
+        # Aurora styles the console via #verilogConsole (and #verilogConsoleError
+        # for the error state, toggled in _set_console_error). No inline sheet,
+        # so it tracks dark/light theme switches.
+        self.console.setObjectName("verilogConsole")
         self.console_tabs.addTab(self.console, "Console Output")
 
         # Copy lives in the console tab's corner now that there is no popout bar.
@@ -915,22 +834,23 @@ class VerilogVerifier(QtWidgets.QWidget):
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
             widget = QtWidgets.QWidget()
+            widget.setObjectName("hierarchyRow")
             layout = QtWidgets.QHBoxLayout(widget)
             layout.setContentsMargins(5, 2, 5, 2)
-            
+
             lbl = QtWidgets.QLabel(name)
-            
-            # Override global QPushButton padding for these tiny buttons
-            btn_style = "QPushButton { padding: 0px; font-weight: bold; font-size: 14px; color: #212529; }"
-            
+            lbl.setObjectName("hierarchyName")
+
+            # Aurora styles these tiny move buttons via #hierarchyMoveBtn (size,
+            # padding and colour), so no inline override is needed.
             btn_up = QtWidgets.QPushButton("▲")
+            btn_up.setObjectName("hierarchyMoveBtn")
             btn_up.setFixedSize(24, 24)
-            btn_up.setStyleSheet(btn_style)
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
-            
+
             btn_down = QtWidgets.QPushButton("▼")
+            btn_down.setObjectName("hierarchyMoveBtn")
             btn_down.setFixedSize(24, 24)
-            btn_down.setStyleSheet(btn_style)
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))
             
             layout.addWidget(lbl)

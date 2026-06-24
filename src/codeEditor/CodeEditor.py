@@ -255,6 +255,15 @@ class CodeEditor(QsciScintilla):
         self.setLexer(self._lexer)
         theme.apply(self, self._lexer, self._mono)
 
+    def changeEvent(self, event):
+        # Re-theme the content (lexer colours, paper, gutter) when the app
+        # palette flips dark<->light, so the editor tracks the Aurora theme
+        # live. Guard on _mono: the event can arrive mid-construction.
+        if (event.type() == QtCore.QEvent.Type.PaletteChange
+                and hasattr(self, "_mono")):
+            theme.apply(self, self._lexer, self._mono)
+        super().changeEvent(event)
+
     # ------------------------------------------------------------------
     # find highlighting (driven by the FindBar)
     # ------------------------------------------------------------------

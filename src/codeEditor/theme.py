@@ -7,38 +7,62 @@ SPICE, Verilog and VHDL lexers all get consistent, deliberate colours
 instead of the near-black defaults.
 """
 
-from PyQt6.QtGui import QColor, QFont, QFontDatabase
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPalette
+from PyQt6.QtWidgets import QApplication
 from PyQt6.Qsci import QsciScintilla
 
 
-# ── palette ──────────────────────────────────────────────────────────
-PAPER = "#FFFFFF"
-TEXT = "#24292E"
-COMMENT = "#6A9955"
-KEYWORD = "#0033B3"
-NUMBER = "#098658"
-STRING = "#A31515"
-VALUE = "#9A3FB6"
-PARAMETER = "#0070C1"
-FUNCTION = "#795E26"
-PREPROC = "#AF00DB"
-OPERATOR = "#6E7781"
-INSTANCE = "#C2410C"
-EXPRESSION = "#9A3FB6"
-NODE = "#0E7490"
+# ── palettes ─────────────────────────────────────────────────────────
+# Two schemes: "eSim Light" (the original) and a matching dark scheme so the
+# QScintilla editor tracks the Aurora theme instead of staying a white box on
+# a dark UI. The bare module names below (PAPER, TEXT, …) are rebound by
+# _activate_palette() at apply() time; every helper reads them as globals.
+LIGHT = {
+    "PAPER": "#FFFFFF", "TEXT": "#24292E", "COMMENT": "#6A9955",
+    "KEYWORD": "#0033B3", "NUMBER": "#098658", "STRING": "#A31515",
+    "VALUE": "#9A3FB6", "PARAMETER": "#0070C1", "FUNCTION": "#795E26",
+    "PREPROC": "#AF00DB", "OPERATOR": "#6E7781", "INSTANCE": "#C2410C",
+    "EXPRESSION": "#9A3FB6", "NODE": "#0E7490",
+    # chrome
+    "MARGIN_FG": "#9DA5B4", "MARGIN_BG": "#F3F4F6", "MARGIN_SEP": "#DFE1E6",
+    "CARET_LINE": "#F5F8FF", "SELECTION": "#CFE3FB", "BRACE_FG": "#0033B3",
+    "BRACE_BG": "#C8E6C9", "GUIDE": "#E6E8EB", "CARET": "#24292E",
+    "SEARCH_HL": "#FBD56A", "CURRENT_HL": "#FF9632",
+}
+DARK = {
+    "PAPER": "#0E1728", "TEXT": "#E6EDF7", "COMMENT": "#6A9955",
+    "KEYWORD": "#569CD6", "NUMBER": "#B5CEA8", "STRING": "#CE9178",
+    "VALUE": "#C586C0", "PARAMETER": "#9CDCFE", "FUNCTION": "#DCDCAA",
+    "PREPROC": "#C586C0", "OPERATOR": "#C9D3E0", "INSTANCE": "#F1956B",
+    "EXPRESSION": "#C586C0", "NODE": "#4EC9B0",
+    # chrome
+    "MARGIN_FG": "#5F728D", "MARGIN_BG": "#0A1020", "MARGIN_SEP": "#1D2B45",
+    "CARET_LINE": "#121E33", "SELECTION": "#264F78", "BRACE_FG": "#569CD6",
+    "BRACE_BG": "#1D2B45", "GUIDE": "#1D2B45", "CARET": "#E6EDF7",
+    "SEARCH_HL": "#FBD56A", "CURRENT_HL": "#FF9632",
+}
+# Start on the light scheme; _activate_palette() switches to dark when the app
+# palette is dark. globals().update keeps the historical bare-name API intact.
+globals().update(LIGHT)
 
-# chrome
-MARGIN_FG = "#9DA5B4"
-MARGIN_BG = "#F3F4F6"
-MARGIN_SEP = "#DFE1E6"    # slightly darker stripe between numbers and fold
-CARET_LINE = "#F5F8FF"
-SELECTION = "#CFE3FB"
-BRACE_FG = "#0033B3"
-BRACE_BG = "#C8E6C9"
-GUIDE = "#E6E8EB"
-CARET = "#24292E"
-SEARCH_HL = "#FBD56A"        # all-matches highlight
-CURRENT_HL = "#FF9632"       # current match highlight
+
+def is_dark_theme():
+    """True when the running app is on a dark Aurora palette.
+
+    Detect from the QApplication's window colour -- the same signal
+    theme_utils/icon_paths use -- defaulting to light when there is no app
+    yet (e.g. unit tests)."""
+    app = QApplication.instance()
+    if app is None:
+        return False
+    return app.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def _activate_palette():
+    """Rebind the colour globals to match the active Aurora theme."""
+    dark = is_dark_theme()
+    globals().update(DARK if dark else LIGHT)
+    return dark
 
 #: indicator numbers used for find highlighting (clear of lexer use)
 SEARCH_INDICATOR = 8
@@ -122,7 +146,11 @@ def _classify(desc):
 
 
 def apply(editor, lexer, font=None):
-    """Theme *editor* (a QsciScintilla) and its *lexer* (may be None)."""
+    """Theme *editor* (a QsciScintilla) and its *lexer* (may be None).
+
+    Re-reads the active Aurora palette first, so calling apply() again after a
+    theme switch (e.g. from an editor's changeEvent) repaints it dark/light."""
+    _activate_palette()
     font = font or editor_font()
     paper = QColor(PAPER)
 

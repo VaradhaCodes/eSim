@@ -10,8 +10,14 @@ class Welcome(QtWidgets.QWidget):
 
     def __init__(self):
         QtWidgets.QWidget.__init__(self)
+        self.setObjectName("welcomeCard")
         self.vlayout = QtWidgets.QVBoxLayout()
+        self.vlayout.setContentsMargins(0, 0, 0, 0)
         self.browser = QtWidgets.QTextBrowser()
+        # Tagged + frameless so the Aurora theme palette drives the card
+        # surface/text instead of a hard-coded light page.
+        self.browser.setObjectName("welcomeScroll")
+        self.browser.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
 
         init_path = '../../'
         if os.name == 'nt':
