@@ -81,6 +81,82 @@ class DockArea(QtWidgets.QMainWindow):
         # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
         self.show()
 
+    def tabifyDockWidget(self, first, second):
+        """Tabify two docks, then (re)arm the close-X on the bottom tab bar so
+        every tabified tool can be closed straight from its tab."""
+        super().tabifyDockWidget(first, second)
+        self.enable_tab_close_buttons()
+
+    def enable_tab_close_buttons(self):
+        """Turn on the close button for the QMainWindow's own dock tab bars.
+
+        Only the dock-area tab bars are targeted (parent is the QMainWindow, not
+        a QTabWidget), so tab strips *inside* a tool (NgVeri, Flow Navigator …)
+        are left untouched."""
+        for tb in self.findChildren(QtWidgets.QTabBar):
+            if isinstance(tb.parent(), QtWidgets.QTabWidget):
+                continue
+            tb.setTabsClosable(True)
+            try:
+                tb.tabCloseRequested.disconnect()
+            except Exception:
+                pass
+            tb.tabCloseRequested.connect(
+                lambda index, tab_bar=tb:
+                self.handle_tab_close(index, tab_bar))
+
+    def _forget_dock(self, child):
+        """Drop every reference eSim keeps to a dock so closing a tab cannot
+        leave a zombie member behind (which would corrupt the saved layout)."""
+        keys_to_delete = [k for k, v in dock.items() if v is child]
+        for k in keys_to_delete:
+            del dock[k]
+        try:
+            self.active_plotting_docks.discard(child)
+        except Exception:
+            pass
+        # Drop any waveform tab bound to this source dock (and vice-versa).
+        try:
+            for src in [s for s, w in self._wave_docks.items()
+                        if w is child or s is child]:
+                del self._wave_docks[src]
+        except Exception:
+            pass
+        for docks in self.obj_appconfig.dock_dict.values():
+            if child in docks:
+                docks.remove(child)
+
+    def _destroy_dock(self, child):
+        """Close, unparent and schedule deletion of a dock + forget it."""
+        child.close()
+        try:
+            self.removeDockWidget(child)
+        except Exception:
+            pass
+        self._forget_dock(child)
+        child.deleteLater()
+
+    def handle_tab_close(self, index, tab_bar):
+        """Close the dock behind the clicked tab (matched by title), tearing it
+        fully down rather than just hiding it."""
+        tab_text = tab_bar.tabText(index).replace('&', '').strip()
+        if tab_text.endswith('...'):
+            tab_text = tab_text[:-3].strip()
+
+        for child in self.findChildren(QtWidgets.QDockWidget):
+            if not child.isVisible():
+                continue
+            title = child.windowTitle().replace('&', '').strip()
+            if title == tab_text or (tab_text and title.startswith(tab_text)):
+                self._destroy_dock(child)
+                return
+
+        # Fallback: close by visible-index when the title match fails.
+        visible = [d for d in self.findChildren(QtWidgets.QDockWidget)
+                   if d.isVisible()]
+        if index < len(visible):
+            self._destroy_dock(visible[index])
+
     def get_main_view_reference(self):
         """Get reference to the MainView widget."""
         parent = self.parent()
@@ -102,13 +178,46 @@ class DockArea(QtWidgets.QMainWindow):
             main_view.collapse_console_area()
 
     def apply_fullscreen_feature(self, dock_widget, original_widget):
-        """Mount a dock's content. Fullscreen is no longer dock chrome at all:
-        it is a small per-panel control living in each working panel's own
-        header (see frontEnd.FullScreen.FullScreenToggle), so this just mounts
-        the widget and gives the dock a stable objectName."""
+        """Mount a dock's content inside a rounded Aurora card.
+
+        Fullscreen is no longer dock chrome at all: it is a small per-panel
+        control living in each working panel's own header (see
+        frontEnd.FullScreen.FullScreenToggle). Here we wrap the tool content in
+        a ``#dockCard`` frame (themed surface + 16px radius) sitting inside a
+        thin holder whose margins reveal the darker dock base around it, so a
+        docked tool reads as a raised floating card.
+
+        The holder is the dock's *direct* child, so FullScreenToggle (which
+        reparents the dock's direct child) carries the whole card in and out of
+        fullscreen and the look survives the round-trip. The card is a plain
+        QFrame with no graphics effect, so QWebEngineView tools (Makerchip /
+        User Manual) keep rendering."""
         if not dock_widget.objectName():
             dock_widget.setObjectName(dock_widget.windowTitle() or "dock")
-        dock_widget.setWidget(original_widget)
+
+        card = QtWidgets.QFrame()
+        card.setObjectName("dockCard")
+        card_layout = QtWidgets.QVBoxLayout(card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+        card_layout.addWidget(original_widget)
+
+        holder = QtWidgets.QWidget()
+        holder_layout = QtWidgets.QVBoxLayout(holder)
+        holder_layout.setContentsMargins(10, 8, 10, 10)
+        holder_layout.setSpacing(0)
+        holder_layout.addWidget(card)
+
+        dock_widget.setWidget(holder)
+
+        # Freshly-mounted tool content carries its own buttons; re-install the
+        # Aurora hover/press glow so they animate too (gated inside motion — a
+        # no-op when the user has motion off).
+        try:
+            from frontEnd.motion import install_button_motion
+            install_button_motion(self)
+        except Exception:
+            pass
 
     def createTestEditor(self):
         """This function create widget for Library Editor"""
