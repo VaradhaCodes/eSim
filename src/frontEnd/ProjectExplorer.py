@@ -43,6 +43,8 @@ class ProjectExplorer(QtWidgets.QWidget):
         # One reusable editor window per project (keyed by project name).
         self.editor_windows = {}
         self.treewidget = QtWidgets.QTreeWidget()
+        # Smooth drop-down animation when a project branch expands/collapses.
+        self.treewidget.setAnimated(True)
         self.window = QtWidgets.QVBoxLayout()
         self.fs_watcher = QtCore.QFileSystemWatcher()
         header = QtWidgets.QTreeWidgetItem(["Projects", "path"])
@@ -52,8 +54,17 @@ class ProjectExplorer(QtWidgets.QWidget):
 
         self.loadProjects()
         self.window.addWidget(self.treewidget)
+        # Static elevation (e2) so the project tree reads as a raised panel.
+        try:
+            from frontEnd.elevation import elevate
+            elevate(self.treewidget, "e2")
+        except Exception:
+            pass
         self.fs_watcher.directoryChanged.connect(self.handleDirectoryChanged)
-        self.treewidget.expanded.connect(self.refreshInstant)
+        # NOT refreshing on expand: rebuilding a branch's children mid-expand
+        # destroys QTreeWidget's drop-down animation (jittery/broken). The
+        # fs_watcher above already keeps the tree fresh on directory changes.
+        # self.treewidget.expanded.connect(self.refreshInstant)
         self.treewidget.doubleClicked.connect(self.openProject)
         self.treewidget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.treewidget.customContextMenuRequested.connect(self.openMenu)
@@ -166,6 +177,18 @@ class ProjectExplorer(QtWidgets.QWidget):
 
     # ---- project-node helpers (identity, display, staleness) ---------------
 
+    @staticmethod
+    def _dir_icon():
+        """Standard folder icon for project (top-level) rows."""
+        return QtWidgets.QApplication.style().standardIcon(
+            QtWidgets.QStyle.StandardPixmap.SP_DirIcon)
+
+    @staticmethod
+    def _file_icon():
+        """Standard file icon for the file rows under a project."""
+        return QtWidgets.QApplication.style().standardIcon(
+            QtWidgets.QStyle.StandardPixmap.SP_FileIcon)
+
     def _projectLabel(self, path):
         """Base display label for a project: its stem, else the folder name."""
         stem, _status = resolve_stem(path, 'proj')
@@ -180,6 +203,7 @@ class ProjectExplorer(QtWidgets.QWidget):
         base = self._projectLabel(path)
         node = QtWidgets.QTreeWidgetItem(self.treewidget, [base, path])
         node.setData(0, self.STEM_ROLE, base)
+        node.setIcon(0, self._dir_icon())
         self._fillChildren(node, path, children)
         return node
 
@@ -190,9 +214,10 @@ class ProjectExplorer(QtWidgets.QWidget):
             node.setData(0, self.STALE_ROLE, False)
             self._clearStale(node, path)
             for files in children:
-                QtWidgets.QTreeWidgetItem(
+                child = QtWidgets.QTreeWidgetItem(
                     node, [files, os.path.join(path, files)]
                 )
+                child.setIcon(0, self._file_icon())
             if path not in self.fs_watcher.directories():
                 self.fs_watcher.addPath(path)
         else:
@@ -278,16 +303,22 @@ class ProjectExplorer(QtWidgets.QWidget):
             index = index.parent()
             level += 1
 
+        style = QtWidgets.QApplication.style()
         menu = QtWidgets.QMenu()
         if level == 0:
             renameProject = menu.addAction(self.tr("Rename Project"))
             renameProject.triggered.connect(self.renameProject)
             deleteproject = menu.addAction(self.tr("Remove Project"))
+            deleteproject.setIcon(style.standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_TrashIcon))
             deleteproject.triggered.connect(self.removeProject)
             refreshproject = menu.addAction(self.tr("Refresh"))
+            refreshproject.setIcon(style.standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_BrowserReload))
             refreshproject.triggered.connect(self.refreshProject)
         elif level == 1:
             openfile = menu.addAction(self.tr("Open"))
+            openfile.setIcon(self._file_icon())
             openfile.triggered.connect(self.openProject)
             snapshot = menu.addAction(self.tr("Snapshot"))
             snapshot.triggered.connect(self.takeSnapshot)
@@ -403,10 +434,12 @@ class ProjectExplorer(QtWidgets.QWidget):
             count = parentnode.childCount()
             for i in range(count):
                 parentnode.removeChild(parentnode.child(0))
+            parentnode.setIcon(0, self._dir_icon())
             for files in filelistnew:
-                QtWidgets.QTreeWidgetItem(
+                child = QtWidgets.QTreeWidgetItem(
                     parentnode, [files, os.path.join(filePath, files)]
                 )
+                child.setIcon(0, self._file_icon())
 
             # Key by canonical identity and clear any prior stale state -- a
             # refresh that succeeds means the folder is back/valid.
