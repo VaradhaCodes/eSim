@@ -21,11 +21,15 @@ class TerminalUi(QtWidgets.QMainWindow):
         super(TerminalUi, self).__init__()
 
         # Other variables
-        self.darkColor = True
+        # The console inherits its colours from the global QSS rule
+        # `QTextEdit#simulationConsole` (see style_dark.qss / style_light.qss).
+        # We deliberately do NOT keep an internal dark/light toggle here — that
+        # was a legacy per-widget override that broke the user's selected
+        # theme. The lightDarkModeButton now cycles the application's theme via
+        # app.apply_theme() so the entire window stays in sync.
         self.qProcess = qProcess
         self.args = args
         self.ngspice_bin = ngspice_bin
-        self.iconDir = "../../images"
 
         # Load the ui file
         uic.loadUi(os.path.join(os.path.dirname(__file__), "TerminalUi.ui"), self)
@@ -56,21 +60,56 @@ class TerminalUi(QtWidgets.QMainWindow):
         )
         self.redoSimulationButton.setEnabled(False)
 
-        # Add functionalities to Widgets
-        self.lightDarkModeButton.setIcon(
-            QtGui.QIcon(
-                os.path.join(
-                    self.iconDir,
-                    'light_mode.png'
-                )
-            )
+        # Theme cycle — clicking this button asks the running application to
+        # swap palette to the next theme (System → Light → Dark → System).
+        # The QSS rule for `QTextEdit#simulationConsole` then re-applies
+        # automatically via apply_theme.
+        self.lightDarkModeButton.setToolTip(
+            "Cycle application theme (Light → Dark → System)"
         )
-        self.lightDarkModeButton.clicked.connect(self.changeColor)
+        self.lightDarkModeButton.setText("◐")
+        font = self.lightDarkModeButton.font()
+        font.setPointSize(13)
+        font.setBold(True)
+        self.lightDarkModeButton.setFont(font)
+        self.lightDarkModeButton.clicked.connect(self._cycle_theme)
         self.cancelSimulationButton.clicked.connect(self.cancelSimulation)
         self.redoSimulationButton.clicked.connect(self.redoSimulation)
 
         self.simulationCancelled = False
         self.show()
+
+    @staticmethod
+    def _cycle_theme():
+        """Cycle the application's theme preference and re-apply."""
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        apply_fn = getattr(app, 'apply_theme', None)
+        if apply_fn is None:
+            return
+        from frontEnd.theme_utils import get_preferences
+        if os.name == 'nt':
+            user_home = os.path.join('library', 'config')
+        else:
+            user_home = os.path.expanduser('~')
+        prefs = get_preferences(user_home)
+        order = ("System", "Light", "Dark")
+        try:
+            idx = order.index(prefs.get("theme_mode", "System"))
+        except ValueError:
+            idx = 0
+        next_mode = order[(idx + 1) % len(order)]
+        try:
+            import json
+            prefs["theme_mode"] = next_mode
+            path = os.path.join(user_home, ".esim", "preferences.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as fh:
+                json.dump(prefs, fh)
+        except Exception:
+            pass
+        apply_fn()
 
     def cancelSimulation(self):
         """This function cancels the ongoing ngspice simulation.
@@ -130,35 +169,6 @@ class TerminalUi(QtWidgets.QMainWindow):
 
         self.qProcess.start(self.ngspice_bin, self.args)
 
-    def changeColor(self):
-        """Toggles the :class:`Ui_Form` console between dark mode
-                        and light mode
-        """
-        if self.darkColor is True:
-            self.simulationConsole.setStyleSheet("QTextEdit {\n \
-                background-color: white;\n \
-                color: black;\n \
-            }")
-            self.lightDarkModeButton.setIcon(
-                QtGui.QIcon(
-                    os.path.join(
-                        self.iconDir,
-                        "dark_mode.png"
-                        )
-                    )
-                )
-            self.darkColor = False
-        else:
-            self.simulationConsole.setStyleSheet("QTextEdit {\n \
-                background-color: rgb(36, 31, 49);\n \
-                color: white;\n \
-            }")
-            self.lightDarkModeButton.setIcon(
-                QtGui.QIcon(
-                    os.path.join(
-                        self.iconDir,
-                        "light_mode.png"
-                        )
-                    )
-                )
-            self.darkColor = True
+    # Note: the legacy `changeColor()` per-widget dark/light toggle has been
+    # removed; use `_cycle_theme()` (the lightDarkModeButton target) instead so
+    # the entire application stays in sync with the user's chosen theme.
