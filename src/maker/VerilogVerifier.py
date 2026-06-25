@@ -451,6 +451,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         sidebar_layout.addWidget(lbl_sidebar)
         
         self.btn_auto_detect = QtWidgets.QPushButton("Auto-Detect")
+        self.btn_auto_detect.setProperty("cssClass", "secondary")
         self.btn_auto_detect.clicked.connect(self.auto_detect_hierarchy)
         sidebar_layout.addWidget(self.btn_auto_detect)
         
@@ -577,10 +578,12 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         # --- Build-prep actions (visible, secondary) -------------------------
         self.btn_syntax = QtWidgets.QPushButton("Check Syntax")
+        self.btn_syntax.setProperty("cssClass", "secondary")
         self.btn_syntax.clicked.connect(self.check_syntax)
         controls_layout.addWidget(self.btn_syntax)
 
         self.btn_stub = QtWidgets.QPushButton("Auto-Generate Testbench")
+        self.btn_stub.setProperty("cssClass", "secondary")
         self.btn_stub.clicked.connect(self.auto_generate_tb)
         controls_layout.addWidget(self.btn_stub)
 
@@ -589,6 +592,7 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         # Shown only when iverilog can't be found; lets the user point at it.
         self.btn_unlock = QtWidgets.QPushButton("Locate Icarus Verilog…")
+        self.btn_unlock.setProperty("cssClass", "danger")
         self.btn_unlock.clicked.connect(self.attempt_manual_unlock)
         self.btn_unlock.setVisible(False)
         controls_layout.addWidget(self.btn_unlock)
@@ -699,6 +703,23 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         # Check for Icarus Verilog on boot and lock if missing
         self.check_iverilog_lock()
+
+        # Aurora micro-interactions for the IDE: button glow, tab-bar kinetics
+        # and context-menu motion. All gated on the motion pref (no-op off).
+        try:
+            from frontEnd.motion import (
+                install_button_motion, motion_enabled, apply_panel_depth,
+                install_tab_kinetics, install_context_menu_motion)
+            # Static panel depth is always on (matches the design: only the
+            # animated glow / kinetics are perf-gated behind the motion pref).
+            for w in (self.hierarchy_list, self.editor_tabs, self.console_tabs):
+                apply_panel_depth(w, blur=28, y=8, alpha=82)
+            if motion_enabled():
+                install_button_motion(self)
+                install_tab_kinetics(self)
+                install_context_menu_motion(self)
+        except Exception:
+            pass
 
     def _unique_tab_name(self, name):
         """Disambiguate a tab label so no two design tabs share one. Tab labels
@@ -830,13 +851,18 @@ class VerilogVerifier(QtWidgets.QWidget):
                 if hasattr(self, 'design_views') and self.editor_tabs.widget(i) in self.design_views:
                     names.append(self.editor_tabs.tabText(i))
                 
-        for name in names:
+        for idx, name in enumerate(names, 1):
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
             widget = QtWidgets.QWidget()
             widget.setObjectName("hierarchyRow")
             layout = QtWidgets.QHBoxLayout(widget)
             layout.setContentsMargins(5, 2, 5, 2)
+
+            # Position badge (#hierarchyIndex) — shows the module's order in the
+            # hierarchy so the move-up/down controls read against a number.
+            index_lbl = QtWidgets.QLabel(str(idx))
+            index_lbl.setObjectName("hierarchyIndex")
 
             lbl = QtWidgets.QLabel(name)
             lbl.setObjectName("hierarchyName")
@@ -853,6 +879,7 @@ class VerilogVerifier(QtWidgets.QWidget):
             btn_down.setFixedSize(24, 24)
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))
             
+            layout.addWidget(index_lbl)
             layout.addWidget(lbl)
             layout.addStretch()
             layout.addWidget(btn_up)
