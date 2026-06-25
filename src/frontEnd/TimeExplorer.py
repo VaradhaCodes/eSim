@@ -72,7 +72,10 @@ class TimeExplorer(QtWidgets.QWidget):
         self.button_layout.setSpacing(6)
 
         self.backup_btn = QtWidgets.QPushButton('Quick Backup')
-        self.backup_btn.setProperty('cssClass', 'primary')
+        # Aurora filled-primary class (green CTA). The byte-identical design QSS
+        # ships no generic `.primary`; `verifierPrimary` is the only filled
+        # primary style, and pairs with restore=secondary / clear=danger.
+        self.backup_btn.setProperty('cssClass', 'verifierPrimary')
         self.backup_btn.setToolTip('Snapshot every file in the current project')
         self.backup_btn.clicked.connect(self.quick_backup)
 
