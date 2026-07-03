@@ -59,21 +59,39 @@ Table of contents
 
 
 2.  eSim installation in Ubuntu OS
-    
-   	i.      After downloading eSim, extract it using: 
-  
-   		       $ unzip eSim-2.5.zip
+
+    Supported releases: Ubuntu 23.04 / 24.04 / 25.04 / 26.04 (64-bit).
+    One unified installer auto-detects the Ubuntu version — there are no
+    per-version scripts to pick.
+
+   	i.      After downloading eSim, extract it using:
+
+   		       $ unzip eSim-2.5-ubuntu.zip
 
    	ii.     Now change directories in to the top-level eSim directory (where this INSTALL file can be found).
 
-   	iii.    To install eSim and other dependencies, run the following command :
+   	iii.    (Optional) Preview exactly what will be installed for your Ubuntu
+   	        version, without changing anything:
 
    		       $ chmod +x install-eSim.sh
+   		       $ ./install-eSim.sh --dry-run
+
+   	iv.     To install eSim and other dependencies, run:
+
    		       $ ./install-eSim.sh --install
 
-   	iv.     To uninstall eSim and all of its components, run the following command :
+   	v.      To uninstall eSim and all of its components, run:
 
    		       $ ./install-eSim.sh --uninstall
+
+   	        The installer is idempotent: re-running --install over an existing
+   	        eSim (any prior version) reinstalls cleanly, and --uninstall is
+   	        version-agnostic.
+
+   	Note (developers): in the source tree the installer lives at
+   	Ubuntu/install-eSim.sh and runs against the working tree directly. To cut a
+   	frozen, self-contained release zip from the current tree, run
+   	./make-release.sh (output in dist/).
 
 
    How to Run eSim
