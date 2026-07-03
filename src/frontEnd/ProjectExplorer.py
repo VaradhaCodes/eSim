@@ -2,14 +2,59 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration import Dialogs
 import os
 import json
-import shutil
-from datetime import datetime
-from pathlib import Path
 from configuration.Appconfig import Appconfig
+from frontEnd.SnapshotStore import SnapshotStore
 from projManagement.Validation import Validation
 from projManagement.projectPaths import resolve_stem, canonical_path, \
     same_project
 from codeEditor import EditorWindow
+
+
+class _ProjectTree(QtWidgets.QTreeWidget):
+    """Project tree that expands/collapses a project on a *single* click
+    anywhere on its row -- not only on the small branch arrow.
+
+    Toggles via ``setExpanded`` directly -- the exact call QTreeView's own
+    arrow hit-test makes internally -- instead of retargeting the click onto
+    the arrow and replaying it through QTreeView. That retargeting used to
+    hit QTreeView's itemDecorationAt() branch, which handles the arrow click
+    and returns *without* calling QAbstractItemView's mousePressEvent, so
+    Qt's internal pressedIndex bookkeeping never updated, and a later real
+    double-click on the row got silently downgraded back into a plain press
+    -- no project switch, even though the row could still look selected.
+
+    The toggle itself is deferred a tick (QTimer.singleShot(0, ...)) rather
+    than run inline: with animation on (setAnimated(True)), calling
+    setExpanded() synchronously *inside* mousePressEvent also corrupts that
+    same pressedIndex bookkeeping for the row just pressed, breaking
+    doubleClicked on it -- even with the unmodified event passed straight to
+    QTreeView. Deferring lets the whole press/release/double-click sequence
+    for this event finish first, so the expand animation can never land
+    inside the same window Qt uses to validate a double-click."""
+
+    def mousePressEvent(self, event):
+        index = self.indexAt(event.position().toPoint())
+        item = self.itemFromIndex(index) if index.isValid() else None
+        # Only toggle on left-clicks on an expandable top-level project row.
+        # File rows (children) fall through untouched -- they open via
+        # double-click.
+        if (event.button() == QtCore.Qt.MouseButton.LeftButton
+                and item is not None
+                and item.parent() is None
+                and item.childCount() > 0):
+            content_left = self.visualRect(index).left()
+            # Only toggle when the click missed the arrow; on the arrow
+            # itself the native hit-test already handles it.
+            if event.position().toPoint().x() >= content_left:
+                persistent = QtCore.QPersistentModelIndex(index)
+                QtCore.QTimer.singleShot(
+                    0, lambda: self._deferredToggle(persistent))
+        super().mousePressEvent(event)
+
+    def _deferredToggle(self, persistent):
+        if persistent.isValid():
+            idx = QtCore.QModelIndex(persistent)
+            self.setExpanded(idx, not self.isExpanded(idx))
 
 
 # This is main class for Project Explorer Area.
@@ -42,10 +87,17 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.obj_validation = Validation()
         # One reusable editor window per project (keyed by project name).
         self.editor_windows = {}
-        self.treewidget = QtWidgets.QTreeWidget()
+        self.treewidget = _ProjectTree()
+        # objectName scopes the Aurora project-tree QSS (outline selection +
+        # rounded chevron) to this tree without restyling every other list.
+        self.treewidget.setObjectName('projectTree')
         # Smooth drop-down animation when a project branch expands/collapses.
         self.treewidget.setAnimated(True)
-        self.window = QtWidgets.QVBoxLayout()
+        # Double-click is for opening files, not toggling folders (single click
+        # already does that), so a folder double-click doesn't fight the
+        # expand animation by rebuilding its children mid-gesture.
+        self.treewidget.setExpandsOnDoubleClick(False)
+        self._vbox = QtWidgets.QVBoxLayout()
         self.fs_watcher = QtCore.QFileSystemWatcher()
         header = QtWidgets.QTreeWidgetItem(["Projects", "path"])
         self.treewidget.setHeaderItem(header)
@@ -53,7 +105,7 @@ class ProjectExplorer(QtWidgets.QWidget):
 
 
         self.loadProjects()
-        self.window.addWidget(self.treewidget)
+        self._vbox.addWidget(self.treewidget)
         # Static elevation (e2) so the project tree reads as a raised panel.
         try:
             from frontEnd.elevation import elevate
@@ -68,7 +120,7 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.treewidget.doubleClicked.connect(self.openProject)
         self.treewidget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.treewidget.customContextMenuRequested.connect(self.openMenu)
-        self.setLayout(self.window)
+        self.setLayout(self._vbox)
         self.show()
 
     def loadProjects(self):
@@ -316,6 +368,13 @@ class ProjectExplorer(QtWidgets.QWidget):
             refreshproject.setIcon(style.standardIcon(
                 QtWidgets.QStyle.StandardPixmap.SP_BrowserReload))
             refreshproject.triggered.connect(self.refreshProject)
+            menu.addSeparator()
+            snapshotProject = menu.addAction(self.tr("Snapshot Project"))
+            snapshotProject.setIcon(style.standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_DriveHDIcon))
+            snapshotProject.triggered.connect(self.takeProjectSnapshot)
+            openSnaps = menu.addAction(self.tr("Open Snapshots…"))
+            openSnaps.triggered.connect(self.openSnapshotsPanel)
         elif level == 1:
             openfile = menu.addAction(self.tr("Open"))
             openfile.setIcon(self._file_icon())
@@ -668,27 +727,62 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.time_explorer = time_explorer_widget
 
     def takeSnapshot(self):
+        """Snapshot a single file (right-clicked in the tree)."""
         index = self.treewidget.currentIndex()
-        file_path = str(index.sibling(index.row(), 1).data()) 
+        file_path = str(index.sibling(index.row(), 1).data())
         file_name = os.path.basename(file_path)
 
         if not os.path.isfile(file_path):
-            Dialogs.warning(self, "Snapshot Failed", "Selected item is not a file.")
+            Dialogs.warning(
+                self, "Snapshot Failed", "Selected item is not a file.")
             return
 
-        project_path = self.obj_appconfig.current_project["ProjectName"]
-        project_name = os.path.basename(project_path)
+        # Key history by the file's own project folder so the snapshot lands
+        # under the right project even if it isn't the active one.
+        project_path = os.path.dirname(file_path)
+        project_name = os.path.basename(os.path.normpath(project_path))
+        try:
+            SnapshotStore().create(
+                project_name, project_path, files=[file_name],
+                label="File snapshot")
+        except Exception as exc:
+            Dialogs.warning(self, "Snapshot Failed", str(exc))
+            return
 
-        snapshot_dir = os.path.join(Path.home(), ".esim", "history", project_name)
-        os.makedirs(snapshot_dir, exist_ok=True)
+        self._refresh_snapshots()
+        Dialogs.information(
+            self, "Snapshot", "Snapshot of “%s” saved." % file_name)
 
-        formatted_time = datetime.now().strftime("%I.%M %p %d-%m-%Y")
-        snapshot_name = f"{file_name}({formatted_time})"
-        snapshot_path = os.path.join(snapshot_dir, snapshot_name)
+    def takeProjectSnapshot(self):
+        """Snapshot every file in the right-clicked project."""
+        index = self.treewidget.currentIndex()
+        project_path = str(index.sibling(index.row(), 1).data())
+        if not os.path.isdir(project_path):
+            Dialogs.warning(
+                self, "Snapshot Failed", "Selected item is not a project.")
+            return
+        project_name = os.path.basename(os.path.normpath(project_path))
+        try:
+            _sid, count = SnapshotStore().create(
+                project_name, project_path, label="Full backup")
+        except Exception as exc:
+            Dialogs.warning(self, "Snapshot Failed", str(exc))
+            return
 
-        shutil.copy2(file_path, snapshot_path)
+        self._refresh_snapshots()
+        Dialogs.information(
+            self, "Snapshot",
+            "%d file(s) snapshotted for “%s”." % (count, project_name))
 
-        if hasattr(self, 'time_explorer'):
-            self.time_explorer.add_snapshot(file_name, formatted_time)
-        else:
-            print(f"Snapshot taken: {snapshot_path}")
+    def openSnapshotsPanel(self):
+        """Open the Project Snapshots panel (main window's dock)."""
+        win = self.window()
+        if hasattr(win, 'show_snapshots'):
+            win.show_snapshots()
+        elif getattr(self, 'time_explorer', None) is not None:
+            self.time_explorer.reload()
+            self.time_explorer.show()
+
+    def _refresh_snapshots(self):
+        if getattr(self, 'time_explorer', None) is not None:
+            self.time_explorer.reload()

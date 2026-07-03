@@ -6,6 +6,65 @@ from configuration.Appconfig import Appconfig
 import os
 
 
+class ParameterEditDelegate(QtWidgets.QStyledItemDelegate):
+    '''
+    - Editor delegate for the parameter table.
+    - The default in-cell editor was a short, inset pill: its text was clipped
+      top-and-bottom and the teal "selected cell" fill showed all around it, so
+      the value being edited looked like an unreadable blue box.
+    - This makes the editor fill the whole cell (room for the text, and it
+      covers the teal underneath), paints an opaque themed background, and opens
+      showing the value with the caret at the end — no select-all block over it.
+    '''
+
+    def _is_dark(self):
+        from PyQt6 import QtGui
+        try:
+            from frontEnd import theme_utils
+            home = (os.path.join('library', 'config')
+                    if os.name == 'nt' else os.path.expanduser('~'))
+            mode = theme_utils.get_preferences(home).get(
+                'theme_mode', 'System')
+            if mode == 'Dark':
+                return True
+            if mode == 'Light':
+                return False
+        except Exception:
+            pass
+        return (QtGui.QGuiApplication.styleHints().colorScheme()
+                == QtCore.Qt.ColorScheme.Dark)
+
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        if isinstance(editor, QtWidgets.QLineEdit):
+            if self._is_dark():
+                bg, fg, border = "#0E1728", "#F8FBFF", "#53D7FF"
+                sel_bg, sel_fg = "#0E7490", "#FFFFFF"
+            else:
+                bg, fg, border = "#FFFFFF", "#142033", "#0077A8"
+                sel_bg, sel_fg = "#0077A8", "#FFFFFF"
+            editor.setStyleSheet(
+                "QLineEdit{{margin:0;padding:0 8px;border:2px solid %(b)s;"
+                "border-radius:8px;background:%(bg)s;color:%(fg)s;"
+                "selection-background-color:%(sb)s;selection-color:%(sf)s;}}"
+                % {"b": border, "bg": bg, "fg": fg,
+                   "sb": sel_bg, "sf": sel_fg}
+            )
+        return editor
+
+    def updateEditorGeometry(self, editor, option, index):
+        # Fill the whole cell: gives the text vertical room (no clipping) and
+        # fully hides the teal selection fill behind the editor.
+        editor.setGeometry(option.rect)
+
+    def setEditorData(self, editor, index):
+        super().setEditorData(editor, index)
+        if isinstance(editor, QtWidgets.QLineEdit):
+            # Runs after Qt's built-in select-all, clearing it.
+            QtCore.QTimer.singleShot(
+                0, lambda: (editor.deselect(), editor.end(False)))
+
+
 class ModelEditorclass(QtWidgets.QWidget):
     '''
     - Initialise the layout for dockarea
@@ -39,81 +98,187 @@ class ModelEditorclass(QtWidgets.QWidget):
         self.savepathtest = self.init_path + 'library/deviceModelLibrary'
         self.obj_appconfig = Appconfig()
         self.newflag = 0
-        self.layout = QtWidgets.QVBoxLayout()
-        self.splitter = QtWidgets.QSplitter()
-        self.grid = QtWidgets.QGridLayout()
-        self.splitter.setOrientation(QtCore.Qt.Orientation.Vertical)
 
-        # Initialise the table view
-        self.modeltable = QtWidgets.QTableWidget()
+        # ── Root: a full-bleed column that fills the whole dock. The old
+        # QGridLayout pinned the device radios to column 1 and floated a fixed
+        # 200px table in a mid-panel island, so the editor sat as a small clump
+        # with dead margins on every side. Here a header sits on top and a body
+        # row (slim device rail + a parameter editor that grows) stretches all
+        # the way down to the dock floor.
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 24)
+        root.setSpacing(18)
+
+        # ── Header ───────────────────────────────────────────────────────
+        title = QtWidgets.QLabel("Model Editor")
+        title.setProperty("cssClass", "title")
+        root.addWidget(title)
+
+        subtitle = QtWidgets.QLabel(
+            "Create, edit and import SPICE device-model libraries — diodes, "
+            "transistors, MOSFETs, JFETs, IGBTs and magnetic cores — then save "
+            "them into your project's model library."
+        )
+        subtitle.setProperty("cssClass", "muted")
+        subtitle.setWordWrap(True)
+        root.addWidget(subtitle)
+
+        # ── File actions (full-width toolbar) ────────────────────────────
+        # New / Edit / Upload are quiet ghost buttons; Save is the accent CTA,
+        # pushed to the right edge and disabled until there's something to save.
+        file_group = QtWidgets.QGroupBox("Library")
+        file_group.setProperty("cssClass", "themedGroupBox")
+        file_row = QtWidgets.QHBoxLayout(file_group)
+        file_row.setSpacing(10)
 
         self.newbtn = QtWidgets.QPushButton('New')
-        self.newbtn.setToolTip('<b>Creating new Model Library</b>')
+        self.newbtn.setProperty("cssClass", "secondary")
+        self.newbtn.setMinimumHeight(38)
+        self.newbtn.setToolTip('<b>Create a new model library</b>')
         self.newbtn.clicked.connect(self.opennew)
+
         self.editbtn = QtWidgets.QPushButton('Edit')
-        self.editbtn.setToolTip('<b>Editing current Model Library</b>')
+        self.editbtn.setProperty("cssClass", "secondary")
+        self.editbtn.setMinimumHeight(38)
+        self.editbtn.setToolTip('<b>Edit an existing model library</b>')
         self.editbtn.clicked.connect(self.openedit)
+
+        self.uploadbtn = QtWidgets.QPushButton('Upload .lib')
+        self.uploadbtn.setProperty("cssClass", "secondary")
+        self.uploadbtn.setMinimumHeight(38)
+        self.uploadbtn.setToolTip(
+            '<b>Import an external .lib file into eSim</b>')
+        self.uploadbtn.clicked.connect(self.converttoxml)
+
         self.savebtn = QtWidgets.QPushButton('Save')
-        self.savebtn.setToolTip('<b>Saves the Model Library</b>')
+        # Commit action — the primary accent button of this toolbar.
+        self.savebtn.setProperty("cssClass", "primary")
+        self.savebtn.setMinimumHeight(38)
+        self.savebtn.setToolTip('<b>Save the model library</b>')
         self.savebtn.setDisabled(True)
         self.savebtn.clicked.connect(self.savemodelfile)
-        self.removebtn = QtWidgets.QPushButton('Remove')
-        self.removebtn.setHidden(True)
-        self.removebtn.clicked.connect(self.removeparameter)
-        self.addbtn = QtWidgets.QPushButton('Add')
-        self.addbtn.setHidden(True)
-        self.addbtn.clicked.connect(self.addparameters)
-        self.uploadbtn = QtWidgets.QPushButton('Upload')
-        self.uploadbtn.setToolTip(
-            '<b>Uploading external .lib file to eSim</b>')
-        self.uploadbtn.clicked.connect(self.converttoxml)
-        self.grid.addWidget(self.newbtn, 1, 2)
-        self.grid.addWidget(self.editbtn, 1, 3)
-        self.grid.addWidget(self.savebtn, 1, 4)
-        self.grid.addWidget(self.uploadbtn, 1, 5)
-        self.grid.addWidget(self.removebtn, 8, 4)
-        self.grid.addWidget(self.addbtn, 5, 4)
+
+        file_row.addWidget(self.newbtn)
+        file_row.addWidget(self.editbtn)
+        file_row.addWidget(self.uploadbtn)
+        file_row.addStretch(1)
+        file_row.addWidget(self.savebtn)
+        root.addWidget(file_group)
+
+        # ── Device rail (left of the body) ───────────────────────────────
+        # The six device types stacked as a slim rail; disabled until New is
+        # clicked, exactly as before, but now grouped and legible.
+        device_group = QtWidgets.QGroupBox("Device type")
+        device_group.setProperty("cssClass", "themedGroupBox")
+        device_group.setMaximumWidth(220)
+        device_col = QtWidgets.QVBoxLayout(device_group)
+        device_col.setSpacing(12)
 
         self.radiobtnbox = QtWidgets.QButtonGroup()
         self.diode = QtWidgets.QRadioButton('Diode')
-        self.diode.setDisabled(True)
         self.bjt = QtWidgets.QRadioButton('BJT')
-        self.bjt.setDisabled(True)
         self.mos = QtWidgets.QRadioButton('MOS')
-        self.mos.setDisabled(True)
         self.jfet = QtWidgets.QRadioButton('JFET')
-        self.jfet.setDisabled(True)
         self.igbt = QtWidgets.QRadioButton('IGBT')
-        self.igbt.setDisabled(True)
         self.magnetic = QtWidgets.QRadioButton('Magnetic Core')
-        self.magnetic.setDisabled(True)
+        for rb in (self.diode, self.bjt, self.mos,
+                   self.jfet, self.igbt, self.magnetic):
+            rb.setDisabled(True)
+            self.radiobtnbox.addButton(rb)
+            device_col.addWidget(rb)
+        device_col.addStretch(1)
 
-        self.radiobtnbox.addButton(self.diode)
         self.diode.clicked.connect(self.diode_click)
-        self.radiobtnbox.addButton(self.bjt)
         self.bjt.clicked.connect(self.bjt_click)
-        self.radiobtnbox.addButton(self.mos)
         self.mos.clicked.connect(self.mos_click)
-        self.radiobtnbox.addButton(self.jfet)
         self.jfet.clicked.connect(self.jfet_click)
-        self.radiobtnbox.addButton(self.igbt)
         self.igbt.clicked.connect(self.igbt_click)
-        self.radiobtnbox.addButton(self.magnetic)
         self.magnetic.clicked.connect(self.magnetic_click)
 
-        # Dropdown for various types supported by that element, ex bjt -> npn
-        self.types = QtWidgets.QComboBox()
-        self.types.setHidden(True)
+        # ── Parameter editor (right of the body, grows to fill) ──────────
+        param_group = QtWidgets.QGroupBox("Parameters")
+        param_group.setProperty("cssClass", "themedGroupBox")
+        param_col = QtWidgets.QVBoxLayout(param_group)
+        param_col.setSpacing(12)
 
-        self.grid.addWidget(self.types, 2, 2, 2, 3)
-        self.grid.addWidget(self.diode, 3, 1)
-        self.grid.addWidget(self.bjt, 4, 1)
-        self.grid.addWidget(self.mos, 5, 1)
-        self.grid.addWidget(self.jfet, 6, 1)
-        self.grid.addWidget(self.igbt, 7, 1)
-        self.grid.addWidget(self.magnetic, 8, 1)
-        self.setLayout(self.grid)
-        self.show()
+        # Dropdown for the sub-types of a device (e.g. BJT → NPN / PNP).
+        self.types = QtWidgets.QComboBox()
+        self.types.setMinimumHeight(34)
+        self.types.setHidden(True)
+        param_col.addWidget(self.types)
+
+        # Holder: an empty-state hint until a model is loaded, then the
+        # parameter table is mounted in its place by createtable().
+        self.table_holder = QtWidgets.QVBoxLayout()
+        self.placeholder = QtWidgets.QLabel(
+            "Pick a device type after New, or open a library with Edit, "
+            "to view and edit its parameters."
+        )
+        self.placeholder.setProperty("cssClass", "muted")
+        self.placeholder.setWordWrap(True)
+        self.placeholder.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.table_holder.addWidget(self.placeholder)
+        param_col.addLayout(self.table_holder, 1)
+
+        # Kept as an unmounted stub so early setHidden() calls (opennew,
+        # converttoxml) are safe before any real table exists.
+        self.modeltable = QtWidgets.QTableWidget()
+
+        # Add / Remove row beneath the table.
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setSpacing(10)
+        self.addbtn = QtWidgets.QPushButton('Add parameter')
+        self.addbtn.setMinimumHeight(34)
+        self.addbtn.setHidden(True)
+        self.addbtn.clicked.connect(self.addparameters)
+        self.removebtn = QtWidgets.QPushButton('Remove')
+        # Destructive — flat red danger styling.
+        self.removebtn.setProperty("cssClass", "danger")
+        self.removebtn.setMinimumHeight(34)
+        self.removebtn.setHidden(True)
+        self.removebtn.clicked.connect(self.removeparameter)
+        action_row.addStretch(1)
+        action_row.addWidget(self.addbtn)
+        action_row.addWidget(self.removebtn)
+        param_col.addLayout(action_row)
+
+        # ── Body row: slim device rail + growing editor, stretched to floor.
+        body = QtWidgets.QHBoxLayout()
+        body.setSpacing(18)
+        body.addWidget(device_group, 0)
+        body.addWidget(param_group, 1)
+        root.addLayout(body, 1)
+
+    def _mount_table(self, table):
+        '''
+        - Swap the placeholder / any previous table out of the holder and drop
+          the freshly built `table` in, so the editor body always fills the
+          Parameters group instead of floating in a fixed-size island.
+        '''
+        self.placeholder.setHidden(True)
+        for i in reversed(range(self.table_holder.count())):
+            w = self.table_holder.itemAt(i).widget()
+            if w is not None and w is not self.placeholder:
+                self.table_holder.takeAt(i)
+                w.setParent(None)
+        table.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.table_holder.addWidget(table, 1)
+
+    def _show_placeholder(self):
+        '''
+        - Tear any mounted table back out and restore the empty-state hint,
+          used when a flow resets the editor (New, Upload).
+        '''
+        for i in reversed(range(self.table_holder.count())):
+            w = self.table_holder.itemAt(i).widget()
+            if w is not None and w is not self.placeholder:
+                self.table_holder.takeAt(i)
+                w.setParent(None)
+        self.placeholder.setHidden(False)
 
     def opennew(self):
         '''
@@ -124,7 +289,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         self.addbtn.setHidden(True)
         try:
             self.removebtn.setHidden(True)
-            self.modeltable.setHidden(True)
+            self._show_placeholder()
         except BaseException:
             pass
 
@@ -357,7 +522,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         - Set states for other components
         - Initialise QTable widget
         - Set options for QTable widget
-        - Place QTable widget, using `self.grid.addWidget`
+        - Mount QTable widget into the Parameters holder via `_mount_table`
         - Select the `.xml` file from the modelfile passed as `.lib`
         - Use ET (xml.etree.ElementTree) to parse the xml file
         - Extract data from the XML and store it in `modeldict`
@@ -371,11 +536,20 @@ class ModelEditorclass(QtWidgets.QWidget):
         self.modelfile = modelfile
         self.modeldict = {}
         self.modeltable = QtWidgets.QTableWidget()
-        self.modeltable.resizeColumnsToContents()
         self.modeltable.setColumnCount(2)
-        self.modeltable.resizeRowsToContents()
-        self.modeltable.resize(200, 200)
-        self.grid.addWidget(self.modeltable, 3, 2, 8, 2)
+        self.modeltable.setItemDelegate(ParameterEditDelegate(self.modeltable))
+        vh = self.modeltable.verticalHeader()
+        vh.setVisible(False)
+        # Taller rows so the inline editor has room and its text isn't clipped.
+        vh.setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Fixed)
+        vh.setDefaultSectionSize(40)
+        header = self.modeltable.horizontalHeader()
+        header.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self._mount_table(self.modeltable)
         filepath, filename = os.path.split(self.modelfile)
         base, ext = os.path.splitext(filename)
         self.modelfile = os.path.join(filepath, base + '.xml')
@@ -739,7 +913,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         '''
         self.addbtn.setHidden(True)
         self.removebtn.setHidden(True)
-        self.modeltable.setHidden(True)
+        self._show_placeholder()
         model_dict = {}
         stringof = []
 

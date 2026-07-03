@@ -35,6 +35,7 @@ import os
 import shutil
 from os.path import expanduser
 from .DesignBus import DesignBus
+from .VerilogVerifier import HdlEditor
 home = expanduser("~")
 
 # declaring the global variables
@@ -133,7 +134,8 @@ class Maker(QtWidgets.QWidget):
         try:
             if self.entry_var[1].toPlainText() != text:
                 self.entry_var[1].setText(text)
-            self.entry_var[0].setText(self.verilogfile)
+            self.entry_var[0].setText(
+                self.verilogfile or "(no file yet — use Save to create one)")
         finally:
             self._applying = False
 
@@ -393,30 +395,32 @@ Please check if verilog file is chosen.")
         self.optionsbox = QtWidgets.QGroupBox()
         self.optionsbox.setTitle("Select Options")
         self.optionsgrid = QtWidgets.QGridLayout()
-        # self.optionsbox2 = QtWidgets.QGroupBox()
-        # self.optionsbox2.setTitle("Note: Please save the file once edited")
-        # self.optionsgrid2 = QtWidgets.QGridLayout()
+        # Even gutters + equal column stretch so the action row reads as one
+        # balanced toolbar instead of buttons drifting apart (the old layout
+        # left an empty column between "Add Top Level" and "Save").
+        self.optionsgrid.setHorizontalSpacing(12)
+        self.optionsgrid.setContentsMargins(4, 4, 4, 4)
         self.optionsgroupbtn = QtWidgets.QButtonGroup()
 
         self.verifier_btn = QtWidgets.QPushButton("Verilog Simulator IDE")
-        self.verifier_btn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: bold;")
+        # Aurora styles this primary launcher via the verifierPrimary accent
+        # instead of a hard-coded green that fought the cyan theme.
+        self.verifier_btn.setProperty("cssClass", "verifierPrimary")
         self.optionsgroupbtn.addButton(self.verifier_btn)
         self.verifier_btn.clicked.connect(self.open_verifier)
-        self.optionsgrid.addWidget(self.verifier_btn, 0, 0)
 
         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
         self.optionsgroupbtn.addButton(self.addoptions)
         self.addoptions.clicked.connect(self.addverilog)
-        self.optionsgrid.addWidget(self.addoptions, 0, 1)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0
+
         self.saveoption = QtWidgets.QPushButton("Save")
+        # Save is the workhorse action here -- promote it to the cyan accent so
+        # the row has a clear anchor instead of three near-invisible white cards
+        # blending into the page.
+        self.saveoption.setProperty("cssClass", "primary")
         self.optionsgroupbtn.addButton(self.saveoption)
         self.saveoption.clicked.connect(self.save)
-        self.optionsgrid.addWidget(self.saveoption, 0, 3)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+
         self.runoptions = QtWidgets.QPushButton("Edit in Makerchip IDE")
         self.runoptions.setToolTip(
             "Requires internet connection and a browser"
@@ -424,16 +428,25 @@ Please check if verilog file is chosen.")
         self.runoptions.setToolTipDuration(5000)
         self.optionsgroupbtn.addButton(self.runoptions)
         self.runoptions.clicked.connect(self.runmakerchip)
-        self.optionsgrid.addWidget(self.runoptions, 0, 4)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+
+        # Lay the buttons out in contiguous, equally-stretched columns. Taller
+        # min-height gives the labels room to breathe (the old 32px buttons made
+        # the centred text look cramped on wide cards).
+        action_btns = [self.verifier_btn, self.addoptions,
+                       self.saveoption, self.runoptions]
         if not makerchipTOSAccepted(False):
             self.acceptTOS = QtWidgets.QPushButton("Accept Makerchip TOS")
             self.optionsgroupbtn.addButton(self.acceptTOS)
             self.acceptTOS.clicked.connect(lambda: makerchipTOSAccepted(True))
-            self.optionsgrid.addWidget(self.acceptTOS, 0, 5)
-            # self.optionsbox.setLayout(self.optionsgrid)
-            # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+            action_btns.append(self.acceptTOS)
+
+        for col, btn in enumerate(action_btns):
+            btn.setMinimumHeight(40)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                              QtWidgets.QSizePolicy.Policy.Fixed)
+            self.optionsgrid.addWidget(btn, 0, col)
+            self.optionsgrid.setColumnStretch(col, 1)
+
         self.optionsbox.setLayout(self.optionsgrid)
         return self.optionsbox
 
@@ -477,47 +490,47 @@ Please check if verilog file is chosen.")
     def creategroup(self):
         self.trbox = QtWidgets.QGroupBox()
         self.trbox.setTitle(".tlv file")
-        # self.trbox.setDisabled(True)
-        # self.trbox.setVisible(False)
-        self.trgrid = QtWidgets.QGridLayout()
+        # Stack the fields vertically with section headers above each one.
+        # The old two-column grid put the labels in column 0 next to a tall
+        # editor in column 1, so ".tlv code" floated halfway down the left edge
+        # and the empty path value sat with nothing beside it.
+        self.trgrid = QtWidgets.QVBoxLayout()
+        self.trgrid.setContentsMargins(12, 10, 12, 12)
+        self.trgrid.setSpacing(6)
         self.trbox.setLayout(self.trgrid)
 
-        self.start = QtWidgets.QLabel("Path to .tlv file")
-        self.trgrid.addWidget(self.start, 1, 0)
+        path_header = QtWidgets.QLabel("Path to .tlv file")
+        path_header.setProperty("cssClass", "caps")
+        self.trgrid.addWidget(path_header)
+
         self.count = 0
         self.entry_var[self.count] = QtWidgets.QLabel()
-        self.trgrid.addWidget(self.entry_var[self.count], 1, 1)
-        self.entry_var[self.count].setMaximumWidth(1000)
+        # Placeholder so the row isn't a blank gap before the file is saved.
+        self.entry_var[self.count].setText(
+            "(no file yet — use Save to create one)")
+        self.entry_var[self.count].setProperty("cssClass", "muted")
+        self.trgrid.addWidget(self.entry_var[self.count])
         self.count += 1
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # Border/title styling comes from the global Aurora QGroupBox QSS so
+        # the group reads with the same gradient hairline as the rest of eSim.
 
-        self.start = QtWidgets.QLabel(".tlv code")
-        # self.start2 = QtWidgets.QLabel("Note: \
-        # Please save the file once edited")
-        # self.start2.setStyleSheet("background-color: red")
-        self.trgrid.addWidget(self.start, 2, 0)
-        # self.trgrid.addWidget(self.start2, 3,0)
-        self.entry_var[self.count] = QtWidgets.QTextEdit()
-        self.trgrid.addWidget(self.entry_var[self.count], 2, 1)
-        self.entry_var[self.count].setMaximumWidth(1000)
-        self.entry_var[self.count].setMaximumHeight(1000)
+        code_header = QtWidgets.QLabel(".tlv code")
+        code_header.setProperty("cssClass", "caps")
+        self.trgrid.addSpacing(4)
+        self.trgrid.addWidget(code_header)
+
+        # QsciScintilla-based Verilog editor (syntax highlight, line numbers,
+        # mono font, theme-aware) replacing the bare QTextEdit white box. It
+        # exposes toPlainText/setText aliases so existing call sites are
+        # unchanged.
+        self.entry_var[self.count] = HdlEditor("design.v")
+        self.trgrid.addWidget(self.entry_var[self.count], 1)
         # Author edits stream into the shared design (see _on_editor_changed).
         self.entry_var[self.count].textChanged.connect(self._on_editor_changed)
         self.count += 1
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # Border/title styling comes from the global Aurora QGroupBox QSS so
+        # the group reads with the same gradient hairline as the rest of eSim.
 
         return self.trbox

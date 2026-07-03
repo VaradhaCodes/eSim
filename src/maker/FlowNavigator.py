@@ -22,7 +22,7 @@
 #
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # =========================================================================
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from . import Maker
 from . import NgVeri
@@ -83,13 +83,12 @@ class FlowNavigator(QtWidgets.QWidget):
         # Right : the contextual fullscreen toggle.
         # Stages are freely clickable in any order: no chevrons, no Next
         # button, no gating, no completion ticks. The strip is a guide, not a
-        # wizard. Styling follows eSim's own palette (neutral grey + #e65100
-        # brand orange), not the generic material blue.
+        # wizard. Styling tracks the Aurora light/dark palette (neutral greys +
+        # the cyan accent) via _apply_pill_theme(), matching the rest of eSim.
         self.tabbar = QtWidgets.QWidget()
         self.tabbar.setObjectName("flowTabBar")
-        self.tabbar.setStyleSheet(
-            "QWidget#flowTabBar { background:#f7f8f9;"
-            " border-bottom:1px solid #d4d8dc; }")
+        # Colors come from _apply_pill_theme() (Aurora light/dark tokens),
+        # applied at the end of _build_ui and again on every PaletteChange.
         tb = QtWidgets.QHBoxLayout(self.tabbar)
         tb.setContentsMargins(10, 6, 10, 0)
         tb.setSpacing(0)
@@ -100,7 +99,9 @@ class FlowNavigator(QtWidgets.QWidget):
         # stage tabs so the two controls never read as one strip.
         divider = QtWidgets.QFrame()
         divider.setFrameShape(QtWidgets.QFrame.Shape.VLine)
-        divider.setStyleSheet("color:#d4d8dc;")
+        # Theme-neutral hairline: a low-alpha grey reads on both the Aurora
+        # light and dark palettes (the old #d4d8dc glared on the dark theme).
+        divider.setStyleSheet("color: rgba(124,141,168,0.40);")
         tb.addSpacing(12)
         tb.addWidget(divider)
         tb.addSpacing(12)
@@ -138,24 +139,18 @@ class FlowNavigator(QtWidgets.QWidget):
         self._tabs[AUTHOR].setChecked(True)
         self._select_mode(VERILOG)
 
+        # Paint the segmented toggle / stage tabs / reload bar from the active
+        # Aurora palette (re-runs on PaletteChange via changeEvent).
+        self._apply_pill_theme()
+
     def _build_mode_toggle(self, tb):
         """The [ Verilog | VHDL ] segmented control."""
         self._mode_group = QtWidgets.QButtonGroup(self)
         self._mode_group.setExclusive(True)
         self._mode_btns = {}
 
-        # Per-end radii make the two buttons read as one pill.
-        base = ("QPushButton { border:1px solid #d4d8dc; background:#ffffff;"
-                " color:#5f6b75; font-size:13px; padding:8px 18px; }"
-                " QPushButton:hover { color:#2c333a; }"
-                " QPushButton:checked { background:#e65100; color:#ffffff;"
-                " border-color:#e65100; }")
-        ends = {
-            VERILOG: " QPushButton { border-top-left-radius:5px;"
-                     " border-bottom-left-radius:5px; }",
-            VHDL:    " QPushButton { border-top-right-radius:5px;"
-                     " border-bottom-right-radius:5px; border-left:none; }",
-        }
+        # Styling (Aurora light/dark tokens + per-end pill radii) is applied
+        # in _apply_pill_theme(); here we only build the widgets.
         for mode, label, tip in (
                 (VERILOG, "Verilog", "Verilog flow: author, verify, convert"),
                 (VHDL, "VHDL", "VHDL flow: the NGHDL model creator")):
@@ -163,7 +158,6 @@ class FlowNavigator(QtWidgets.QWidget):
             btn.setCheckable(True)
             btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(tip)
-            btn.setStyleSheet(base + ends[mode])
             self._mode_group.addButton(btn)
             self._mode_btns[mode] = btn
             tb.addWidget(btn)
@@ -191,15 +185,7 @@ class FlowNavigator(QtWidgets.QWidget):
         # computed for the normal weight, so the text was clipped at the
         # corners. The active stage is signalled by colour + a filled tint + a
         # thick underline instead, which also reads as clearly important.
-        pill_qss = (
-            "QPushButton { border:none; background:transparent; color:#566069;"
-            " font-size:14px; font-weight:600; padding:10px 26px;"
-            " border-top-left-radius:6px; border-top-right-radius:6px;"
-            " border-bottom:3px solid transparent; }"
-            "QPushButton:hover { color:#2c333a; background:#eceff1; }"
-            "QPushButton:checked { color:#e65100; background:#fff3e9;"
-            " border-bottom:3px solid #e65100; }")
-
+        # Colours come from _apply_pill_theme() (Aurora light/dark tokens).
         self._stage_group = QtWidgets.QButtonGroup(self)
         self._stage_group.setExclusive(True)
         self._tabs = {}
@@ -208,12 +194,106 @@ class FlowNavigator(QtWidgets.QWidget):
             btn.setCheckable(True)
             btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(hints[stage])
-            btn.setStyleSheet(pill_qss)
             self._stage_group.addButton(btn, stage)
             self._tabs[stage] = btn
             row.addWidget(btn)
         self._stage_group.idClicked.connect(self._goto_stage)
         tb.addWidget(self._stage_tabs_w)
+
+    # ------------------------------------------------------------------ #
+    #  Theming — Aurora light/dark tokens (segmented toggle + stage tabs)
+    # ------------------------------------------------------------------ #
+    def _is_dark(self):
+        """True when the active Aurora palette is the dark variant."""
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            try:
+                c = app.palette().color(QtGui.QPalette.ColorRole.Window)
+                if c.isValid():
+                    return c.lightness() < 128
+            except Exception:
+                pass
+        return False
+
+    def _pill_tokens(self):
+        """Color set for the flow chrome, keyed to the active theme. Values
+        are Aurora's own tokens (frontEnd/tokens.py) so the toggle/tabs read as
+        part of the same design language as the rest of eSim — cyan accent in
+        place of the old standalone brand orange."""
+        if self._is_dark():
+            return {
+                "bar_bg": "#0A1020", "bar_border": "#1D2B45",
+                "seg_bg": "#0E1728", "seg_border": "#1D2B45",
+                "seg_fg": "#9FB1CC", "seg_hover_fg": "#F4F8FF",
+                "accent": "#53D7FF", "accent_fg": "#03121C",
+                "stage_fg": "#9FB1CC", "stage_hover_fg": "#F4F8FF",
+                "stage_hover_bg": "#121E33",
+                "stage_checked_fg": "#53D7FF",
+                "stage_checked_bg": "rgba(83,215,255,0.14)",
+                "reload_bg": "rgba(250,204,21,0.10)",
+                "reload_border": "#FACC15", "reload_fg": "#FACC15",
+            }
+        return {
+            "bar_bg": "#F3F7FC", "bar_border": "#DCE6F1",
+            "seg_bg": "#FFFFFF", "seg_border": "#DCE6F1",
+            "seg_fg": "#5A6E89", "seg_hover_fg": "#142033",
+            "accent": "#0077A8", "accent_fg": "#FFFFFF",
+            "stage_fg": "#5A6E89", "stage_hover_fg": "#142033",
+            "stage_hover_bg": "#F6F9FD",
+            "stage_checked_fg": "#0077A8",
+            "stage_checked_bg": "rgba(0,119,168,0.10)",
+            "reload_bg": "rgba(217,119,6,0.10)",
+            "reload_border": "#D97706", "reload_fg": "#92400E",
+        }
+
+    def _apply_pill_theme(self):
+        """(Re)paint the tab bar, segmented toggle, stage tabs and reload bar
+        from the active Aurora palette. Safe to call repeatedly; runs once at
+        build time and again on every PaletteChange."""
+        t = self._pill_tokens()
+        if hasattr(self, "tabbar"):
+            self.tabbar.setStyleSheet(
+                f"QWidget#flowTabBar {{ background:{t['bar_bg']};"
+                f" border-bottom:1px solid {t['bar_border']}; }}")
+        # Segmented [ Verilog | VHDL ] toggle — per-end radii read as one pill.
+        base = (f"QPushButton {{ border:1px solid {t['seg_border']};"
+                f" background:{t['seg_bg']}; color:{t['seg_fg']};"
+                " font-size:13px; padding:8px 18px; }"
+                f" QPushButton:hover {{ color:{t['seg_hover_fg']}; }}"
+                f" QPushButton:checked {{ background:{t['accent']};"
+                f" color:{t['accent_fg']}; border-color:{t['accent']}; }}")
+        ends = {
+            VERILOG: " QPushButton { border-top-left-radius:5px;"
+                     " border-bottom-left-radius:5px; }",
+            VHDL:    " QPushButton { border-top-right-radius:5px;"
+                     " border-bottom-right-radius:5px; border-left:none; }",
+        }
+        for mode, btn in getattr(self, "_mode_btns", {}).items():
+            btn.setStyleSheet(base + ends[mode])
+        # Author / Verify / Convert underline tabs.
+        pill_qss = (
+            f"QPushButton {{ border:none; background:transparent;"
+            f" color:{t['stage_fg']}; font-size:14px; font-weight:600;"
+            " padding:10px 26px; border-top-left-radius:6px;"
+            " border-top-right-radius:6px; border-bottom:3px solid transparent; }"
+            f"QPushButton:hover {{ color:{t['stage_hover_fg']};"
+            f" background:{t['stage_hover_bg']}; }}"
+            f"QPushButton:checked {{ color:{t['stage_checked_fg']};"
+            f" background:{t['stage_checked_bg']};"
+            f" border-bottom:3px solid {t['accent']}; }}")
+        for btn in getattr(self, "_tabs", {}).values():
+            btn.setStyleSheet(pill_qss)
+        # External-edit reload banner — Aurora warning tones.
+        if hasattr(self, "_reload_bar"):
+            self._reload_bar.setStyleSheet(
+                f"QFrame#reloadBar {{ background:{t['reload_bg']};"
+                f" border-bottom:1px solid {t['reload_border']}; }}"
+                f" QLabel {{ color:{t['reload_fg']}; }}")
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            self._apply_pill_theme()
 
     # ------------------------------------------------------------------ #
     #  Mode + stage switching (lazy build + guard)
@@ -224,11 +304,16 @@ class FlowNavigator(QtWidgets.QWidget):
         if mode == VHDL:
             self._sync_out(self._current)   # flush the Verilog design first
             self._mode = VHDL
+            # Keep the segmented toggle in sync when invoked programmatically
+            # (NGHDL launcher / Welcome tile): otherwise the pill still reads
+            # "Verilog" while the NGHDL panel is shown.
+            self._mode_btns[VHDL].setChecked(True)
             self._stage_tabs_w.setVisible(False)
             self._ensure_stage(NGHDL)
             self.stack.setCurrentIndex(NGHDL)
         else:
             self._mode = VERILOG
+            self._mode_btns[VERILOG].setChecked(True)
             self._stage_tabs_w.setVisible(True)
             self._goto_stage(self._current)
 
@@ -331,10 +416,7 @@ class FlowNavigator(QtWidgets.QWidget):
     def _build_reload_bar(self):
         self._reload_bar = QtWidgets.QFrame()
         self._reload_bar.setObjectName("reloadBar")
-        self._reload_bar.setStyleSheet(
-            "QFrame#reloadBar { background:#fff3e9;"
-            " border-bottom:1px solid #e65100; }"
-            " QLabel { color:#8a3b00; }")
+        # Colors set by _apply_pill_theme() (Aurora warning tones, theme-aware).
         row = QtWidgets.QHBoxLayout(self._reload_bar)
         row.setContentsMargins(12, 6, 12, 6)
         self._reload_label = QtWidgets.QLabel()

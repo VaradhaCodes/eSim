@@ -151,23 +151,54 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.simulationConsole.setText("")
         self.simulationCancelled = False
 
-        msg_box = QtWidgets.QMessageBox(self)
-        msg_box.setWindowTitle("Ngspice Plots")
-        msg_box.setText("Do you want Ngspice plots?")
-        
-        yes_button = msg_box.addButton("Yes", QtWidgets.QMessageBox.ButtonRole.YesRole)
-        no_button = msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
-
-        msg_box.exec()
-
-        if msg_box.clickedButton() == yes_button:
-            self.Flag = True 
-        else:
-            self.Flag = False  
+        self.Flag = self._resolveNgspicePlotChoice()
 
         self.qProcess.setProperty("redoPlotFlag", self.Flag)
 
         self.qProcess.start(self.ngspice_bin, self.args)
+
+    # Persisted across runs in the shared QSettings store. When the user ticks
+    # "Remember my choice" the popup is skipped on every later simulation and
+    # the saved answer is reused. It can be re-enabled from
+    # Preferences ▸ Simulation ("Ask before generating Ngspice plots").
+    NGSPICE_REMEMBER_KEY = "ngspicePlots/remember"
+    NGSPICE_FLAG_KEY = "ngspicePlots/flag"
+
+    def _resolveNgspicePlotChoice(self):
+        """Return whether to also generate ngspice plots for this run.
+
+        If the user previously chose "Remember my choice", reuse the stored
+        answer silently. Otherwise show the Yes/No popup (with a remember
+        checkbox) and persist the decision when the box is ticked.
+        """
+        settings = QtCore.QSettings('eSim', 'eSim')
+        if settings.value(self.NGSPICE_REMEMBER_KEY, False, type=bool):
+            return settings.value(self.NGSPICE_FLAG_KEY, False, type=bool)
+
+        msg_box = QtWidgets.QMessageBox(self)
+        msg_box.setWindowTitle("Ngspice Plots")
+        msg_box.setText("Do you want Ngspice plots?")
+        # Widen the message label so the window title ("Ngspice Plots") is not
+        # clipped behind the close/minimise/maximise buttons on tight window
+        # managers. QMessageBox ignores setMinimumWidth, so size via the label.
+        msg_box.setStyleSheet("QLabel { min-width: 360px; }")
+
+        remember_cb = QtWidgets.QCheckBox(
+            "Remember my choice (re-enable in Preferences ▸ Simulation)")
+        msg_box.setCheckBox(remember_cb)
+
+        yes_button = msg_box.addButton(
+            "Yes", QtWidgets.QMessageBox.ButtonRole.YesRole)
+        msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
+
+        msg_box.exec()
+        flag = msg_box.clickedButton() == yes_button
+
+        if remember_cb.isChecked():
+            settings.setValue(self.NGSPICE_REMEMBER_KEY, True)
+            settings.setValue(self.NGSPICE_FLAG_KEY, flag)
+
+        return flag
 
     # Note: the legacy `changeColor()` per-widget dark/light toggle has been
     # removed; use `_cycle_theme()` (the lightDarkModeButton target) instead so

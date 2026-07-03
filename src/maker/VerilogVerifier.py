@@ -46,6 +46,21 @@ except ImportError:  # launched with src/ on sys.path (absolute-import style)
 COMPILE_TIMEOUT_S = 60
 SIM_TIMEOUT_S = 120
 
+
+def _no_glow(btn):
+    """Opt a small chrome button out of the global Aurora button glow.
+
+    frontEnd.motion seeds every QPushButton with a QGraphicsDropShadowEffect.
+    On the verifier's tightly-packed chrome (move arrows, Add Module, Copy) that
+    neon halo paints outside the widget and bleeds over neighbours. The design
+    contract for this page is borders-only, so we both set ``noMotion`` (so a
+    later motion re-install skips it) and strip any effect already attached.
+    """
+    btn.setProperty("noMotion", True)
+    if btn.graphicsEffect() is not None:
+        btn.setGraphicsEffect(None)
+
+
 class VcdPlotWindow(plotWindow):
     def __init__(self, timestamps, signals_data, signal_types, project_name="Verilog Simulation", parent=None):
         self.timestamps = timestamps
@@ -176,15 +191,40 @@ class HdlEditor(QsciScintilla):
         self.setIndentationsUseTabs(False)
         self.setTabWidth(4)
         self.setFolding(QsciScintilla.FoldStyle.BoxedTreeFoldStyle)
+        # Push a blank spacer margin (index 3, right of the fold margin) between
+        # the fold +/- box and the code so the box no longer sticks to the first
+        # character of each line.
+        self.setMarginWidth(3, 8)
 
         self._lexer = lexers.make_lexer(filename, self._mono, self)
         self.setLexer(self._lexer)
         theme.apply(self, self._lexer, self._mono)
+        self._blend_margins()
 
         self.indicatorDefine(
             QsciScintilla.IndicatorStyle.SquiggleIndicator, self.ERROR_INDICATOR)
         self.setIndicatorForegroundColor(
             QtGui.QColor("#e51400"), self.ERROR_INDICATOR)
+
+        # Drop Scintilla's native square sunken frame: the editor sits inside the
+        # tab pane, whose rounded #verilogEditorTabs::pane padding now shows the
+        # rounded corners. A native frame would re-draw square corners over them.
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+
+        # Hide Scintilla's horizontal scroll bar. It painted a thick grey bar
+        # flush across the editor's bottom edge, squaring off the rounded card
+        # and reading as a crop. HDL lines are short; vertical scroll stays.
+        self.SendScintilla(QsciScintilla.SCI_SETHSCROLLBAR, 0)
+
+    def _blend_margins(self):
+        # The shared theme gives the line-number / fold gutter a grey tint
+        # (MARGIN_BG). That's fine in the standalone code editor, but here the
+        # editor sits in a rounded white card: the grey gutter read as a full-
+        # height grey band with a square bottom corner. Paint the gutter the
+        # same paper colour so it melts into the card and the corners round.
+        paper = QtGui.QColor(theme.PAPER)
+        self.setMarginsBackgroundColor(paper)
+        self.setFoldMarginColors(paper, paper)
 
     def changeEvent(self, event):
         # Re-theme the editor content when the app palette flips dark<->light
@@ -193,6 +233,7 @@ class HdlEditor(QsciScintilla):
         if (event.type() == QtCore.QEvent.Type.PaletteChange
                 and hasattr(self, "_mono")):
             theme.apply(self, self._lexer, self._mono)
+            self._blend_margins()
         super().changeEvent(event)
 
     # -- QPlainTextEdit-compatible text accessors (keep call sites terse) --
@@ -426,7 +467,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.setObjectName("verilogRoot")
 
         main_layout = QtWidgets.QVBoxLayout(self)
-        
+        # Hug the panel edges: the default layout margin left a wasted gutter
+        # (read as a thin idle border) down the left of the Verify surface. The
+        # Flow Navigator host already supplies the outer breathing room.
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
         main_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         main_layout.addWidget(main_splitter)
         
@@ -437,6 +483,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         top_layout.setContentsMargins(0, 0, 0, 0)
         
         top_h_splitter = QtWidgets.QSplitter(ORIENT_HORIZ)
+        top_h_splitter.setObjectName("verifierTopSplitter")
         top_layout.addWidget(top_h_splitter)
         
         # Sidebar for module hierarchy
@@ -452,11 +499,21 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         self.btn_auto_detect = QtWidgets.QPushButton("Auto-Detect")
         self.btn_auto_detect.setProperty("cssClass", "secondary")
+        _no_glow(self.btn_auto_detect)
         self.btn_auto_detect.clicked.connect(self.auto_detect_hierarchy)
         sidebar_layout.addWidget(self.btn_auto_detect)
         
         self.hierarchy_list = QtWidgets.QListWidget()
         self.hierarchy_list.setObjectName("verilogHierarchyList")
+        # The QSS white+border-radius styles the frame, but a QListWidget's
+        # opaque viewport paints a square white rect over the frame's rounded
+        # bottom corners (only the top survives, via the 7px padding inset).
+        # Transparent viewport lets the frame's rounded white show on all four
+        # corners. No horizontal bar so the corners stay intact.
+        self.hierarchy_list.viewport().setStyleSheet("background: transparent;")
+        self.hierarchy_list.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.hierarchy_list.itemClicked.connect(self.hierarchy_single_clicked)
         self.hierarchy_list.itemDoubleClicked.connect(self.hierarchy_double_clicked)
         self.hierarchy_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.hierarchy_list.customContextMenuRequested.connect(self.show_hierarchy_context_menu)
@@ -465,6 +522,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         top_h_splitter.addWidget(sidebar_widget)
 
         self.editor_tabs = QtWidgets.QTabWidget()
+        self.editor_tabs.setObjectName("verilogEditorTabs")
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.tabCloseRequested.connect(self.close_tab)
         self.editor_tabs.tabBarDoubleClicked.connect(self.rename_tab)
@@ -482,10 +540,16 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         corner_widget = QtWidgets.QWidget()
         corner_layout = QtWidgets.QHBoxLayout(corner_widget)
-        corner_layout.setContentsMargins(0, 0, 0, 0)
-        
+        corner_layout.setContentsMargins(2, 0, 6, 0)
+
         self.btn_add_module = QtWidgets.QPushButton("➕ Add Module")
+        # Own objectName + compact #addModuleBtn QSS: the global QPushButton
+        # min-height (32) + padding made this taller than the tab bar, so it
+        # clipped at the top. The styled rule caps its height to fit the bar.
+        self.btn_add_module.setObjectName("addModuleBtn")
         self.btn_add_module.setFlat(True)
+        self.btn_add_module.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        _no_glow(self.btn_add_module)
         self.btn_add_module.clicked.connect(self.add_module_tab)
         corner_layout.addWidget(self.btn_add_module)
 
@@ -501,7 +565,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         # to the editor, not the sidebar. Sidebar is still drag-collapsible.
         top_h_splitter.setStretchFactor(0, 0)
         top_h_splitter.setStretchFactor(1, 1)
-        top_h_splitter.setSizes([180, 820])
+        # Seed the sidebar a touch wider so the hierarchy card's right edge lands
+        # under the Verilog|VHDL toggle and its rows fit the index badge + name +
+        # both move arrows without feeling cramped. Still drag-resizable.
+        sidebar_widget.setMinimumWidth(232)
+        top_h_splitter.setSizes([248, 752])
 
         # Design editor (Module 1)
         self.design_views = []
@@ -566,6 +634,7 @@ class VerilogVerifier(QtWidgets.QWidget):
                          self.act_save, self.act_save_as])
 
         self.file_button = QtWidgets.QToolButton()
+        self.file_button.setObjectName("verifierFileBtn")
         self.file_button.setText("File")
         self.file_button.setMenu(file_menu)
         self.file_button.setPopupMode(TOOLBTN_INSTANT)
@@ -687,7 +756,10 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         # Copy lives in the console tab's corner now that there is no popout bar.
         self.btn_copy_console = QtWidgets.QPushButton("📋 Copy")
+        self.btn_copy_console.setObjectName("verifierConsoleCopy")
         self.btn_copy_console.setFlat(True)
+        self.btn_copy_console.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        _no_glow(self.btn_copy_console)
         self.btn_copy_console.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(self.console.toPlainText()))
         self.console_tabs.setCornerWidget(self.btn_copy_console)
 
@@ -796,6 +868,14 @@ class VerilogVerifier(QtWidgets.QWidget):
             elif action == delete_action:
                 self.close_tab(index)
 
+    def hierarchy_single_clicked(self, item):
+        name = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        # Switch to the matching module tab
+        for i in range(self.editor_tabs.count()):
+            if self.editor_tabs.tabText(i) == name:
+                self.editor_tabs.setCurrentIndex(i)
+                break
+
     def hierarchy_double_clicked(self, item):
         name = item.data(QtCore.Qt.ItemDataRole.UserRole)
         # Find index in editor_tabs
@@ -851,44 +931,53 @@ class VerilogVerifier(QtWidgets.QWidget):
                 if hasattr(self, 'design_views') and self.editor_tabs.widget(i) in self.design_views:
                     names.append(self.editor_tabs.tabText(i))
                 
-        for idx, name in enumerate(names, 1):
+        for name in names:
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
             widget = QtWidgets.QWidget()
             widget.setObjectName("hierarchyRow")
             layout = QtWidgets.QHBoxLayout(widget)
-            layout.setContentsMargins(5, 2, 5, 2)
-
-            # Position badge (#hierarchyIndex) — shows the module's order in the
-            # hierarchy so the move-up/down controls read against a number.
-            index_lbl = QtWidgets.QLabel(str(idx))
-            index_lbl.setObjectName("hierarchyIndex")
+            # Zero vertical margin: the row fills the item rect exactly (item has
+            # no vertical padding), so the hover/selected pill hugs the content
+            # instead of floating taller than the row.
+            layout.setContentsMargins(12, 0, 10, 0)
+            layout.setSpacing(8)
 
             lbl = QtWidgets.QLabel(name)
             lbl.setObjectName("hierarchyName")
 
             # Aurora styles these tiny move buttons via #hierarchyMoveBtn (size,
-            # padding and colour), so no inline override is needed.
+            # padding and colour), so no inline override is needed. NoFocus kills
+            # the focus ring the last-clicked arrow otherwise kept.
+            vcenter = QtCore.Qt.AlignmentFlag.AlignVCenter
+
             btn_up = QtWidgets.QPushButton("▲")
             btn_up.setObjectName("hierarchyMoveBtn")
-            btn_up.setFixedSize(24, 24)
+            btn_up.setFixedSize(22, 22)
+            btn_up.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            _no_glow(btn_up)
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
 
             btn_down = QtWidgets.QPushButton("▼")
             btn_down.setObjectName("hierarchyMoveBtn")
-            btn_down.setFixedSize(24, 24)
+            btn_down.setFixedSize(22, 22)
+            btn_down.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            _no_glow(btn_down)
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))
-            
-            layout.addWidget(index_lbl)
-            layout.addWidget(lbl)
+
+            # Explicit AlignVCenter on every cell: with fixed-size buttons a bare
+            # addWidget lets the layout stagger the two arrows at different Y
+            # (the "displaced down button"). Pin them all to the row centre.
+            layout.addWidget(lbl, 0, vcenter)
             layout.addStretch()
-            layout.addWidget(btn_up)
-            layout.addWidget(btn_down)
-            
-            # Force height to properly contain the 24px buttons
-            widget.setMinimumHeight(32)
-            item.setSizeHint(QtCore.QSize(0, 32))
-            
+            layout.addWidget(btn_up, 0, vcenter)
+            layout.addWidget(btn_down, 0, vcenter)
+
+            # Row height == item sizeHint height (set below) so the selection
+            # pill and the row are pixel-identical.
+            widget.setMinimumHeight(36)
+            item.setSizeHint(QtCore.QSize(0, 36))
+
             self.hierarchy_list.addItem(item)
             self.hierarchy_list.setItemWidget(item, widget)
 
@@ -915,7 +1004,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         cursor = self.console.textCursor()
         cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
         fmt = QtGui.QTextCharFormat()
-        fmt.setForeground(QtGui.QColor("#555555"))
+        fmt.setForeground(QtGui.QColor("#3A4858"))
         cursor.insertText(text.rstrip("\n") + "\n", fmt)
         self.console.setTextCursor(cursor)
         self.console.ensureCursorVisible()
