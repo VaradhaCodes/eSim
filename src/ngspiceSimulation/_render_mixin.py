@@ -311,10 +311,6 @@ class _RenderMixin:
             self.axes.set_yticklabels([])
             return
 
-        manual_threshold = (None if self.threshold_spinbox.value() == self.threshold_spinbox.minimum()
-                            else self.threshold_spinbox.value())
-        if manual_threshold is None:
-            self.threshold_spinbox.setSpecialValueText("Auto (midpoint)")
         self.logic_thresholds = {}
 
         # Build local float arrays for all traces — never touch obj_dataext
@@ -327,6 +323,20 @@ class _RenderMixin:
             if 0 < start_idx < len(time_data):
                 time_data = time_data[start_idx:]
                 y_data = {i: arr[start_idx:] for i, arr in y_data.items()}
+
+        # Fit the threshold spin box to the actual voltage span of the visible
+        # traces, so its range/step/Auto-midpoint are meaningful. The old fixed
+        # -100..100 range made the single step out of Auto jump to a useless
+        # extreme threshold (everything reads logic-high → waveforms vanish).
+        spans = [y_data[i] for i in visible_indices if i in y_data and len(y_data[i])]
+        if spans:
+            self._sync_threshold_range(float(min(np.min(a) for a in spans)),
+                                       float(max(np.max(a) for a in spans)))
+
+        manual_threshold = (None if self.threshold_spinbox.value() == self.threshold_spinbox.minimum()
+                            else self.threshold_spinbox.value())
+        if manual_threshold is None:
+            self.threshold_spinbox.setSpecialValueText("Auto (midpoint)")
 
         # Each trace occupies exactly 1.0 normalized unit of y-space.
         # spacing = vertical_spacing (e.g. 1.2 → 20% gap between traces).
@@ -688,6 +698,13 @@ class _RenderMixin:
             if self.stats_check.isChecked():
                 self._render_func_pane_stats(ax, fx, fy)
 
+        # Pin every pane's V/A unit label to one shared x column. Without this,
+        # each pane's label sits labelpad beyond ITS OWN tick labels, whose
+        # widths differ per pane ("2.5 V" vs "-2.5 V" vs "800 mV"), so the
+        # units wobble left/right down the stack. align_ylabels collapses them
+        # to a single column clearing the widest tick label.
+        self.fig.align_ylabels(self.panes)
+
         # Bottom-pane X label / formatter. Existing helpers already target
         # self.panes[-1], so the multi-pane case is free.
         if is_ac:
@@ -741,6 +758,36 @@ class _RenderMixin:
         scale, unit = self._get_time_scale_and_unit(time_data)
         self._apply_x_axis_scaling(scale, unit, 'Time')
         self.axes.set_xlim(float(time_data[0]), float(time_data[-1]))
+
+    def _sync_threshold_range(self, gmin: float, gmax: float) -> None:
+        """Fit the threshold spin box to the visible signal span.
+
+        ``minimum()`` is reserved as the "Auto" sentinel, one step below the
+        lowest real voltage; the usable band is ``[gmin-margin, gmax+margin]``
+        with a step of ~1% of the span. Auto / manual state is preserved across
+        re-fits, and signals are blocked so re-ranging never re-triggers a
+        render.
+        """
+        sb = self.threshold_spinbox
+        span = gmax - gmin
+        if not np.isfinite(span) or span < 1e-9:
+            gmin, gmax = gmin - 0.5, gmax + 0.5
+            span = gmax - gmin
+        margin = span * 0.05
+        step = round(max(span / 100.0, 1e-3), 3) or 1e-3
+        lo = round(gmin - margin, 3)
+        hi = round(gmax + margin, 3)
+        was_auto = (sb.value() == sb.minimum())
+        old_val = sb.value()
+        sb.blockSignals(True)
+        sb.setSingleStep(step)
+        sb.setRange(round(lo - step, 3), hi)
+        sb.set_auto_value((gmin + gmax) / 2.0)
+        if was_auto:
+            sb.setValue(sb.minimum())
+        else:
+            sb.setValue(min(max(old_val, sb.minimum() + step), hi))
+        sb.blockSignals(False)
 
     def on_threshold_changed(self, value: float) -> None:
         if self.radio_timing.isChecked():

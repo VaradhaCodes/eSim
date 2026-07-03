@@ -26,14 +26,67 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout,
                              QSplitter, QToolButton,
                              QSizePolicy, QScrollArea)
 from PyQt6.QtGui import (QColor, QKeySequence, QShortcut,
-                         QPainter, QPixmap, QAction, QIcon, QPen)
+                         QPainter, QPixmap, QIcon, QPen)
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as _FigureCanvasBase
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+
+
+class ThresholdSpinBox(QDoubleSpinBox):
+    """Spin box whose ``minimum()`` slot is an 'Auto' sentinel.
+
+    The render code treats ``value() == minimum()`` as "auto threshold". Naive
+    stepping made the only neighbour of Auto a useless extreme value (e.g.
+    -99.9), so stepping up out of Auto here jumps straight to the live
+    auto-computed midpoint, and stepping down below the lowest real value drops
+    back to Auto. Call :meth:`set_auto_value` whenever the signal span changes.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._auto_value = 0.0
+
+    def set_auto_value(self, value: float) -> None:
+        self._auto_value = float(value)
+
+    def stepBy(self, steps: int) -> None:
+        m = self.minimum()
+        lo = m + self.singleStep()
+        if self.value() == m:                      # currently "Auto"
+            if steps > 0:
+                target = min(max(self._auto_value, lo), self.maximum())
+                self.setValue(round(target, self.decimals()))
+            return                                 # down/no-op stays at Auto
+        if steps < 0 and self.value() <= lo + 1e-9:
+            self.setValue(m)                       # below lowest real → Auto
+            return
+        super().stepBy(steps)
+
+
+class FigureCanvas(_FigureCanvasBase):
+    """FigureCanvas with size hints decoupled from the live figure bbox.
+
+    Stock FigureCanvasQTAgg.sizeHint() returns get_width_height() — the
+    figure's current pixel size. Inside a QScrollArea with
+    setWidgetResizable(True) that creates a feedback loop: the scroll area
+    resizes the canvas to the viewport, the canvas resize updates the figure
+    bbox, the next sizeHint query returns a different size, the scroll area
+    re-lays-out, and so on. The cascade overflows Python's recursion limit,
+    surfacing as a RecursionError deep inside numpy's reduction during a
+    sizeHint call. Returning fixed hints removes the canvas from the layout
+    negotiation; actual canvas size still comes from real resize events, and
+    setMinimumHeight (stacked view) still overrides minimumSizeHint.
+    """
+
+    def sizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(640, 480)
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(10, 10)
 
 from configuration.Appconfig import Appconfig
 from .plotting_widgets import CollapsibleBox
@@ -50,6 +103,7 @@ from ._cursor_mixin import _CursorMixin
 from ._func_trace_mixin import _FuncTraceMixin
 from ._render_mixin import _RenderMixin
 from ._list_mixin import _ListMixin
+from ._palette import current_palette, matplotlib_rc_overrides
 
 class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixin, _ListMixin):
     """Main plotting widget for NGSpice simulation results."""
@@ -62,6 +116,11 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         self.setMinimumSize(400, 300)
         self.obj_appconfig = Appconfig()
+        # Theme-aware color dict, built once. Every surface, the matplotlib
+        # facecolors, the trace list rows, and the cursor chrome reference this
+        # single source of truth so a light/dark toggle never leaves stale
+        # white panels behind. Rebuilt on QEvent.PaletteChange (see changeEvent).
+        self._palette = current_palette(QtWidgets.QApplication.instance())
         logger.info(f"Complete Project Path: {self.file_path}")
         logger.info(f"Project Name: {self.project_name}")
         self.obj_appconfig.print_info(f'NGSpice simulation called: {self.file_path}')
@@ -76,6 +135,14 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
 
     def _initialize_data_structures(self) -> None:
         self._em_cache: Optional[int] = None  # invalidated by changeEvent on FontChange
+        # Re-entrancy guard for apply_theme. setStyleSheet() synchronously
+        # dispatches a QEvent.PaletteChange, whose changeEvent handler calls
+        # apply_theme again — an unguarded loop that recursed until Python's
+        # recursion limit blew (surfacing as a RecursionError deep in a canvas
+        # sizeHint/numpy reduction) or, with cheaper frames, spun long enough
+        # to freeze the GUI. The flag makes the self-induced PaletteChange a
+        # no-op while a genuine app theme toggle still re-skins exactly once.
+        self._applying_theme: bool = False
         self._resize_timer: QtCore.QTimer = QtCore.QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(120)
@@ -210,7 +277,70 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             plt.close(self.fig)
         super().closeEvent(event)
 
+    def _spin_arrow_icon(self, direction: str, color: str) -> str:
+        """Render a crisp up/down chevron PNG for spin-box buttons.
+
+        QSS border-triangle arrows collapse to a flat dash on some Qt styles,
+        so we paint real chevrons and cache them per (direction, color) in the
+        temp dir. Returns a forward-slash path for use in ``image: url(...)``.
+        """
+        key = color.lstrip('#')
+        path = os.path.join(QtCore.QDir.tempPath(), f"esim_spin_{direction}_{key}.png")
+        if not os.path.exists(path):
+            size = 16
+            pm = QPixmap(size, size)
+            pm.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pen = QPen(QColor(color))
+            pen.setWidthF(1.8)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            if direction == "up":
+                pts = [QtCore.QPointF(4, 10), QtCore.QPointF(8, 6), QtCore.QPointF(12, 10)]
+            else:
+                pts = [QtCore.QPointF(4, 6), QtCore.QPointF(8, 10), QtCore.QPointF(12, 6)]
+            painter.drawPolyline(QtGui.QPolygonF(pts))
+            painter.end()
+            pm.save(path, "PNG")
+        return path.replace(os.sep, '/')
+
     def apply_theme(self) -> None:
+        """Build and install the theme-aware QSS for the plotting window.
+
+        Driven entirely by ``self._palette``. Every surface, text color,
+        accent and overlay comes from there so the widget tracks light/dark
+        mode and the user-chosen accent — no hardcoded literals that caused
+        dark-mode contrast issues.
+        """
+        # setStyleSheet() below re-enters this method via a synchronous
+        # PaletteChange; bail if we're already mid-apply so it runs once.
+        if self._applying_theme:
+            return
+        self._applying_theme = True
+        try:
+            self._apply_theme_impl()
+        finally:
+            self._applying_theme = False
+
+    def _apply_theme_impl(self) -> None:
+        # Re-paint every axes facecolor from the live palette. Matplotlib
+        # defaults to white; without this the empty figure flashes white
+        # before any signal renders, even in dark mode.
+        try:
+            p_bg = self._palette.get("bg", None)
+            if p_bg and getattr(self, "fig", None) is not None:
+                self.fig.set_facecolor(p_bg)
+                self.fig.patch.set_facecolor(p_bg)
+                for ax in self.fig.axes:
+                    ax.set_facecolor(self._palette.get("axes_face", p_bg))
+                try:
+                    self.canvas.draw_idle()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         em      = self._em
         sb_w    = max(6,  em // 2)
         ind     = max(12, em - 2)
@@ -224,42 +354,62 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         btn_h   = max(24, em + 8)
         le_p    = max(4,  em // 3)
 
+        p = self._palette
+        up_ico   = self._spin_arrow_icon('up',   p['text'])
+        dn_ico   = self._spin_arrow_icon('down', p['text'])
+        up_ico_d = self._spin_arrow_icon('up',   p['text_subtle'])
+        dn_ico_d = self._spin_arrow_icon('down', p['text_subtle'])
         theme_stylesheet = f"""
-        QMenuBar {{ border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }}
-        QStatusBar {{ border-radius: 8px; background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; }}
-        QWidget {{ background-color: #FFFFFF; color: #212121; }}
-        QListWidget {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: 2px; outline: none; selection-background-color: transparent; selection-color: inherit; }}
+        QMenuBar {{ border-radius: 8px; background-color: {p['surface']}; border: 1px solid {p['border']}; padding: 2px; color: {p['text']}; }}
+        QStatusBar {{ border-radius: 8px; background-color: {p['surface']}; border: 1px solid {p['border']}; padding: 2px; color: {p['text_muted']}; }}
+        QWidget {{ background-color: {p['bg']}; color: {p['text']}; }}
+        QListWidget {{ background-color: {p['bg']}; border: 1px solid {p['border']}; padding: 2px; outline: none; selection-background-color: transparent; selection-color: inherit; }}
         QListWidget::item {{ min-height: {item_h}px; padding: {item_pv}px {item_ph}px; margin: 1px 2px; background-color: transparent; border: none; }}
         QListWidget::item:selected {{ background-color: transparent; border: none; }}
-        QListWidget::item:hover {{ background-color: rgba(0, 0, 0, 0.04); }}
+        QListWidget::item:hover {{ background-color: {p['hover_overlay']}; }}
         QListWidget::item:focus {{ outline: none; }}
-        QGroupBox {{ border: 1px solid #E0E0E0; margin-top: 0.5em; padding-top: 0.5em; }}
-        QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; }}
-        QPushButton {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; padding: {btn_pv}px {btn_ph}px; min-height: {btn_h}px; font-weight: 500; }}
-        QPushButton:hover {{ background-color: #F2F2F2; border-color: #1976D2; }}
-        QPushButton:pressed {{ background-color: #E0E0E0; }}
+        QGroupBox {{ border: 1px solid {p['border']}; margin-top: 0.5em; padding-top: 0.5em; color: {p['text']}; }}
+        QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px 0 5px; color: {p['text_muted']}; }}
+        QPushButton {{ background-color: {p['panel']}; border: 1px solid {p['border']}; padding: {btn_pv}px {btn_ph}px; min-height: {btn_h}px; font-weight: 500; color: {p['text']}; border-radius: 4px; }}
+        QPushButton:hover {{ background-color: {p['surface']}; border-color: {p['primary']}; }}
+        QPushButton:pressed {{ background-color: {p['pressed_overlay']}; }}
         QCheckBox::indicator {{ width: {ind}px; height: {ind}px; }}
-        QMenu {{ background-color: #FFFFFF; border: 1px solid #E0E0E0; }}
-        QMenu::item:selected {{ background-color: #E3F2FD; }}
-        QLineEdit {{ border: 1px solid #E0E0E0; padding: {le_p}px {btn_ph}px; background-color: #FAFAFA; }}
-        QLineEdit:focus {{ border-color: #1976D2; background-color: #FFFFFF; }}
-        QSlider::groove:horizontal {{ border: 1px solid #E0E0E0; height: 4px; background: #E0E0E0; }}
-        QSlider::handle:horizontal {{ background: #1976D2; border: 1px solid #1976D2; width: {sldr}px; height: {sldr}px; margin: {sldr_m}px 0; }}
-        QScrollBar:vertical {{ background-color: #F5F5F5; width: {sb_w}px; border: none; border-radius: {sb_w // 2}px; }}
-        QScrollBar::handle:vertical {{ background-color: #BDBDBD; border-radius: {sb_w // 2}px; min-height: 20px; margin: 2px; }}
-        QScrollBar::handle:vertical:hover {{ background-color: #9E9E9E; }}
+        QMenu {{ background-color: {p['bg']}; border: 1px solid {p['border']}; color: {p['text']}; }}
+        QMenu::item:selected {{ background-color: {p['selection_bg']}; color: {p['selection_text']}; }}
+        QLineEdit {{ border: 1px solid {p['border']}; padding: {le_p}px {btn_ph}px; background-color: {p['surface']}; color: {p['text']}; }}
+        QLineEdit:focus {{ border-color: {p['primary']}; background-color: {p['bg']}; }}
+        QAbstractSpinBox {{ border: 1px solid {p['border']}; padding: {le_p}px {btn_ph}px; padding-right: 20px; background-color: {p['surface']}; color: {p['text']}; border-radius: 4px; min-height: {btn_h}px; }}
+        QAbstractSpinBox:focus {{ border-color: {p['primary']}; background-color: {p['bg']}; }}
+        QAbstractSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 17px; margin: 1px 2px 0 0; border: none; background: transparent; border-radius: 3px; }}
+        QAbstractSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 17px; margin: 0 2px 1px 0; border: none; background: transparent; border-radius: 3px; }}
+        QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ background-color: {p['selection_bg']}; }}
+        QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {{ background-color: {p['pressed_overlay']}; }}
+        QAbstractSpinBox::up-arrow {{ image: url({up_ico}); width: 12px; height: 12px; }}
+        QAbstractSpinBox::down-arrow {{ image: url({dn_ico}); width: 12px; height: 12px; }}
+        QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off {{ image: url({up_ico_d}); }}
+        QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off {{ image: url({dn_ico_d}); }}
+        QSlider::groove:horizontal {{ border: 1px solid {p['border']}; height: 4px; background: {p['border']}; }}
+        QSlider::handle:horizontal {{ background: {p['primary']}; border: 1px solid {p['primary']}; width: {sldr}px; height: {sldr}px; margin: {sldr_m}px 0; border-radius: {sldr // 2}px; }}
+        QScrollBar:vertical {{ background-color: transparent; width: {sb_w}px; border: none; border-radius: {sb_w // 2}px; }}
+        QScrollBar::handle:vertical {{ background-color: {p['border_strong']}; border-radius: {sb_w // 2}px; min-height: 20px; margin: 2px; }}
+        QScrollBar::handle:vertical:hover {{ background-color: {p['text_subtle']}; }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
-        QSplitter::handle:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.49 transparent, stop:0.5 #D0D0D0, stop:0.51 transparent); }}
-        QSplitter::handle:horizontal:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.45 transparent, stop:0.5 #1976D2, stop:0.55 transparent); }}
+        QSplitter::handle:horizontal {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.49 transparent, stop:0.5 {p['border_strong']}, stop:0.51 transparent); }}
+        QSplitter::handle:horizontal:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0.45 transparent, stop:0.5 {p['primary']}, stop:0.55 transparent); }}
+        QLabel#analysisLabel {{ font-weight: bold; font-size: {max(11, em - 4)}px; padding: {max(3, em // 5)}px; color: {p['text']}; }}
+        QLabel#cursorLabel {{ font-size: 13px; padding: 3px 0; color: {p['text']}; }}
+        QLabel#cursorHelp {{ color: {p['text_muted']}; font-size: 11px; }}
+        QLabel#cursorSeparator {{ background-color: {p['divider']}; margin: 2px 0; }}
+        QToolButton#plotToolButton {{ border: none; background: transparent; border-radius: 3px; }}
+        QToolButton#plotToolButton:hover {{ background-color: {p['hover_overlay']}; }}
+        QToolButton#plotToolButton:checked {{ background-color: {p['selection_bg']}; }}
         """
         self.setStyleSheet(theme_stylesheet)
 
     def create_main_frame(self) -> None:
         main_widget_layout = QVBoxLayout(self)
         main_widget_layout.setContentsMargins(5, 5, 5, 5)
-        self.menu_bar = QtWidgets.QMenuBar(self)
-        main_widget_layout.addWidget(self.menu_bar)
         content_widget = QWidget()
         content_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         main_layout = QHBoxLayout(content_widget)
@@ -293,7 +443,6 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.measure_label = QLabel("")
         self.status_bar.addPermanentWidget(self.measure_label)
         main_widget_layout.addWidget(self.status_bar)
-        self.create_menu_bar()
         self.setWindowTitle(f'Python Plotting - {self.project_name}')
 
     def create_waveform_list(self) -> QWidget:
@@ -301,9 +450,9 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         left_layout = QVBoxLayout(left_widget)
         em = self._em
         self.analysis_label = QLabel()
-        self.analysis_label.setStyleSheet(
-            f"font-weight: bold; font-size: {max(11, em - 4)}px; padding: {max(3, em // 5)}px;"
-        )
+        # Font + theme styling live in QSS under #analysisLabel so theme
+        # toggles re-apply cleanly (inline-stylesheet list stays empty).
+        self.analysis_label.setObjectName("analysisLabel")
         left_layout.addWidget(self.analysis_label)
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search waveforms...")
@@ -344,18 +493,13 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 self.nav_toolbar.removeAction(_a)
         _icon_sz = self.nav_toolbar.iconSize()
         _tb_h    = self.nav_toolbar.sizeHint().height()
-        _btn_style = (
-            "QToolButton { border: none; background: transparent; border-radius: 3px; }"
-            "QToolButton:hover { background: rgba(0,0,0,0.06); }"
-            "QToolButton:checked { background: rgba(25,118,210,0.12); }"
-        )
         _fig_btn = QToolButton()
         _fig_btn.setIcon(self.nav_toolbar._icon('qt4_editor_options'))
         _fig_btn.setIconSize(_icon_sz)
         _fig_btn.setFixedSize(_tb_h, _tb_h)
         _fig_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         _fig_btn.setToolTip('Figure Options (P)')
-        _fig_btn.setStyleSheet(_btn_style)
+        _fig_btn.setObjectName("plotToolButton")
         _fig_btn.clicked.connect(self.open_figure_options)
         self._focus_btn = QToolButton()
         self._focus_btn.setIcon(self._make_focus_icon(_icon_sz.width()))
@@ -364,9 +508,20 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._focus_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._focus_btn.setCheckable(True)
         self._focus_btn.setToolTip('Focus plot — hide panels (F)')
-        self._focus_btn.setStyleSheet(_btn_style)
+        self._focus_btn.setObjectName("plotToolButton")
         self._focus_btn.toggled.connect(self._toggle_focus_mode)
         QShortcut(QKeySequence('F'), self, activated=self._focus_btn.toggle)
+        # Undo/redo step through matplotlib's nav view stack: every completed
+        # zoom/pan pushes a view, so Ctrl+Z spam walks back to the original.
+        # (Toolbar Back/Home buttons do the same; these are keyboard parity.)
+        QShortcut(QKeySequence.StandardKey.Undo, self,
+                  activated=self.nav_toolbar.back)
+        QShortcut(QKeySequence.StandardKey.Redo, self,
+                  activated=self.nav_toolbar.forward)
+        # Shortcuts the removed View menu used to carry, kept global.
+        QShortcut(QKeySequence('Ctrl+0'), self, activated=self.reset_view)
+        QShortcut(QKeySequence('Ctrl++'), self, activated=self.zoom_in)
+        QShortcut(QKeySequence('Ctrl+-'), self, activated=self.zoom_out)
         toolbar_row = QHBoxLayout()
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(0)
@@ -380,6 +535,20 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._fs_btn = FullScreenToggle()
         self._fs_btn.setFixedSize(_tb_h, _tb_h)
         toolbar_row.addWidget(self._fs_btn)
+        # matplotlib wedges its x/y coordinate readout (locLabel) at the end
+        # of the nav toolbar, i.e. between Save and Figure Options. Yank it out
+        # and pin it to the far right, after the fullscreen toggle.
+        _loc = getattr(self.nav_toolbar, 'locLabel', None)
+        if _loc is not None:
+            from PyQt6.QtWidgets import QWidgetAction
+            for _a in self.nav_toolbar.actions():
+                if isinstance(_a, QWidgetAction) and _a.defaultWidget() is _loc:
+                    self.nav_toolbar.removeAction(_a)
+                    break
+            _loc.setParent(None)
+            _loc.setAlignment(Qt.AlignmentFlag.AlignRight
+                              | Qt.AlignmentFlag.AlignVCenter)
+            toolbar_row.addWidget(_loc)
         center_layout.addLayout(toolbar_row)
         # Wrap canvas in QScrollArea so stacked-view with many panes scrolls
         # vertically instead of squashing every signal to ~30 pixels. Canvas
@@ -392,6 +561,13 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.canvas_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Paint the scroll viewport with the canvas surface so the empty canvas
+        # area doesn't flash white in dark mode. No border — it crowded the
+        # bottom time axis and waveform labels.
+        self.canvas_scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: {self._palette['axes_face']}; "
+            "border: none; }"
+        )
         center_layout.addWidget(self.canvas_scroll)
         self.canvas.mpl_connect('resize_event', self._on_canvas_resize)
         self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
@@ -476,8 +652,8 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         timing_layout.setSpacing(sp)
         threshold_layout = QHBoxLayout()
         threshold_layout.addWidget(QLabel("Threshold:"))
-        self.threshold_spinbox = QDoubleSpinBox()
-        self.threshold_spinbox.setRange(-100, 100)
+        self.threshold_spinbox = ThresholdSpinBox()
+        self.threshold_spinbox.setRange(-10, 10)
         self.threshold_spinbox.setDecimals(3)
         self.threshold_spinbox.setSingleStep(0.1)
         self.threshold_spinbox.setSuffix("")
@@ -510,19 +686,21 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         cursor_layout.setContentsMargins(ih, iv, ih, iv)
         cursor_layout.setSpacing(sp)
 
+        # font/theme color come from QSS (#cursorLabel); the inline <b>/<span>
+        # colors in the text are per-cursor data, not chrome, so they stay.
         self.cursor1_label = QLabel('<b style="color:#e53935">C1</b>  <span style="color:#aaa">not set</span>')
         self.cursor1_label.setWordWrap(True)
-        self.cursor1_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+        self.cursor1_label.setObjectName("cursorLabel")
         self.cursor2_label = QLabel('<b style="color:#1976d2">C2</b>  <span style="color:#aaa">not set</span>')
         self.cursor2_label.setWordWrap(True)
-        self.cursor2_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+        self.cursor2_label.setObjectName("cursorLabel")
         self.delta_label = QLabel('<b style="color:#e65100">ΔX</b>  <span style="color:#aaa">—</span>')
-        self.delta_label.setStyleSheet("font-size: 13px; padding: 3px 0;")
+        self.delta_label.setObjectName("cursorLabel")
 
         def _cursor_sep() -> QLabel:
             s = QLabel()
             s.setFixedHeight(1)
-            s.setStyleSheet("background-color: #d0d0d0; margin: 2px 0;")
+            s.setObjectName("cursorSeparator")
             return s
 
         cursor_layout.setSpacing(8)
@@ -534,7 +712,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         cursor_help = QLabel(
             "L-click = Cursor 1   ·   Middle / R-click = Cursor 2\n"
             "R-click in stacked view = pane menu")
-        cursor_help.setStyleSheet("color: #757575; font-size: 11px;")
+        cursor_help.setObjectName("cursorHelp")
         cursor_help.setWordWrap(True)
         cursor_layout.addWidget(cursor_help)
         self.clear_cursors_btn = QPushButton("Clear Cursors")
@@ -577,28 +755,6 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
 
         right_layout.addStretch()
         return right_widget
-
-    def create_menu_bar(self) -> None:
-        file_menu = self.menu_bar.addMenu('File')
-        export_action = QAction('Export Image...', self)
-        export_action.triggered.connect(self.export_image)
-        file_menu.addAction(export_action)
-        export_csv_action = QAction('Export CSV...', self)
-        export_csv_action.triggered.connect(self.export_csv)
-        file_menu.addAction(export_csv_action)
-        view_menu = self.menu_bar.addMenu('View')
-        zoom_in_action = QAction('Zoom In', self)
-        zoom_in_action.setShortcut('Ctrl++')
-        zoom_in_action.triggered.connect(self.zoom_in)
-        view_menu.addAction(zoom_in_action)
-        zoom_out_action = QAction('Zoom Out', self)
-        zoom_out_action.setShortcut('Ctrl+-')
-        zoom_out_action.triggered.connect(self.zoom_out)
-        view_menu.addAction(zoom_out_action)
-        reset_view_action = QAction('Reset View', self)
-        reset_view_action.setShortcut('Ctrl+0')
-        reset_view_action.triggered.connect(self.reset_view)
-        view_menu.addAction(reset_view_action)
 
     def _rebuild_nb_sorted(self) -> None:
         """Cache NBList sorted longest-first for use in _resolve_expr."""
@@ -879,6 +1035,8 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             pan_distance = (xlim[1] - xlim[0]) * 0.1 * (-1 if event.button == 'up' else 1)
             event.inaxes.set_xlim(xlim[0] + pan_distance, xlim[1] + pan_distance)
         self.canvas.draw()
+        # Record this view so Ctrl+Z / toolbar Back can undo a scroll zoom too.
+        self.nav_toolbar.push_current()
 
     def eventFilter(self, obj, event) -> bool:
         if (obj is self.canvas and
@@ -1022,6 +1180,8 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             y_half = (ylim[1] - ylim[0]) * factor / 2
             ax.set_ylim(y_center - y_half, y_center + y_half)
         self.canvas.draw()
+        # Record this view so Ctrl+Z / toolbar Back can undo a button zoom too.
+        self.nav_toolbar.push_current()
 
     def zoom_in(self) -> None:
         self._zoom_panes(DEFAULT_ZOOM_FACTOR)
@@ -1054,6 +1214,12 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             'legend.fontsize':   base_pt,
             'keymap.fullscreen': [],
         })
+        # Theme the axes/ticks/labels/grid/legend from the live palette so the
+        # plot surface reads correctly in light and dark mode.
+        try:
+            plt.rcParams.update(matplotlib_rc_overrides(self._palette))
+        except Exception:
+            pass
 
     def _on_canvas_resize(self, event) -> None:
         self._resize_timer.start()  # restart on every event; fires 120ms after last one
@@ -1101,15 +1267,29 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         else:
             QtCore.QTimer.singleShot(50, self._init_splitter_sizes)
 
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        if self.parent():
-            self.parent().updateGeometry()
-
     def changeEvent(self, event: QtCore.QEvent) -> None:
         super().changeEvent(event)
         if event.type() == QtCore.QEvent.Type.FontChange:
             self._em_cache = None
+            # sizeHint scales with _em (font height), so it only changes here.
+            # Notify the parent layout now instead of on every resizeEvent —
+            # the latter caused a resize<->updateGeometry feedback loop that
+            # blew the Python recursion limit inside the canvas sizeHint.
+            self.updateGeometry()
+        elif (event.type() == QtCore.QEvent.Type.PaletteChange
+              and not self._applying_theme):
+            # Live light/dark toggle while a plot is open: rebuild the palette
+            # and re-skin the chrome + matplotlib facecolors in place. Trace
+            # colors are data (VIBRANT_COLOR_PALETTE) and stay put; we avoid a
+            # full refresh_plot so the user's current view isn't reset.
+            # Guarded by _applying_theme: setStyleSheet() inside apply_theme
+            # fires its own PaletteChange, which must not re-enter here.
+            try:
+                self._palette = current_palette(QtWidgets.QApplication.instance())
+                self._setup_matplotlib_style()
+                self.apply_theme()
+            except Exception:
+                pass
 
     def sizeHint(self) -> QtCore.QSize:
         em = self._em

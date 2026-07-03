@@ -102,7 +102,7 @@ class _ListMixin:
         icon_label.setPixmap(icon.pixmap(18, 18))
         text_label = QLabel(t.name)
         text_label.setAttribute(transparent, True)
-        text_label.setStyleSheet("color: #212121; font-weight: 500;" if t.visible else "color: #757575; font-weight: normal;")
+        text_label.setStyleSheet("font-weight: 500;" if t.visible else "color: #757575; font-weight: normal;")
         layout.addWidget(icon_label)
         layout.addWidget(text_label)
         layout.addStretch()
