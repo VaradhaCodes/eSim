@@ -109,8 +109,14 @@ class NgVeri(QtWidgets.QWidget):
         self.grid = QtWidgets.QGridLayout()
         self.setLayout(self.grid)
 
-        self.grid.addWidget(self.createoptionsBox(), 0, 0, QtCore.Qt.AlignmentFlag.AlignTop)
-        self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+        # Row 0 (options) keeps its natural height via the box's Fixed vertical
+        # policy; row 1 (terminal) takes all remaining space. The old code
+        # used AlignTop + a rowSpan-5/colSpan-0 span that starved row 0 and
+        # crushed the options box's contents into each other.
+        self.grid.addWidget(self.createoptionsBox(), 0, 0)
+        self.grid.addWidget(self.creategroup(), 1, 0)
+        self.grid.setRowStretch(0, 0)
+        self.grid.setRowStretch(1, 1)
 
         self.show()
 
@@ -365,52 +371,97 @@ class NgVeri(QtWidgets.QWidget):
         '''
         self.optionsbox = QtWidgets.QGroupBox()
         self.optionsbox.setTitle("Select Options")
-        self.optionsgrid = QtWidgets.QGridLayout()
+
+        # A single vertical stack gives a clean top-to-bottom read: one verb
+        # heading, the two convert actions, then the low-stakes utilities.
+        # (The old grid stretched every button to full width and left a hole
+        # in the utility row.) The "which method / when" copy is NOT here --
+        # it lives in the terminal side column so the top stays uncluttered.
+        outer = QtWidgets.QVBoxLayout()
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(10)
 
         self.optionsgroupbtn = QtWidgets.QButtonGroup()
 
-        self.addverilogbutton = QtWidgets.QPushButton(
-            "Convert Verilog to Ngspice")
-        self.addverilogbutton.setToolTip(
-            "Requires internet connection for converting TL-Verilog models"
-        )
-        self.addverilogbutton.setToolTipDuration(5000)
-        self.optionsgroupbtn.addButton(self.addverilogbutton)
-        self.addverilogbutton.clicked.connect(self.addverilog)
-        self.optionsgrid.addWidget(self.addverilogbutton, 0, 1)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+        # The verb is stated ONCE as a heading; the two buttons then only need
+        # to name the method. Killing the repeated "Convert to Ngspice (...)"
+        # prefix is what stops them reading as two identical buttons.
+        convertHeading = QtWidgets.QLabel("Convert Verilog to Ngspice")
+        convertHeading.setProperty("cssClass", "heading")
+        outer.addWidget(convertHeading)
 
-        self.addfilebutton = QtWidgets.QPushButton("Add dependency files")
-        self.optionsgroupbtn.addButton(self.addfilebutton)
-        self.addfilebutton.clicked.connect(self.addfile)
-        self.optionsgrid.addWidget(self.addfilebutton, 0, 2)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+        expanding = QtWidgets.QSizePolicy.Policy.Expanding
+        fixed = QtWidgets.QSizePolicy.Policy.Fixed
 
-        self.addfolderbutton = QtWidgets.QPushButton("Add dependency folder")
-        self.optionsgroupbtn.addButton(self.addfolderbutton)
-        self.addfolderbutton.clicked.connect(self.addfolder)
-        self.optionsgrid.addWidget(self.addfolderbutton, 0, 3)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+        # Two backends, same result -> equal weight (both primary, equal
+        # width). Dual Co-sim sits FIRST (left = first in reading order) so a
+        # user reaching for the simpler path lands on it without us having to
+        # dim the other or slap on a "recommended" badge.
+        convert_row = QtWidgets.QHBoxLayout()
+        convert_row.setSpacing(12)
 
-        self.clearTerminalBtn = QtWidgets.QPushButton("Clear Terminal")
-        self.optionsgroupbtn.addButton(self.clearTerminalBtn)
-        self.clearTerminalBtn.clicked.connect(self.clearTerminal)
-        self.optionsgrid.addWidget(self.clearTerminalBtn, 0, 4)
-
-        self.addcosimbutton = QtWidgets.QPushButton(
-            "Convert Verilog to Ngspice (d_cosim / Icarus)")
+        self.addcosimbutton = QtWidgets.QPushButton("Dual Co-sim")
+        self.addcosimbutton.setProperty("cssClass", "primary")
+        self.addcosimbutton.setSizePolicy(expanding, fixed)
+        self.addcosimbutton.setMinimumHeight(44)
         self.addcosimbutton.setToolTip(
             "Icarus Verilog co-simulation via ngspice d_cosim: "
             "no C/C++ compiler and no ngspice rebuild")
         self.optionsgroupbtn.addButton(self.addcosimbutton)
         self.addcosimbutton.clicked.connect(self.addverilog_cosim)
-        self.optionsgrid.addWidget(self.addcosimbutton, 1, 1, 1, 4)
+        convert_row.addWidget(self.addcosimbutton)
 
-        self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+        self.addverilogbutton = QtWidgets.QPushButton("NgVeri")
+        self.addverilogbutton.setProperty("cssClass", "primary")
+        self.addverilogbutton.setSizePolicy(expanding, fixed)
+        self.addverilogbutton.setMinimumHeight(44)
+        self.addverilogbutton.setToolTip(
+            "Compiles Verilog into a native ngspice code model "
+            "(builds a C model and rebuilds ngspice)")
+        self.addverilogbutton.setToolTipDuration(5000)
+        self.optionsgroupbtn.addButton(self.addverilogbutton)
+        self.addverilogbutton.clicked.connect(self.addverilog)
+        convert_row.addWidget(self.addverilogbutton)
+
+        outer.addLayout(convert_row)
+
+        # Low-stakes utilities. Three equal-width buttons span the full row
+        # (equal stretch, no trailing spacer) so the space is filled evenly
+        # instead of leaving a gap between the dependency pair and Clear
+        # Terminal.
+        util_row = QtWidgets.QHBoxLayout()
+        util_row.setSpacing(8)
+
+        self.addfilebutton = QtWidgets.QPushButton("Add dependency files")
+        self.addfilebutton.setSizePolicy(expanding, fixed)
+        self.optionsgroupbtn.addButton(self.addfilebutton)
+        self.addfilebutton.clicked.connect(self.addfile)
+        util_row.addWidget(self.addfilebutton, 1)
+
+        self.addfolderbutton = QtWidgets.QPushButton("Add dependency folder")
+        self.addfolderbutton.setSizePolicy(expanding, fixed)
+        self.optionsgroupbtn.addButton(self.addfolderbutton)
+        self.addfolderbutton.clicked.connect(self.addfolder)
+        util_row.addWidget(self.addfolderbutton, 1)
+
+        self.clearTerminalBtn = QtWidgets.QPushButton("Clear Terminal")
+        # Low-stakes utility — text-only tertiary so it recedes.
+        self.clearTerminalBtn.setProperty("cssClass", "tertiary")
+        self.clearTerminalBtn.setSizePolicy(expanding, fixed)
+        self.optionsgroupbtn.addButton(self.clearTerminalBtn)
+        self.clearTerminalBtn.clicked.connect(self.clearTerminal)
+        util_row.addWidget(self.clearTerminalBtn, 1)
+
+        outer.addLayout(util_row)
+
+        self.optionsbox.setLayout(outer)
+
+        # Fixed vertical policy: the box keeps its natural height instead of
+        # being squeezed by the terminal group's row-span below it (which was
+        # crushing the three rows into each other).
+        self.optionsbox.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Fixed)
 
         return self.optionsbox
 
@@ -865,43 +916,89 @@ class NgVeri(QtWidgets.QWidget):
 
         self.start = QtWidgets.QLabel("Terminal")
         # self.trgrid.addWidget(self.start, 2,0)
+        self.trgrid.setContentsMargins(12, 12, 12, 12)
+        self.trgrid.setHorizontalSpacing(12)
+
+        # Left: the console fills the panel and grows with the window.
         self.entry_var[self.count] = QtWidgets.QTextEdit()
         self.entry_var[self.count].setReadOnly(1)
-        self.trgrid.addWidget(self.entry_var[self.count], 1, 1, 5, 3)
         self.entry_var[self.count].setMaximumWidth(1000)
         self.entry_var[self.count].setMaximumHeight(1000)
+        self.trgrid.addWidget(self.entry_var[self.count], 0, 0)
         self.count += 1
 
-        # Remove Verilog models. A button opens a searchable, multi-select
-        # dialog instead of the old giant QComboBox -- whose popup, crippled by
-        # the groupbox stylesheet, listed every model with no scrollbar and let
-        # you delete only one at a time by picking it.
+        # Right: model-management controls stacked in a tidy column that hugs
+        # the top of the console instead of floating in the grid's empty rows
+        # (which used to spread the buttons out and leave a void beneath them).
+        controls = QtWidgets.QVBoxLayout()
+        controls.setSpacing(8)
+        controls.setContentsMargins(0, 0, 0, 0)
+
+        # A button opens a searchable, multi-select dialog instead of the old
+        # giant QComboBox -- whose popup, crippled by the groupbox stylesheet,
+        # listed every model with no scrollbar and deleted one at a time.
         self.entry_var[self.count] = QtWidgets.QPushButton(
             "Remove Verilog Models")
         self.entry_var[self.count].clicked.connect(self.open_remove_models)
-        self.trgrid.addWidget(self.entry_var[self.count], 1, 4, 1, 2)
+        controls.addWidget(self.entry_var[self.count])
         self.count += 1
+
         self.entry_var[self.count] = QtWidgets.QPushButton("Remove lint_off")
         self.entry_var[self.count].clicked.connect(self.open_remove_lint_off)
-        self.trgrid.addWidget(self.entry_var[self.count], 2, 4, 1, 2)
+        controls.addWidget(self.entry_var[self.count])
         self.count += 1
+
+        # lint_off entry + its Add button share one row so they read as a pair.
+        add_row = QtWidgets.QHBoxLayout()
+        add_row.setSpacing(6)
         self.entry_var[self.count] = QtWidgets.QLineEdit(self)
-        self.trgrid.addWidget(self.entry_var[self.count], 3, 4)
-        self.entry_var[self.count].setMaximumWidth(100)
+        self.entry_var[self.count].setPlaceholderText("lint_off entry")
+        add_row.addWidget(self.entry_var[self.count], 1)
         self.count += 1
         self.entry_var[self.count] = QtWidgets.QPushButton("Add lint_off")
-        self.entry_var[self.count].setMaximumWidth(100)
-        self.trgrid.addWidget(self.entry_var[self.count], 3, 5)
         self.entry_var[self.count].clicked.connect(self.add_lint_off)
-
+        add_row.addWidget(self.entry_var[self.count])
         self.count += 1
+        controls.addLayout(add_row)
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # The convert top bar stays uncluttered by parking the "which method,
+        # when" explainer down here, in what used to be dead space beneath the
+        # lint controls. Neutral copy: names what each backend does and states
+        # they are equivalent, without claiming either is buggy or naming an
+        # unverified cause ("doesn't complete" is true of any tool). "caps"
+        # and "muted" QLabel classes are theme-safe (defined in both QSS).
+        controls.addSpacing(14)
+
+        convert_caption = QtWidgets.QLabel("CONVERT METHODS")
+        convert_caption.setProperty("cssClass", "caps")
+        controls.addWidget(convert_caption)
+
+        self.convertHint = QtWidgets.QLabel(
+            "Both convert your Verilog into an ngspice model — same result, "
+            "different backend.\n\n"
+            "Dual Co-sim runs Icarus through ngspice d_cosim: no compiler "
+            "and no ngspice rebuild.\n\n"
+            "NgVeri builds a native ngspice code model.\n\n"
+            "If one doesn't complete, use the other.")
+        self.convertHint.setWordWrap(True)
+        self.convertHint.setProperty("cssClass", "muted")
+        controls.addWidget(self.convertHint)
+
+        # Stretch pins everything to the top; empty space collapses below,
+        # flush with the console rather than wedged between the widgets.
+        controls.addStretch(1)
+
+        controls_box = QtWidgets.QWidget()
+        controls_box.setLayout(controls)
+        controls_box.setFixedWidth(210)
+        self.trgrid.addWidget(
+            controls_box, 0, 1, QtCore.Qt.AlignmentFlag.AlignTop)
+
+        # Console soaks up horizontal space; the control column stays compact.
+        self.trgrid.setColumnStretch(0, 1)
+        self.trgrid.setColumnStretch(1, 0)
+
+        # Border/title styling comes from the global Aurora QGroupBox QSS so
+        # the group reads with the same gradient hairline as the rest of eSim.
 
         return self.trbox
