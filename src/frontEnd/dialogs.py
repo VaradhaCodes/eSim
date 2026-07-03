@@ -48,161 +48,186 @@ def ask_question(parent, title, message):
     return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
 
+ESIM_VERSION = "2.5.0"
+
+
+def _about_palette(parent):
+    """Theme-aware colour set for the About surfaces. Restrained, on-brand —
+    a single quiet accent, neutral chip for the (warm bronze) logo, no loud
+    full-saturation gradient."""
+    dark = parent.palette().color(
+        QtGui.QPalette.ColorRole.Window).lightness() < 128
+    if dark:
+        return dict(
+            dark=True,
+            page="#0E1728", header="#121E33",
+            chip="#0A1220", chip_border="rgba(255,255,255,0.10)",
+            title="#F4F8FF", muted="#9FB1CC", subtle="#6C7F99",
+            accent="#53D7FF", link="#8BEAFF",
+            sep="rgba(255,255,255,0.08)",
+            pill_bg="rgba(83,215,255,0.14)", pill_fg="#8BEAFF",
+        )
+    return dict(
+        dark=False,
+        page="#FFFFFF", header="#F5F8FC",
+        chip="#FFFFFF", chip_border="rgba(20,32,51,0.12)",
+        title="#142033", muted="#5A6E89", subtle="#9AAABE",
+        accent="#0077A8", link="#0077A8",
+        sep="rgba(20,32,51,0.08)",
+        pill_bg="rgba(0,119,168,0.10)", pill_fg="#0077A8",
+    )
+
+
+def _logo_chip(icon_path, c, size=76, logo_px=48):
+    """Bronze eSim coin inside a clean neutral rounded chip so its warm tone
+    reads cleanly on any theme — fixes the coin-on-cyan clash + opaque band."""
+    chip = QtWidgets.QLabel()
+    chip.setFixedSize(size, size)
+    chip.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+    chip.setStyleSheet(
+        f"background: {c['chip']}; border: 1px solid {c['chip_border']}; "
+        f"border-radius: {size // 2}px;")
+    if os.path.exists(icon_path):
+        pix = QtGui.QPixmap(icon_path).scaled(
+            logo_px, logo_px, QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation)
+        chip.setPixmap(pix)
+    return chip
+
+
+def _about_header(icon_path, c, rounded=False):
+    """Quiet header band: thin accent hairline, logo chip, wordmark, tagline.
+    No gradient — structure comes from a subtle raised surface + accent rule.
+    ``rounded`` frames it as a standalone card (used in the Preferences tab)."""
+    header = QtWidgets.QWidget()
+    header.setObjectName("aboutHeader")
+    if rounded:
+        header.setStyleSheet(
+            f"#aboutHeader {{ background: {c['header']}; "
+            f"border: 1px solid {c['sep']}; border-radius: 12px; }}")
+    else:
+        header.setStyleSheet(
+            f"#aboutHeader {{ background: {c['header']}; "
+            f"border-bottom: 1px solid {c['sep']}; }}")
+    outer = QtWidgets.QVBoxLayout(header)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
+
+    rule = QtWidgets.QWidget()
+    rule.setFixedHeight(3)
+    rule.setStyleSheet(f"background: {c['accent']};")
+    outer.addWidget(rule)
+
+    body = QtWidgets.QVBoxLayout()
+    body.setContentsMargins(28, 22, 28, 20)
+    body.setSpacing(8)
+    body.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+
+    chip = _logo_chip(icon_path, c)
+    body.addWidget(chip, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
+
+    title = QtWidgets.QLabel("eSim")
+    title.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+    tf = title.font()
+    tf.setPointSize(22)
+    tf.setWeight(QtGui.QFont.Weight.Black)
+    title.setFont(tf)
+    title.setStyleSheet(f"color: {c['title']}; background: transparent;")
+    body.addWidget(title)
+
+    tagline = QtWidgets.QLabel("Open Source EDA for Circuit Design")
+    tagline.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+    gf = tagline.font()
+    gf.setPointSize(9)
+    tagline.setFont(gf)
+    tagline.setStyleSheet(f"color: {c['muted']}; background: transparent;")
+    body.addWidget(tagline)
+
+    outer.addLayout(body)
+    return header
+
+
 def show_about_dialog(parent):
-    """Premium About eSim dialog — gradient background, rich typography,
-    logo display, and depth shadow for an elevated, polished feel."""
+    """About eSim — a calm, on-brand card: neutral logo chip, quiet accent
+    header (no loud gradient), correct version, product blurb and credits."""
     dlg = QtWidgets.QDialog(parent)
     dlg.setWindowTitle("About eSim")
-    dlg.setFixedSize(480, 520)
+    dlg.setFixedSize(440, 500)
     dlg.setObjectName("aboutDialog")
 
-    # Icon
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     icon_path = os.path.join(base_dir, 'images', 'logo.png')
     if os.path.exists(icon_path):
         dlg.setWindowIcon(QtGui.QIcon(icon_path))
 
-    # Use system palette to detect theme
-    dark = parent.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
-
-    # Gradient background and accent colors
-    if dark:
-        bg_top = QtGui.QColor("#0A1122")
-        bg_bot = QtGui.QColor("#050812")
-        card_bg = QtGui.QColor(13, 23, 40, 210)
-        accent_a = QtGui.QColor("#53D7FF")
-        accent_b = QtGui.QColor("#9B7CFF")
-        title_color = "#F8FBFF"
-        muted_color = "#94A8C3"
-        subtle_color = "#5F728D"
-        border_color = "rgba(83,215,255,0.20)"
-    else:
-        bg_top = QtGui.QColor("#F0F5FB")
-        bg_bot = QtGui.QColor("#F3F7FC")
-        card_bg = QtGui.QColor(255, 255, 255, 230)
-        accent_a = QtGui.QColor("#0077A8")
-        accent_b = QtGui.QColor("#6D5DF6")
-        title_color = "#142033"
-        muted_color = "#6B7F99"
-        subtle_color = "#9AAABE"
-        border_color = "rgba(0,119,168,0.14)"
-
-    dlg.setStyleSheet(f"""
-        #aboutDialog {{
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {bg_top.name()}, stop:1 {bg_bot.name()});
-        }}
-    """)
+    c = _about_palette(parent)
+    dlg.setStyleSheet(f"#aboutDialog {{ background: {c['page']}; }}")
 
     root = QtWidgets.QVBoxLayout(dlg)
     root.setContentsMargins(0, 0, 0, 0)
     root.setSpacing(0)
 
-    # ── Hero gradient strip ──────────────────────────────────────
-    hero_strip = QtWidgets.QWidget()
-    hero_strip.setFixedHeight(140)
-    hero_strip.setStyleSheet(f"""
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 {accent_a.name()}, stop:0.4 {accent_a.name()},
-            stop:0.6 {accent_b.lighter(120).name()}, stop:1 {accent_b.name()});
-    """)
+    root.addWidget(_about_header(icon_path, c))
 
-    hero_layout = QtWidgets.QVBoxLayout(hero_strip)
-    hero_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-    logo_lbl = QtWidgets.QLabel()
-    if os.path.exists(icon_path):
-        pix = QtGui.QPixmap(icon_path).scaled(
-            64, 64, QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation
-        )
-        logo_lbl.setPixmap(pix)
-    logo_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    hero_layout.addWidget(logo_lbl)
-
-    hero_title = QtWidgets.QLabel("eSim")
-    hero_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    hero_title.setStyleSheet(
-        "font-size: 28px; font-weight: 850; color: #FFFFFF; "
-        "letter-spacing: -0.5px; background: transparent;"
-    )
-    hero_layout.addWidget(hero_title)
-
-    tagline = QtWidgets.QLabel("Open Source EDA for Circuit Design")
-    tagline.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-    tagline.setStyleSheet(
-        "font-size: 12px; color: rgba(255,255,255,0.85); "
-        "background: transparent; letter-spacing: 0.4px;"
-    )
-    hero_layout.addWidget(tagline)
-
-    root.addWidget(hero_strip)
-
-    # ── Content card ─────────────────────────────────────────────
+    # ── Content ──────────────────────────────────────────────────
     content = QtWidgets.QWidget()
     content_layout = QtWidgets.QVBoxLayout(content)
-    content_layout.setContentsMargins(32, 28, 32, 24)
+    content_layout.setContentsMargins(28, 22, 28, 20)
     content_layout.setSpacing(12)
 
-    version_lbl = QtWidgets.QLabel("Version 2.4")
-    version_lbl.setStyleSheet(
-        f"color: {title_color}; font-size: 18px; font-weight: 750;"
-    )
-    content_layout.addWidget(version_lbl)
+    version = QtWidgets.QLabel(f"Version {ESIM_VERSION}")
+    version.setStyleSheet(
+        f"color: {c['pill_fg']}; background: {c['pill_bg']}; "
+        f"border-radius: 10px; padding: 4px 12px; font-weight: 700;")
+    version.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum,
+                          QtWidgets.QSizePolicy.Policy.Fixed)
+    content_layout.addWidget(version, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
 
     desc = QtWidgets.QLabel(
-        "Circuit design, simulation, analysis, and PCB layout — "
-        "all in one integrated environment. Built on KiCad and "
-        "ngspice with a modern, fast UI."
-    )
+        "Circuit design, simulation, analysis and PCB layout in a single "
+        "integrated environment — built on KiCad and ngspice.")
     desc.setWordWrap(True)
-    desc.setStyleSheet(f"color: {muted_color}; font-size: 13px; line-height: 1.5;")
+    desc.setStyleSheet(f"color: {c['muted']}; font-size: 13px;")
     content_layout.addWidget(desc)
 
-    content_layout.addSpacing(8)
+    content_layout.addSpacing(2)
 
-    # Separator with accent gradient
     sep = QtWidgets.QWidget()
-    sep.setFixedHeight(2)
-    sep.setStyleSheet(f"""
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 {accent_a.name()}, stop:0.5 {accent_b.lighter(130).name()},
-            stop:1 {accent_b.name()});
-        border-radius: 1px;
-    """)
+    sep.setFixedHeight(1)
+    sep.setStyleSheet(f"background: {c['sep']};")
     content_layout.addWidget(sep)
+
+    content_layout.addSpacing(2)
+
+    org = QtWidgets.QLabel("FOSSEE, IIT Bombay")
+    org.setStyleSheet(
+        f"color: {c['title']}; font-size: 14px; font-weight: 650; "
+        "background: transparent;")
+    content_layout.addWidget(org)
+
+    website = QtWidgets.QLabel(
+        f'<a href="https://esim.fossee.in" '
+        f'style="color: {c["link"]}; text-decoration: none;">esim.fossee.in</a>')
+    website.setOpenExternalLinks(True)
+    website.setStyleSheet("font-size: 12px; background: transparent;")
+    content_layout.addWidget(website)
 
     content_layout.addSpacing(4)
 
-    org = QtWidgets.QLabel("FOSSEE, IIT Bombay")
-    org.setStyleSheet(f"color: {title_color}; font-size: 14px; font-weight: 650;")
-
-    website = QtWidgets.QLabel(
-        '<a href="https://esim.fossee.in" style="color: {acc}; '
-        'text-decoration: none;">esim.fossee.in</a>'.format(
-            acc=accent_a.name()
-        )
-    )
-    website.setOpenExternalLinks(True)
-    website.setStyleSheet(f"font-size: 12px;")
-
     credits = QtWidgets.QLabel(
         "Originally created by Fahim Khan\n"
-        "Maintained by the eSim Team at FOSSEE"
-    )
-    credits.setStyleSheet(f"color: {subtle_color}; font-size: 11px;")
+        "Maintained by the eSim team at FOSSEE")
     credits.setWordWrap(True)
-
-    content_layout.addWidget(org)
-    content_layout.addWidget(website)
-    content_layout.addSpacing(6)
+    credits.setStyleSheet(
+        f"color: {c['subtle']}; font-size: 11px; background: transparent;")
     content_layout.addWidget(credits)
+
     content_layout.addStretch()
 
-    # Close button
     btn_row = QtWidgets.QHBoxLayout()
     btn_row.addStretch()
     close_btn = QtWidgets.QPushButton("Close")
+    close_btn.setProperty("cssClass", "secondary")
     close_btn.setFixedWidth(100)
     close_btn.clicked.connect(dlg.accept)
     btn_row.addWidget(close_btn)
@@ -210,17 +235,11 @@ def show_about_dialog(parent):
 
     root.addWidget(content, 1)
 
-    # Depth shadow
-    try:
-        from frontEnd.motion import apply_popup_depth
-        apply_popup_depth(dlg)
-    except Exception:
-        pass
-
-    try:
-        from frontEnd.motion import install_button_motion
-        install_button_motion(dlg)
-    except Exception:
-        pass
+    for fn in ("apply_popup_depth", "install_button_motion"):
+        try:
+            mod = __import__("frontEnd.motion", fromlist=[fn])
+            getattr(mod, fn)(dlg)
+        except Exception:
+            pass
 
     dlg.exec()
