@@ -203,11 +203,13 @@ class TactileButtonFilter(QtCore.QObject):
 
 
 def motion_enabled():
-    """True when the user opted into animated button glows (default off).
+    """True when animated button glows are enabled (default on).
 
-    Hover/press glows drive continuous repaints + a per-button drop-shadow, so
-    they stay opt-in for performance. Read straight from the prefs file to keep
-    this module free of an Appconfig import; absent/unreadable means off.
+    Hover/press glows drive continuous repaints + a per-button drop-shadow.
+    They're on by default so the effect is discoverable, with a Preferences
+    toggle to turn them off (reduce motion / save power). Read straight from the
+    prefs file to keep this module free of an Appconfig import; an
+    absent/unreadable file falls back to the default (on).
     """
     import os
     import json
@@ -215,9 +217,9 @@ def motion_enabled():
         path = os.path.join(
             os.path.expanduser("~"), ".esim", "preferences.json")
         with open(path) as fh:
-            return bool(json.load(fh).get("enable_motion", False))
+            return bool(json.load(fh).get("enable_motion", True))
     except Exception:
-        return False
+        return True
 
 
 def install_button_motion(root):
@@ -232,7 +234,10 @@ def install_button_motion(root):
             continue
         w.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         w.installEventFilter(filt)
-        if not w.property("dockPopButton"):
+        # noMotion opts a button fully out: no glow animation AND no base shadow
+        # effect. Small chrome controls (e.g. the verifier's move arrows) use it
+        # so the neon halo never bleeds over their neighbours.
+        if not w.property("dockPopButton") and not w.property("noMotion"):
             eff = w.graphicsEffect()
             if eff is None:
                 eff = QtWidgets.QGraphicsDropShadowEffect(w)
@@ -286,8 +291,37 @@ class PopupMotionFilter(QtCore.QObject):
     """
 
     def eventFilter(self, obj, event):
+        et = event.type()
+
+        # Smooth expand/collapse for every tree (project tree, device-model
+        # grouping, etc.). Set once, when the view is first polished — Qt has a
+        # built-in animated transition; we just have to opt in.
+        if isinstance(obj, QtWidgets.QTreeView) and et == QtCore.QEvent.Type.Polish:
+            try:
+                obj.setAnimated(True)
+            except Exception:
+                pass
+            return False
+
+        # ComboBox dropdowns share the menu problem: the popup *container* is a
+        # square top-level window, so the rounded QSS on the inner item-view used
+        # to sit on sharp black corners. Same fix as menus -- translucent surface
+        # before the native window exists, plus a rounded mask on show for the
+        # no-compositor / over-QWebEngineView case. Radius matches the item-view
+        # QSS (10px).
+        if type(obj).__name__ == "QComboBoxPrivateContainer":
+            if et == QtCore.QEvent.Type.Polish:
+                if not obj.testAttribute(
+                        QtCore.Qt.WidgetAttribute.WA_TranslucentBackground):
+                    obj.setAttribute(
+                        QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            elif et == QtCore.QEvent.Type.Show:
+                apply_menu_rounded_mask(obj, radius=10)
+                QtCore.QTimer.singleShot(
+                    0, lambda c=obj: apply_menu_rounded_mask(c, radius=10))
+            return False
+
         if isinstance(obj, QtWidgets.QMenu):
-            et = event.type()
             if et == QtCore.QEvent.Type.Polish:
                 # Set translucency BEFORE the native popup window is created.
                 # A post-show attribute change (or setMask) is ignored once the

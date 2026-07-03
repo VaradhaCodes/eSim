@@ -152,24 +152,63 @@ QToolBar#leftToolBar::separator {
     margin: 7px 8px;
 }
 
-QToolButton[cssClass="toolbarZoom"] {
+/* ── View controls: zoom pill + theme toggle ─────────────────────────
+   Sized to sit level with the left-rail icon buttons so they're easy to
+   find and hit, instead of reading as afterthoughts next to the logo. */
+QWidget#zoomPill {
     background: rgba(13,23,40,0.70);
-    border: 1px solid rgba(83,215,255,0.18);
+    border: 1px solid rgba(83,215,255,0.20);
+    border-radius: 11px;
+}
+
+QToolButton[cssClass="toolbarZoom"] {
+    background: transparent;
+    border: 1px solid transparent;
     border-radius: 8px;
     color: #D3DEEF;
-    padding: 4px 9px;
-    font-weight: 700;
+    min-width: 26px;
+    padding: 5px 10px;
+    font-size: 16px;
+    font-weight: 800;
 }
 
 QToolButton[cssClass="toolbarZoom"]:hover {
-    background: rgba(83,215,255,0.14);
-    border-color: rgba(83,215,255,0.36);
+    background: rgba(83,215,255,0.16);
     color: #F8FBFF;
 }
 
 QToolButton[cssClass="toolbarZoom"]:pressed {
-    background: rgba(83,215,255,0.22);
+    background: rgba(83,215,255,0.26);
+    color: #F8FBFF;
+}
+
+QLabel#zoomLabel {
+    color: #D3DEEF;
+    font-size: 13px;
+    font-weight: 700;
+    background: transparent;
+}
+
+QToolButton#themeToggleBtn {
+    background: rgba(13,23,40,0.70);
+    border: 1px solid rgba(83,215,255,0.20);
+    border-radius: 11px;
+    color: #D3DEEF;
+    min-width: 32px;
+    min-height: 32px;
+    font-size: 17px;
+}
+
+QToolButton#themeToggleBtn:hover {
+    background: rgba(83,215,255,0.16);
+    border-color: rgba(83,215,255,0.40);
+    color: #F8FBFF;
+}
+
+QToolButton#themeToggleBtn:pressed {
+    background: rgba(83,215,255,0.26);
     border-color: #53D7FF;
+    color: #F8FBFF;
 }
 
 /* ── Left Toolbar ────────────────────────────────────────────────── */
@@ -197,38 +236,89 @@ QLabel#simStatusDot {
     padding: 0 6px;
 }
 
-/* ── Push Buttons ────────────────────────────────────────────────── */
+/* ── Push Buttons ─────────────────────────────────────────────────────
+   Visual hierarchy — only ONE bold button per view:
+     • default QPushButton ......... NEUTRAL workhorse (quiet, everywhere)
+     • :default / cssClass=primary . ACCENT call-to-action (auto on a dialog's
+                                     default/Enter button; opt-in elsewhere)
+     • cssClass=secondary .......... ghost / outline (Cancel, Browse, …)
+     • cssClass=tertiary ........... text-only (low-stakes utility)
+     • cssClass=danger ............. destructive
+   Keeps screens calm: the loud accent is reserved for the one action that
+   matters; everything else recedes. */
+
+/* Neutral — the default for every button unless promoted */
 QPushButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #8BEAFF, stop:0.48 #53D7FF, stop:1 #18A8D8);
-    color: #03121C;
-    border: 1px solid rgba(139,234,255,0.58);
+        stop:0 #1B2A45, stop:1 #15213A);
+    color: #E6F0FB;
+    border: 1px solid #2C3F60;
     border-radius: 10px;
-    padding: 8px 18px;
-    font-weight: 760;
-    min-height: 30px;
-    min-width: 68px;
+    padding: 8px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    min-height: 32px;
+    min-width: 72px;
 }
 
 QPushButton:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #B8F4FF, stop:0.45 #8BEAFF, stop:1 #38C7F3);
-    border-color: #B8F4FF;
+        stop:0 #22344F, stop:1 #1A2942);
+    border-color: rgba(83,215,255,0.45);
+    color: #F8FBFF;
 }
 
 QPushButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #18A8D8, stop:1 #087FA8);
-    border-color: #53D7FF;
-    padding-top: 10px;
-    padding-bottom: 6px;
+    background: #131F36;
+    border-color: rgba(83,215,255,0.32);
+    padding-top: 9px;
+    padding-bottom: 7px;
 }
 
 QPushButton:focus {
-    border: 1px solid #B8F4FF;
+    border-color: #53D7FF;
 }
 
 QPushButton:disabled {
+    background: #0F1A2E;
+    color: #5F728D;
+    border-color: #1C2A43;
+}
+
+/* Primary accent CTA — auto-applied to a dialog's default button, opt-in
+   elsewhere via cssClass="primary". A tight 2-stop fill (not the old
+   light→dark 3-stop) reads as one calm, deliberate accent. */
+QPushButton:default,
+QPushButton[cssClass="primary"] {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #62DCFF, stop:1 #33BEEE);
+    color: #03121C;
+    border: 1px solid rgba(143,234,255,0.55);
+    font-weight: 700;
+}
+
+QPushButton:default:hover,
+QPushButton[cssClass="primary"]:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #8BEAFF, stop:1 #53D7FF);
+    border-color: #B8F4FF;
+}
+
+QPushButton:default:pressed,
+QPushButton[cssClass="primary"]:pressed {
+    background: #18A8D8;
+    border-color: #53D7FF;
+    padding-top: 9px;
+    padding-bottom: 7px;
+}
+
+QPushButton:default:focus,
+QPushButton[cssClass="primary"]:focus {
+    border: 1px solid #B8F4FF;
+}
+
+QPushButton:default:disabled,
+QPushButton[cssClass="primary"]:disabled {
     background: #121E33;
     color: #5F728D;
     border-color: #1D2B45;
@@ -377,36 +467,50 @@ QTabWidget::pane {
     margin-top: -1px;
 }
 
+/* Connected tabs: the pane is the editor card. Square TOP corners so the tab
+   row sits flush on top; rounded bottom. margin-top:-1px laps the tab bar so
+   the selected tab (same bg, no bottom border) melts into the card with no
+   seam. Top padding gives the code a breathing inset (the pane bg == the
+   QScintilla paper #0E1728, so the inset reads as clean margin, not a frame). */
+QTabWidget#verilogEditorTabs::pane {
+    background: #0E1728;
+    border: 1px solid #243450;
+    border-radius: 0px;
+    margin-top: -1px;
+    padding: 12px 10px 10px 10px;
+}
+
 QTabBar {
     background: transparent;
 }
 
 QTabBar::tab {
-    background: #0E1728;
-    border: 1px solid #1D2B45;
+    background: #0A1322;
+    border: 1px solid #243450;
     border-bottom: none;
-    padding: 9px 18px;
-    margin-right: 5px;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    color: #94A8C3;
-    font-weight: 720;
+    padding: 8px 16px;
+    margin-right: 2px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    color: #8195B0;
+    font-weight: 700;
     min-height: 18px;
 }
 
 QTabBar::tab:hover:!selected {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #1D2E48, stop:1 #17243B);
-    color: #D3DEEF;
-    border-color: rgba(83,215,255,0.36);
+    background: #122038;
+    color: #C8D6EA;
 }
 
+/* Selected tab == the pane: same bg, no bottom border -> it merges into the
+   card. The active marker is a top accent bar (not a bottom underline that
+   would cut the tab off from the body). */
 QTabBar::tab:selected {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #121E33, stop:1 #09111F);
+    background: #0E1728;
+    border: 1px solid #243450;
+    border-bottom: none;
+    border-top: 2px solid #53D7FF;
     color: #F8FBFF;
-    border-color: #53D7FF;
-    border-bottom: 2px solid #53D7FF;
     font-weight: 800;
 }
 
@@ -432,6 +536,49 @@ QTabBar::close-button:pressed {
     background: rgba(251,113,133,0.34);
     border-radius: 4px;
     margin: 2px 6px 2px 2px;
+}
+
+QTabBar::scroller {
+    width: 36px;
+}
+QTabBar QToolButton {
+    background: rgba(83,215,255,0.10);
+    border: 1px solid rgba(83,215,255,0.18);
+    border-radius: 7px;
+    margin: 5px 1px;
+    width: 15px;
+}
+QTabBar QToolButton:hover {
+    background: rgba(83,215,255,0.20);
+    border-color: rgba(83,215,255,0.34);
+}
+QTabBar QToolButton:pressed {
+    background: rgba(83,215,255,0.28);
+}
+QTabBar QToolButton:disabled {
+    background: rgba(83,215,255,0.04);
+    border-color: rgba(83,215,255,0.10);
+}
+
+QPushButton#addModuleBtn {
+    background: rgba(83,215,255,0.10);
+    border: 1px solid rgba(83,215,255,0.20);
+    border-radius: 8px;
+    color: #9FE9FF;
+    font-weight: 750;
+    font-size: 12px;
+    padding: 2px 12px;
+    min-width: 0px;
+    min-height: 24px;
+    max-height: 28px;
+}
+QPushButton#addModuleBtn:hover {
+    background: rgba(83,215,255,0.20);
+    border-color: rgba(83,215,255,0.38);
+    color: #D6F6FF;
+}
+QPushButton#addModuleBtn:pressed {
+    background: rgba(83,215,255,0.28);
 }
 
 /* ── Dock Widget ─────────────────────────────────────────────────── */
@@ -530,7 +677,7 @@ QDockWidget > QWidget#dockFloatHost {
 /* The rounded surface the tool content floats on. */
 QFrame#dockCard {
     background: #0E1728;
-    border: 1px solid #1D2B45;
+    border: none;
     border-radius: 16px;
 }
 
@@ -634,6 +781,45 @@ QTreeWidget::item:selected {
     color: #FFFFFF;
 }
 
+/* Project tree: Akshat-style selection — translucent fill + bright outline
+   instead of a solid slab, and a clean rounded chevron in place of the boxy
+   default branch indicator. selection-background-color is nulled so the branch
+   gutter has no solid colour to fall back to; the fill below is the only paint. */
+QTreeWidget#projectTree {
+    selection-background-color: transparent;
+}
+QTreeWidget#projectTree::item:selected,
+QTreeWidget#projectTree::item:selected:active {
+    background: rgba(83,215,255,0.16);
+    border: 1px solid #53D7FF;
+    color: #F8FBFF;
+}
+/* The branch (left) column must never paint the solid selection slab -- keep
+   it transparent in every state so a selected row shows only the item's
+   outline+fill, not a blue block down the gutter. */
+QTreeWidget#projectTree::branch,
+QTreeWidget#projectTree::branch:hover,
+QTreeWidget#projectTree::branch:selected,
+QTreeWidget#projectTree::branch:has-children:selected,
+QTreeWidget#projectTree::branch:has-siblings:selected,
+QTreeWidget#projectTree::branch:!has-children:!has-siblings:selected {
+    background: transparent;
+}
+/* Selected project: the arrow gutter gets its own rounded translucent pill
+   (matching the item outline) instead of the boxy default selection slab. */
+QTreeWidget#projectTree::branch:has-children:closed:selected,
+QTreeWidget#projectTree::branch:has-children:open:selected {
+    background: rgba(83,215,255,0.16);
+    border: 1px solid #53D7FF;
+    border-radius: 9px;
+}
+QTreeWidget#projectTree::branch:has-children:closed {
+    image: url("images/chevron_right_dark.svg");
+}
+QTreeWidget#projectTree::branch:has-children:open {
+    image: url("images/chevron_down_dark.svg");
+}
+
 QHeaderView {
     background-color: #0E1728;
     border: none;
@@ -684,6 +870,26 @@ QLineEdit:disabled {
     color: #5F728D;
 }
 
+/* ── Inline cell editor (double-click a table cell) ──────────────────
+   The item delegate spawns a QLineEdit inside the view. Left to the field
+   rules above it inherits tall rounded geometry (clipping the text) and the
+   view's bright default Highlight, so the auto-selected value vanishes under a
+   near-white bar. Pin it flush to the cell with a crisp focus ring and a
+   readable teal text selection. */
+QAbstractItemView QLineEdit,
+QTableWidget QLineEdit,
+QTableView QLineEdit,
+QTreeView QLineEdit {
+    margin: 0;
+    padding: 1px 6px;
+    border-radius: 6px;
+    border: 1px solid #53D7FF;
+    background: #0E1728;
+    color: #F8FBFF;
+    selection-background-color: #0E7490;
+    selection-color: #FFFFFF;
+}
+
 /* ── ComboBox ────────────────────────────────────────────────────── */
 QComboBox {
     background: #0E1728;
@@ -706,13 +912,13 @@ QComboBox:disabled {
 QComboBox::drop-down { border: none; width: 30px; }
 
 QComboBox::down-arrow {
-    image: none;
-    width: 0; height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #94A8C3;
-    margin-right: 11px;
+    image: url("images/chevron_down_dark.svg");
+    width: 12px;
+    height: 12px;
+    margin-right: 12px;
 }
+
+QComboBox::down-arrow:disabled { opacity: 0.4; }
 
 QComboBox QAbstractItemView {
     background: #121E33;
@@ -721,17 +927,26 @@ QComboBox QAbstractItemView {
         stop:0 rgba(83,215,255,0.22), stop:1 rgba(155,124,255,0.14));
     border-radius: 10px;
     padding: 7px;
-    selection-background-color: #0E7490;
+    outline: 0;
+    selection-background-color: transparent;
+    selection-color: #FFFFFF;
 }
 
 QComboBox QAbstractItemView::item {
     padding: 6px 12px;
     border-radius: 6px;
     min-height: 24px;
+    border: 1px solid transparent;
 }
 
 QComboBox QAbstractItemView::item:hover {
     background-color: rgba(83,215,255,0.12);
+}
+
+QComboBox QAbstractItemView::item:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #0E7490, stop:1 #0B5E75);
+    color: #FFFFFF;
 }
 
 /* ── Checkbox / Radio ────────────────────────────────────────────── */
@@ -763,6 +978,7 @@ QGroupBox::indicator:checked {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 #53D7FF, stop:1 #38C7F3);
     border-color: #53D7FF;
+    image: url("images/check_dark.svg");
 }
 
 QCheckBox::indicator:disabled,
@@ -784,9 +1000,9 @@ QRadioButton::indicator:hover {
 }
 
 QRadioButton::indicator:checked {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #53D7FF, stop:1 #38C7F3);
-    border: 4px solid #0E1728;
+    background: #0E1728;
+    border: 1px solid #53D7FF;
+    image: url("images/radio_dot_dark.svg");
 }
 
 /* ── Progress Bar ────────────────────────────────────────────────── */
@@ -1161,6 +1377,16 @@ QWidget#verilogBottomContainer {
     background: transparent;
 }
 
+/* Console band uses the exact same connected-tab card as the editor: the pane
+   is the card, the "Console Output" tab melts into its top edge. */
+QTabWidget#verilogBottomContainer::pane {
+    background: #0E1728;
+    border: 1px solid #243450;
+    border-radius: 0px;
+    margin-top: -1px;
+    padding: 10px 12px 10px 12px;
+}
+
 QLabel#verilogSidebarTitle {
     color: #8BEAFF;
     font-size: 11px;
@@ -1170,23 +1396,27 @@ QLabel#verilogSidebarTitle {
     padding: 2px 4px;
 }
 
+QSplitter#verifierTopSplitter::handle:horizontal {
+    background: #050812;
+    width: 14px;
+}
+
 QListWidget#verilogHierarchyList {
     background: #0E1728;
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(83,215,255,0.14), stop:1 rgba(155,124,255,0.08));
-    border-radius: 15px;
+    border: 1px solid #243450;
+    border-radius: 0px;
     padding: 7px;
     alternate-background-color: #09111F;
 }
 
+QListWidget#verilogHierarchyList::corner {
+    background: transparent;
+}
+
 QListWidget#verilogHierarchyList::item {
-    border-radius: 9px;
-    /* Horizontal padding/margin must stay 0: the row widget is force-sized to
-       the viewport width in _sync_hierarchy_widths, so any side inset here
-       pushes the row past the right edge and clips the down arrow. Keep only
-       vertical spacing for the inter-row gap. */
-    padding: 7px 0px;
-    margin: 2px 0px;
+    border-radius: 8px;
+    padding: 0px;
+    margin: 0px;
 }
 
 QListWidget#verilogHierarchyList::item:hover {
@@ -1194,37 +1424,33 @@ QListWidget#verilogHierarchyList::item:hover {
 }
 
 QListWidget#verilogHierarchyList::item:selected {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #0E7490, stop:1 rgba(14,116,144,0.82));
-    color: #FFFFFF;
+    background-color: rgba(83,215,255,0.24);
+    color: #E6F0FB;
 }
 
+/* The console sits INSIDE the pane card (above), so it carries no frame of its
+   own -- transparent bg, no border, no radius. The card owns the shape + inset;
+   the error state only swaps the text colour. */
 QTextEdit#verilogConsole {
-    background-color: #08111F;
-    color: #D3DEEF;
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(83,215,255,0.14), stop:1 rgba(155,124,255,0.08));
-    border-radius: 15px;
-    padding: 12px 14px;
+    background-color: transparent;
+    color: #C7D3E5;
+    border: none;
+    padding: 0px;
     font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
     font-size: 12px;
     selection-background-color: #0E7490;
     selection-color: #FFFFFF;
 }
 
-QTextEdit#verilogConsole:focus {
-    border-color: #53D7FF;
-}
-
 QTextEdit#verilogConsoleError {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(40,20,30,0.94), stop:1 rgba(20,10,15,0.94));
+    background: transparent;
     color: #FDA4AF;
-    border: 1px solid rgba(251,113,133,0.34);
-    border-radius: 15px;
-    padding: 12px 14px;
+    border: none;
+    padding: 0px;
     font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
     font-size: 12px;
+    selection-background-color: #0E7490;
+    selection-color: #FFFFFF;
 }
 
 QLabel#verilogNoWaveform {
@@ -1234,9 +1460,8 @@ QLabel#verilogNoWaveform {
 }
 
 QWidget#hierarchyRow {
-    background-color: rgba(83,215,255,0.045);
-    border: 1px solid rgba(83,215,255,0.12);
-    border-radius: 9px;
+    background: transparent;
+    border: none;
 }
 
 QLabel#hierarchyName {
@@ -1246,38 +1471,77 @@ QLabel#hierarchyName {
     background: transparent;
 }
 
-QLabel#hierarchyIndex {
-    color: #061018;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #53D7FF, stop:1 #9B7CFF);
-    border-radius: 11px;
-    font-size: 11px;
-    font-weight: 800;
-}
-
+/* Flat borderless glyphs: a bordered box read as a chip taller than the row's
+   selection pill (the boxes stuck out past the highlight). No frame -> nothing
+   competes with the pill; the arrow only gains a soft rounded bg on hover. */
 QPushButton#hierarchyMoveBtn {
-    background: rgba(83,215,255,0.10);
-    border: 1px solid rgba(83,215,255,0.18);
-    border-radius: 7px;
-    color: #9FE9FF;
-    font-size: 13px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: #7C92AE;
+    font-size: 12px;
     font-weight: 800;
     padding: 0;
     /* Pin the size — the global QPushButton min-width otherwise overrides
        setFixedSize for stylesheet-styled buttons and steals the name's space. */
-    min-width: 24px;
-    max-width: 24px;
-    min-height: 24px;
-    max-height: 24px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
 }
 
 QPushButton#hierarchyMoveBtn:hover {
-    background: rgba(83,215,255,0.24);
+    background: rgba(83,215,255,0.16);
     color: #FFFFFF;
 }
 
 QPushButton#hierarchyMoveBtn:pressed {
-    background: rgba(83,215,255,0.32);
+    background: rgba(83,215,255,0.26);
+}
+
+QToolButton#verifierFileBtn {
+    background: rgba(83,215,255,0.06);
+    color: #9FE9FF;
+    border: 1px solid rgba(83,215,255,0.18);
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-weight: 600;
+    font-size: 13px;
+    min-height: 32px;
+}
+
+QToolButton#verifierFileBtn:hover {
+    background: rgba(83,215,255,0.14);
+    border-color: rgba(83,215,255,0.40);
+    color: #D3F4FF;
+}
+
+QToolButton#verifierFileBtn::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 6px;
+}
+
+QPushButton#verifierConsoleCopy {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #8DA2BC;
+    font-weight: 600;
+    font-size: 12px;
+    padding: 4px 10px;
+    min-width: 0;
+    min-height: 0;
+    margin-right: 6px;
+}
+
+QPushButton#verifierConsoleCopy:hover {
+    background: rgba(83,215,255,0.14);
+    color: #D3F4FF;
+}
+
+QPushButton#verifierConsoleCopy:pressed {
+    background: rgba(83,215,255,0.22);
 }
 
 QPlainTextEdit#verilogCodeEditor {

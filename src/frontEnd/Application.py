@@ -71,6 +71,32 @@ def create_rounded_icon(path, radius_ratio=0.08):
     return QtGui.QIcon(rounded)
 
 
+class _SnapshotWindow(QtWidgets.QWidget):
+    """Independent top-level window hosting the Project Snapshots panel.
+
+    Parentless + ``Qt.Window`` so the window manager draws a full title bar
+    (drag to move, minimise, maximise, close) and gives it a taskbar entry.
+    Geometry is saved whenever the user closes it, so the next open restores
+    the same size and position. Closing only hides it; the kept TimeExplorer
+    instance lives on for re-use."""
+
+    def __init__(self):
+        super().__init__(None)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.Window
+            | QtCore.Qt.WindowType.WindowMinimizeButtonHint
+            | QtCore.Qt.WindowType.WindowMaximizeButtonHint
+            | QtCore.Qt.WindowType.WindowCloseButtonHint)
+        # Hard floor so the panel can never reopen as a compressed mess, even
+        # if a stale/odd saved geometry tries to shrink it below usability.
+        self.setMinimumSize(820, 600)
+
+    def closeEvent(self, event):
+        QtCore.QSettings('eSim', 'eSim').setValue(
+            'snapshotsWindow/geometry', self.saveGeometry())
+        super().closeEvent(event)
+
+
 class Application(QtWidgets.QMainWindow):
     """This class initializes all objects used in this file."""
     global project_name
@@ -138,7 +164,7 @@ class Application(QtWidgets.QMainWindow):
         """
         from frontEnd.icon_paths import (
             timeline_icon, workspace_icon,
-            help_icon, dev_docs_icon, settings_icon
+            help_icon, dev_docs_icon, settings_icon, home_icon
         )
 
         # Top Tool bar
@@ -174,12 +200,13 @@ class Application(QtWidgets.QMainWindow):
         self.wrkspce.setToolTip('Change Workspace (Ctrl+W) — Choose another workspace')
         self.wrkspce.triggered.connect(self.change_workspace)
 
-        # Project Snapshots / Timeline — view & restore project backups.
+        # Project Snapshots — back up & restore project files.
         self.timeline_action = QtGui.QAction(
             timeline_icon(),
-            'Timeline', self
+            'Project Snapshots', self
         )
-        self.timeline_action.setToolTip('Timeline — View and restore project backups')
+        self.timeline_action.setToolTip(
+            'Project Snapshots — back up and restore your project files')
         self.timeline_action.triggered.connect(self.show_snapshots)
         # Back-compat alias (older code referenced act_snapshots).
         self.act_snapshots = self.timeline_action
@@ -223,6 +250,13 @@ class Application(QtWidgets.QMainWindow):
         self.about_action.setMenuRole(QtGui.QAction.MenuRole.AboutRole)
         self.about_action.triggered.connect(self.show_about)
 
+        # Home: browser-style fallback that always returns to the Welcome
+        # dashboard, from which the user can navigate anywhere again.
+        self.home_action = QtGui.QAction('Home', self)
+        self.home_action.setIcon(home_icon())
+        self.home_action.setToolTip("Home - Back to the Welcome dashboard")
+        self.home_action.triggered.connect(self.open_home)
+
         # --- Top toolbar: icon-only tool actions; labels live in the menu bar.
         self.topToolbar = self.addToolBar('Top Tool Bar')
         self.topToolbar.setObjectName('topToolbar')
@@ -231,6 +265,8 @@ class Application(QtWidgets.QMainWindow):
         self.topToolbar.setToolButtonStyle(
             QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.topToolbar.setIconSize(QSize(28, 28))
+        self.topToolbar.addAction(self.home_action)
+        self.topToolbar.addSeparator()
         self.topToolbar.addAction(self.newproj)
         self.topToolbar.addAction(self.openproj)
         self.topToolbar.addAction(self.closeproj)
@@ -270,31 +306,35 @@ class Application(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Preferred)
         self.topToolbar.addWidget(self.spacer)
 
-        # Zoom box: [ - ] 100% [ + ]
+        # Zoom box rendered as one segmented pill: [ − ] 100% [ + ].
+        # The pill (objectName zoomPill) paints the border/background; the
+        # inner buttons are flat so the group reads as a single control that
+        # visually matches the weight of the left-rail buttons.
         self.zoom_container = QtWidgets.QWidget()
-        self.zoom_container.setMinimumWidth(120)
+        self.zoom_container.setObjectName("zoomPill")
+        self.zoom_container.setMinimumWidth(132)
         zoom_layout = QtWidgets.QHBoxLayout(self.zoom_container)
-        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setContentsMargins(3, 2, 3, 2)
         zoom_layout.setSpacing(0)
 
         self.zoom_out_btn = QtWidgets.QToolButton()
-        self.zoom_out_btn.setText(" - ")
+        self.zoom_out_btn.setText("−")
         self.zoom_out_btn.setToolTip("Decrease Zoom (-10%)")
         self.zoom_out_btn.setProperty("cssClass", "toolbarZoom")
         self.zoom_out_btn.clicked.connect(lambda: self.change_zoom(-10))
         zoom_layout.addWidget(self.zoom_out_btn)
 
         self.zoom_label = QtWidgets.QLabel(" 100% ")
+        self.zoom_label.setObjectName("zoomLabel")
         self.zoom_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.zoom_label.setMinimumWidth(44)
-        self.zoom_label.setProperty("cssClass", "subtle")
+        self.zoom_label.setMinimumWidth(50)
         self.zoom_label.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Minimum,
             QtWidgets.QSizePolicy.Policy.Fixed)
         zoom_layout.addWidget(self.zoom_label)
 
         self.zoom_in_btn = QtWidgets.QToolButton()
-        self.zoom_in_btn.setText(" + ")
+        self.zoom_in_btn.setText("+")
         self.zoom_in_btn.setToolTip("Increase Zoom (+10%)")
         self.zoom_in_btn.setProperty("cssClass", "toolbarZoom")
         self.zoom_in_btn.clicked.connect(lambda: self.change_zoom(10))
@@ -302,11 +342,12 @@ class Application(QtWidgets.QMainWindow):
 
         self.topToolbar.addWidget(self.zoom_container)
 
-        # Quick light/dark toggle on the right of the action bar.
+        # Quick light/dark toggle on the right of the action bar. Sized to
+        # match the zoom pill (styled by objectName in the QSS) so the two
+        # view controls read as a matched pair.
         self.theme_toggle_btn = QtWidgets.QToolButton()
         self.theme_toggle_btn.setObjectName("themeToggleBtn")
         self.theme_toggle_btn.setText("◐")
-        self.theme_toggle_btn.setProperty("cssClass", "toolbarZoom")
         self.theme_toggle_btn.setToolTip("Toggle light / dark theme")
         self.theme_toggle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.theme_toggle_btn.clicked.connect(self._toggle_theme)
@@ -319,6 +360,9 @@ class Application(QtWidgets.QMainWindow):
         zp = get_preferences(u_home).get("zoom_level", 100)
         self.zoom_label.setText(f" {zp}% ")
 
+        # Divider so the view controls aren't glued to the brand logo.
+        self.topToolbar.addSeparator()
+
         # FOSSEE logo kept top-right of the action bar (eSim brand).
         self.logo = QtWidgets.QLabel()
         self.logopic = QtGui.QPixmap(
@@ -329,7 +373,7 @@ class Application(QtWidgets.QMainWindow):
             QSize(150, 150), QtCore.Qt.AspectRatioMode.KeepAspectRatio,
             QtCore.Qt.TransformationMode.SmoothTransformation)
         self.logo.setPixmap(self.logopic)
-        self.logo.setStyleSheet("padding:0 15px 0 0;")
+        self.logo.setStyleSheet("padding:0 15px 0 6px;")
         self.topToolbar.addWidget(self.logo)
 
         # Left Tool bar Action Widget
@@ -388,6 +432,17 @@ class Application(QtWidgets.QMainWindow):
             "Model Creation - Verilog / VHDL via Makerchip, NgVeri & NGHDL")
         self.makerchip.triggered.connect(self.open_makerchip)
 
+        # NGHDL is a tab inside Model Creation; this is a shortcut that opens
+        # Makerchip straight on the VHDL / NGHDL path so the feature stays
+        # discoverable from the launcher even after the merge.
+        self.nghdl = QtGui.QAction(
+            create_rounded_icon(init_path + 'images/nghdl.png'),
+            'NGHDL', self
+        )
+        self.nghdl.setToolTip(
+            "NGHDL - Add VHDL digital models (opens the VHDL tab in Makerchip)")
+        self.nghdl.triggered.connect(self.open_nghdl)
+
         self.omedit = QtGui.QAction(
             create_rounded_icon(init_path + 'images/omedit.png'),
             'Modelica Converter', self
@@ -425,17 +480,20 @@ class Application(QtWidgets.QMainWindow):
             lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             return lbl
 
+        # Pipeline order: Design the schematic -> Simulate it (netlist + run)
+        # -> author Models that feed it -> Convert/interop with other tools.
         self.lefttoolbar.addWidget(_rail_caption("DESIGN"))
         self.lefttoolbar.addAction(self.kicad)
-        self.lefttoolbar.addAction(self.conversion)
         self.lefttoolbar.addSeparator()
         self.lefttoolbar.addWidget(_rail_caption("SIMULATE"))
+        self.lefttoolbar.addAction(self.conversion)
         self.lefttoolbar.addAction(self.ngspice)
-        self.lefttoolbar.addAction(self.makerchip)
         self.lefttoolbar.addSeparator()
         self.lefttoolbar.addWidget(_rail_caption("MODEL"))
         self.lefttoolbar.addAction(self.model)
         self.lefttoolbar.addAction(self.subcircuit)
+        self.lefttoolbar.addAction(self.makerchip)
+        self.lefttoolbar.addAction(self.nghdl)
         self.lefttoolbar.addSeparator()
         self.lefttoolbar.addWidget(_rail_caption("CONVERT"))
         self.lefttoolbar.addAction(self.omedit)
@@ -522,11 +580,20 @@ class Application(QtWidgets.QMainWindow):
         tools_menu.addAction(self.subcircuit)
         tools_menu.addSeparator()
         tools_menu.addAction(self.makerchip)
+        tools_menu.addAction(self.nghdl)
         tools_menu.addSeparator()
         tools_menu.addAction(self.omedit)
         tools_menu.addAction(self.omoptim)
         tools_menu.addSeparator()
         tools_menu.addAction(self.conToeSim)
+
+        # The rail's rounded photo-style icons look butchered shrunk into 16px
+        # menu rows, so hide them in the menu only -- the toolbar still shows
+        # them (toolbar icon visibility is independent of this flag).
+        for act in (self.kicad, self.conversion, self.ngspice, self.model,
+                    self.subcircuit, self.makerchip, self.nghdl,
+                    self.omedit, self.omoptim, self.conToeSim):
+            act.setIconVisibleInMenu(False)
 
         # ----- Help -----
         help_menu = bar.addMenu('&Help')
@@ -704,42 +771,80 @@ class Application(QtWidgets.QMainWindow):
         self.btn_log.setText('Console Log  ▾' if show else 'Console Log  ▴')
 
     def show_snapshots(self):
-        """Open the Project Snapshots (timeline) panel on demand. It used to
-        occupy the left face; now it is a non-modal dialog parented to the main
-        window (so it can never hide behind it)."""
+        """Open the Project Snapshots panel as a normal top-level window.
+
+        It is an independent window with a real title bar — move it, minimise,
+        maximise or close it, and it gets its own taskbar entry. It opens at a
+        comfortable size the first time, then restores whatever size/position
+        the user last left it at (persisted via QSettings)."""
         te = self.obj_Mainview.obj_timeExplorer
-        dlg = getattr(self, '_snap_dlg', None)
-        if dlg is None:
-            dlg = QtWidgets.QDialog(self)
-            dlg.setWindowTitle('Project Snapshots')
-            lay = QtWidgets.QVBoxLayout(dlg)
+        te.reload()
+        win = getattr(self, '_snap_win', None)
+        if win is None:
+            win = _SnapshotWindow()
+            win.setWindowTitle('Project Snapshots')
+            win.setWindowIcon(QtGui.QIcon(init_path + 'images/logo.png'))
+            lay = QtWidgets.QVBoxLayout(win)
             lay.setContentsMargins(0, 0, 0, 0)
-            dlg.resize(360, 480)
-            self._snap_dlg = dlg
-        # (Re)mount the kept TimeExplorer instance into the dialog.
-        dlg.layout().addWidget(te)
-        dlg.show()
-        dlg.raise_()
-        dlg.activateWindow()
+            lay.addWidget(te)
+
+            geo = QtCore.QSettings('eSim', 'eSim').value(
+                'snapshotsWindow/geometry')
+            if geo is not None:
+                win.restoreGeometry(geo)
+            else:
+                win.resize(960, 640)
+            self._snap_win = win
+        elif win.layout().indexOf(te) == -1:
+            # te was reparented away (defensive); remount it.
+            win.layout().addWidget(te)
+
+        if win.isMinimized():
+            win.showNormal()
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
+    def _save_snapshot_dock_state(self):
+        """Persist the snapshots window geometry and close it on app exit."""
+        win = getattr(self, '_snap_win', None)
+        if win is None:
+            return
+        QtCore.QSettings('eSim', 'eSim').setValue(
+            'snapshotsWindow/geometry', win.saveGeometry())
+        win.close()
 
     def plotFlagPopBox(self):
         """This function displays a pop-up box with message- Do you want Ngspice plots? and oprions Yes and NO.
         
         If the user clicks on Yes, both the NgSpice and python plots are displayed and if No is clicked then only the python plots."""
 
+        settings = QtCore.QSettings('eSim', 'eSim')
+        if settings.value('ngspicePlots/remember', False, type=bool):
+            self.plotFlag = settings.value('ngspicePlots/flag', False, type=bool)
+            self.open_ngspice()
+            return
+
         msg_box = QtWidgets.QMessageBox(self)
         msg_box.setWindowTitle("Ngspice Plots")
         msg_box.setText("Do you want Ngspice plots?")
-        
+        # Widen the message label so the window title is not clipped behind the
+        # close/minimise/maximise buttons. QMessageBox ignores setMinimumWidth.
+        msg_box.setStyleSheet("QLabel { min-width: 360px; }")
+
+        remember_cb = QtWidgets.QCheckBox(
+            "Remember my choice (re-enable in Preferences ▸ Simulation)")
+        msg_box.setCheckBox(remember_cb)
+
         yes_button = msg_box.addButton("Yes", QtWidgets.QMessageBox.ButtonRole.YesRole)
-        no_button = msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
+        msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
 
         msg_box.exec()
+        self.plotFlag = msg_box.clickedButton() == yes_button
 
-        if msg_box.clickedButton() == yes_button:
-            self.plotFlag = True  
-        else:
-            self.plotFlag = False  
+        if remember_cb.isChecked():
+            settings.setValue('ngspicePlots/remember', True)
+            settings.setValue('ngspicePlots/flag', self.plotFlag)
 
         self.open_ngspice()
 
@@ -764,11 +869,14 @@ class Application(QtWidgets.QMainWindow):
         exit_msg = "Are you sure you want to exit the program?"
         exit_msg += " All unsaved data will be lost."
         reply = Dialogs.question(
-            self, 'Message', exit_msg, QtWidgets.QMessageBox.StandardButton.Yes,
+            self, 'Message', exit_msg,
+            QtWidgets.QMessageBox.StandardButton.Yes |
+            QtWidgets.QMessageBox.StandardButton.No,
             QtWidgets.QMessageBox.StandardButton.No
         )
 
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            self._save_snapshot_dock_state()
             for proc in self.obj_appconfig.procThread_list:
                 try:
                     proc.terminate()
@@ -792,7 +900,10 @@ class Application(QtWidgets.QMainWindow):
             event.accept()
             self.systemTrayIcon.showMessage('Exit', 'eSim is Closed.')
 
-        elif reply == QtWidgets.QMessageBox.StandardButton.No:
+        else:
+            # 'No', the dialog's window-X (NoButton), or Escape all mean
+            # "do not exit" -- otherwise the QCloseEvent defaults to accept
+            # and the app quits anyway.
             event.ignore()
 
     def new_project(self):
@@ -880,12 +991,21 @@ class Application(QtWidgets.QMainWindow):
 
     def change_workspace(self):
         """
-        This function call changes Workspace
+        Show the workspace picker as a modal popup on top of the main
+        window.
+
+        The main window stays visible (no more ``self.hide()``, which made
+        the whole app vanish until a workspace was chosen) and the picker is
+        re-parented onto the main window and run with ``exec()``, so it
+        behaves like an in-window dialog that can't slip behind the app.
         """
         print("Function : Change Workspace")
         self.obj_workspace.returnWhetherClickedOrNot(self)
-        self.hide()
-        self.obj_workspace.show()
+        # Glue the picker to the main window so it centers over it and stays
+        # on top, instead of floating as a free top-level window.
+        self.obj_workspace.setParent(self, QtCore.Qt.WindowType.Dialog)
+        self.obj_workspace.setModal(True)
+        self.obj_workspace.exec()
 
     def help_project(self):
         """
@@ -1020,6 +1140,19 @@ class Application(QtWidgets.QMainWindow):
         print("Function : Makerchip and Verilator to Ngspice Converter")
         self.obj_appconfig.print_info('Makerchip is called')
         self.obj_Mainview.obj_dockarea.makerchip()
+
+    def open_nghdl(self):
+        """Open Model Creation straight on the VHDL / NGHDL stage.
+
+        NGHDL now lives as the VHDL path inside Makerchip's Flow Navigator;
+        this launcher keeps it one click away.
+        """
+        self.obj_appconfig.print_info('NGHDL (VHDL model creation) is called')
+        self.obj_Mainview.obj_dockarea.makerchip(select_vhdl=True)
+
+    def open_home(self):
+        """Bring the permanent Welcome (home) dashboard to the front."""
+        self.obj_Mainview.obj_dockarea.show_welcome()
 
     def open_modelEditor(self):
         """
@@ -1304,6 +1437,13 @@ def main(args):
         from frontEnd.motion import install_popup_motion, install_effect_refresh
         install_popup_motion(app)
         install_effect_refresh(app)
+    except Exception:
+        pass
+
+    # Replace Qt's square-cornered native tooltip with the Aurora rounded card.
+    try:
+        from frontEnd.tooltips import install_tooltips
+        install_tooltips(app)
     except Exception:
         pass
 

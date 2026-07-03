@@ -214,8 +214,10 @@ def apply_theme(app):
     _refresh_graphics_effects(app)
     QtCore.QTimer.singleShot(0, lambda: _refresh_graphics_effects(app))
 
-    from frontEnd.icon_paths import workspace_icon, timeline_icon, help_icon, dev_docs_icon, settings_icon
+    from frontEnd.icon_paths import workspace_icon, timeline_icon, help_icon, dev_docs_icon, settings_icon, home_icon
     for widget in app.topLevelWidgets():
+        if hasattr(widget, 'home_action'):
+            widget.home_action.setIcon(home_icon())
         if hasattr(widget, 'wrkspce'):
             widget.wrkspce.setIcon(workspace_icon())
         if hasattr(widget, 'timeline_action'):

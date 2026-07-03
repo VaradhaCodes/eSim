@@ -213,7 +213,7 @@ class Appconfig(QtWidgets.QWidget):
         prefs = {"theme_mode": "System", "accent_color": "default",
                  "secondary_accent_color": "system",
                  "internal_bg_color": "system",
-                 "enable_motion": False}
+                 "enable_motion": True}
         try:
             path = os.path.join(self.user_home, ".esim", "preferences.json")
             if os.path.exists(path):

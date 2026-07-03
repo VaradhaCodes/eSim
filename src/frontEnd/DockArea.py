@@ -76,6 +76,16 @@ class DockArea(QtWidgets.QMainWindow):
             # Adding to main Layout
             self.welcomeWidget.setLayout(self.welcomeLayout)
             dock[dockName].setWidget(self.welcomeWidget)
+            # No title strip here either -- the bottom tab already labels it, so
+            # the home tab matches the title-less tool docks (see
+            # apply_fullscreen_feature).
+            dock[dockName].setTitleBarWidget(QtWidgets.QWidget())
+            # Welcome is the permanent "home" tab: keep it movable/floatable but
+            # drop the Closable feature so its title bar has no close button.
+            # The tab-strip X is stripped separately in enable_tab_close_buttons.
+            dock[dockName].setFeatures(
+                QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
+                QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName])
 
         # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
@@ -104,6 +114,14 @@ class DockArea(QtWidgets.QMainWindow):
             tb.tabCloseRequested.connect(
                 lambda index, tab_bar=tb:
                 self.handle_tab_close(index, tab_bar))
+            # Welcome is the permanent home tab -- strip its close button so it
+            # can never be closed from the tab strip.
+            for i in range(tb.count()):
+                if tb.tabText(i).replace('&', '').strip() == 'Welcome':
+                    tb.setTabButton(
+                        i,
+                        QtWidgets.QTabBar.ButtonPosition.RightSide,
+                        None)
 
     def _forget_dock(self, child):
         """Drop every reference eSim keeps to a dock so closing a tab cannot
@@ -142,6 +160,10 @@ class DockArea(QtWidgets.QMainWindow):
         tab_text = tab_bar.tabText(index).replace('&', '').strip()
         if tab_text.endswith('...'):
             tab_text = tab_text[:-3].strip()
+
+        # Welcome is the permanent home tab -- never destroy it.
+        if tab_text == 'Welcome':
+            return
 
         for child in self.findChildren(QtWidgets.QDockWidget):
             if not child.isVisible():
@@ -209,6 +231,13 @@ class DockArea(QtWidgets.QMainWindow):
         holder_layout.addWidget(card)
 
         dock_widget.setWidget(holder)
+
+        # Kill the dock's title bar ("Netlist-IC1-3", "Makerchip-1", ...). The
+        # docks are tabified, so the bottom tab already names each panel and
+        # carries its own close button -- the title strip just duplicated that
+        # name and ate vertical space. An empty title-bar widget removes the
+        # strip while keeping windowTitle intact (the tab still reads it).
+        dock_widget.setTitleBarWidget(QtWidgets.QWidget())
 
         # Freshly-mounted tool content carries its own buttons; re-install the
         # Aurora hover/press glow so they animate too (gated inside motion — a
@@ -493,6 +522,9 @@ class DockArea(QtWidgets.QMainWindow):
         self.modelwidget = QtWidgets.QWidget()
 
         self.modellayout = QtWidgets.QVBoxLayout()
+        # No wrapper margins — the editor manages its own padding and should
+        # fill the dock edge to edge rather than sit inside a dead border.
+        self.modellayout.setContentsMargins(0, 0, 0, 0)
         self.modellayout.addWidget(ModelEditorclass())
 
         # Adding to main Layout
@@ -630,8 +662,25 @@ class DockArea(QtWidgets.QMainWindow):
             )
             self.msg.exec()
 
-    def makerchip(self):
-        """This function creates a widget for different subcircuit options."""
+    def show_welcome(self):
+        """Bring the permanent Welcome (home) tab to the front.
+
+        Backs the top-toolbar Home button: from anywhere in the app the user
+        lands back on the Welcome dashboard to navigate out again.
+        """
+        welcome = dock.get('Welcome')
+        if welcome is not None:
+            welcome.setVisible(True)
+            welcome.raise_()
+            welcome.setFocus()
+
+    def makerchip(self, select_vhdl=False):
+        """This function creates a widget for different subcircuit options.
+
+        ``select_vhdl`` opens the Flow Navigator straight on the VHDL / NGHDL
+        path (backs the dedicated NGHDL launcher) instead of the default
+        Verilog Author stage.
+        """
         global count
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
@@ -656,6 +705,13 @@ class DockArea(QtWidgets.QMainWindow):
         self.makerWidget = QtWidgets.QWidget()
         self.makerLayout = QtWidgets.QVBoxLayout()
         maker = makerchip(self)
+        # NGHDL launcher: jump the Flow Navigator to the VHDL / NGHDL path so the
+        # user lands on the digital-model stage directly.
+        if select_vhdl:
+            try:
+                maker.flow._select_mode("vhdl")
+            except Exception:
+                pass
         self.makerLayout.addWidget(maker)
 
         self.makerWidget.setLayout(self.makerLayout)

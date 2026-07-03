@@ -207,3 +207,16 @@ _SETTINGS_SVG = """
 
 def settings_icon(size: int = 16) -> QtGui.QIcon:
     return _svg_icon(_SETTINGS_SVG, size)
+
+
+_HOME_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>
+</svg>
+""".strip()
+
+
+def home_icon(size: int = 16) -> QtGui.QIcon:
+    return _svg_icon(_HOME_SVG, size)
