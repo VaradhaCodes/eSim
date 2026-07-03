@@ -65,85 +65,176 @@ class Mainwindow(QtWidgets.QWidget):
         self.initUI()
 
     def initUI(self):
-        self.uploadbtn = QtWidgets.QPushButton('Upload')
-        self.uploadbtn.clicked.connect(self.uploadModel)
-        self.uploadbtn.setStyleSheet(
-            "background-color: #2e7d32; color: white; font-weight: bold;")
-        self.exitbtn = QtWidgets.QPushButton('Exit')
-        self.exitbtn.clicked.connect(self.closeWindow)
-        self.browsebtn = QtWidgets.QPushButton('Browse')
-        self.browsebtn.clicked.connect(self.browseFile)
-        self.addbtn = QtWidgets.QPushButton('Add Files')
-        self.addbtn.clicked.connect(self.addFiles)
-        # "Remove Supporting File" un-stages a dependency .vhdl from the
-        # pre-upload list -- it does NOT uninstall a built model. Model
-        # uninstall is the separate "Remove Models" button below.
-        self.removebtn = QtWidgets.QPushButton('Remove Supporting File')
-        self.removebtn.setToolTip(
-            "Un-stage a dependency .vhdl from the upload list above. "
-            "Does NOT uninstall an installed model -- use 'Remove Models'.")
-        self.removebtn.clicked.connect(self.removeFiles)
-        self.removemodelbtn = QtWidgets.QPushButton('Remove Models')
-        self.removemodelbtn.setToolTip(
-            "Uninstall one or more NGHDL models created on this machine.")
-        self.removemodelbtn.clicked.connect(self.openRemoveModels)
+        # The page is one linear task read top to bottom: (1) pick the VHDL
+        # model, (2) optionally stage supporting .vhdl files, (3) Upload &
+        # Build. The console shows the build output and owns the vertical
+        # space. Model *uninstall* is maintenance, not part of that flow, so it
+        # lives in a quiet footer with a distinct verb -- never mistaken for
+        # the list's "Remove".
+
+        # ---- Step 1: the top-level VHDL model file --------------------------
         self.ledit = QtWidgets.QLineEdit(self)
-        self.ledit.setPlaceholderText("Path to .vhdl file")
-        self.sedit = QtWidgets.QTextEdit(self)
-        self.process = QtCore.QProcess(self)
+        self.ledit.setPlaceholderText("Select the .vhdl model file to build…")
+        self.ledit.setClearButtonEnabled(True)
+        self.browsebtn = QtWidgets.QPushButton('Browse…')
+        self.browsebtn.setToolTip("Choose the top-level .vhdl file for your model.")
+        self.browsebtn.clicked.connect(self.browseFile)
+
+        modelbox = QtWidgets.QGroupBox("1 · VHDL model")
+        modelrow = QtWidgets.QHBoxLayout()
+        modelrow.setSpacing(8)
+        modelrow.addWidget(self.ledit, 1)
+        modelrow.addWidget(self.browsebtn)
+        modelbox.setLayout(modelrow)
+
+        # ---- Step 2: optional supporting (dependency) files ----------------
+        # A compact list, not a full text editor -- these are just a handful of
+        # file paths. Add/Remove are scoped right beside the list, so "Remove"
+        # unambiguously means "drop from this list".
+        self.filelist = QtWidgets.QListWidget(self)
+        self.filelist.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.filelist.setMaximumHeight(130)
+        self.filelist.setToolTip(
+            "Dependency .vhdl files compiled alongside the model above.")
+        self.filelist.itemSelectionChanged.connect(self._sync_file_buttons)
+
+        self.addbtn = QtWidgets.QPushButton('Add…')
+        self.addbtn.setToolTip(
+            "Add dependency .vhdl file(s) to compile with the model.")
+        self.addbtn.clicked.connect(self.addFiles)
+        self.removebtn = QtWidgets.QPushButton('Remove')
+        self.removebtn.setToolTip(
+            "Remove the selected file(s) from this list. Does NOT uninstall a "
+            "built model — use “Uninstall Models…” below.")
+        self.removebtn.setEnabled(False)
+        self.removebtn.clicked.connect(self.removeFiles)
+
+        fileshint = QtWidgets.QLabel(
+            "Optional — extra .vhdl files your model depends on.")
+        fileshint.setObjectName("hint")
+
+        supportbox = QtWidgets.QGroupBox("2 · Supporting files")
+        supportv = QtWidgets.QVBoxLayout()
+        supportv.setSpacing(6)
+        supportv.addWidget(fileshint)
+        supportrow = QtWidgets.QHBoxLayout()
+        supportrow.setSpacing(8)
+        supportrow.addWidget(self.filelist, 1)
+        filebtns = QtWidgets.QVBoxLayout()
+        filebtns.setSpacing(6)
+        filebtns.addWidget(self.addbtn)
+        filebtns.addWidget(self.removebtn)
+        filebtns.addStretch(1)
+        supportrow.addLayout(filebtns)
+        supportv.addLayout(supportrow)
+        supportbox.setLayout(supportv)
+
+        # ---- The one primary action ----------------------------------------
+        self.uploadbtn = QtWidgets.QPushButton('Upload && Build')
+        self.uploadbtn.setObjectName("primary")
+        self.uploadbtn.setMinimumHeight(34)
+        self.uploadbtn.setToolTip(
+            "Compile the selected VHDL into an ngspice code model and KiCad "
+            "symbol.")
+        self.uploadbtn.clicked.connect(self.uploadModel)
+        actionrow = QtWidgets.QHBoxLayout()
+        actionrow.addStretch(1)
+        actionrow.addWidget(self.uploadbtn)
+
+        # ---- Console: build output, owns the vertical stretch --------------
         self.termedit = QtWidgets.QTextEdit(self)
-        self.termedit.setReadOnly(1)
+        self.termedit.setReadOnly(True)
+        mono = QtGui.QFontDatabase.systemFont(
+            QtGui.QFontDatabase.SystemFont.FixedFont)
+        mono.setPointSize(10)
+        self.termedit.setFont(mono)
         pal = QtGui.QPalette()
-        bgc = QtGui.QColor(0, 0, 0)
-        pal.setColor(QtGui.QPalette.ColorRole.Base, bgc)
+        pal.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor(17, 17, 17))
         self.termedit.setPalette(pal)
-        self.termedit.setStyleSheet("QTextEdit {color:white}")
-
-        # Option buttons grouped like the Maker tab's "Select Options" box.
-        optionsbox = QtWidgets.QGroupBox("Select Options")
-        optionsgrid = QtWidgets.QGridLayout()
-        optionsgrid.setSpacing(5)
-        optionsgrid.addWidget(self.ledit, 0, 0, 1, 3)
-        optionsgrid.addWidget(self.browsebtn, 0, 3)
-        optionsgrid.addWidget(self.addbtn, 1, 0)
-        optionsgrid.addWidget(self.removebtn, 1, 1)
-        optionsgrid.addWidget(self.uploadbtn, 1, 2)
-        # A tab has no business exiting the whole application, so the Exit
-        # button is only shown in the standalone window.
-        if not self.embedded:
-            optionsgrid.addWidget(self.exitbtn, 1, 3)
-        # Model uninstall sits on its own row so it reads as a distinct action
-        # from the upload/staging buttons above.
-        optionsgrid.addWidget(self.removemodelbtn, 2, 0, 1, 4)
-        optionsbox.setLayout(optionsgrid)
-
-        filesbox = QtWidgets.QGroupBox("Supporting files")
-        fileslayout = QtWidgets.QVBoxLayout()
-        fileslayout.addWidget(self.sedit)
-        filesbox.setLayout(fileslayout)
+        self.termedit.setStyleSheet(
+            "QTextEdit { color: #e6e6e6; background-color: #111111; "
+            "border: none; }")
+        self.process = QtCore.QProcess(self)
 
         consolebox = QtWidgets.QGroupBox("Console")
-        consolelayout = QtWidgets.QVBoxLayout()
-        consolelayout.addWidget(self.termedit)
-        consolebox.setLayout(consolelayout)
+        consolev = QtWidgets.QVBoxLayout()
+        consolev.addWidget(self.termedit)
+        consolebox.setLayout(consolev)
 
+        # ---- Header: page title + model maintenance (uninstall) ------------
+        # Uninstall is maintenance, kept out of the numbered build flow so it is
+        # never mistaken for a build step -- but it now sits top-right where it
+        # is always visible and fully legible, instead of marooned in a footer
+        # below the console where it read as an afterthought.
+        pagetitle = QtWidgets.QLabel("Build an NGHDL model from VHDL")
+        pagetitle.setObjectName("pagetitle")
+
+        self.removemodelbtn = QtWidgets.QPushButton(' Uninstall Models…')
+        self.removemodelbtn.setObjectName("uninstall")
+        self.removemodelbtn.setIcon(self.style().standardIcon(
+            QtWidgets.QStyle.StandardPixmap.SP_TrashIcon))
+        self.removemodelbtn.setMinimumHeight(30)
+        self.removemodelbtn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.removemodelbtn.setToolTip(
+            "Remove one or more NGHDL models already installed on this "
+            "machine.")
+        self.removemodelbtn.clicked.connect(self.openRemoveModels)
+
+        header = QtWidgets.QHBoxLayout()
+        header.addWidget(pagetitle)
+        header.addStretch(1)
+        header.addWidget(self.removemodelbtn)
+
+        # Exit is created in every mode (the build callbacks toggle it), but a
+        # tab has no business exiting all of eSim, so it is only *placed* in
+        # the standalone window's footer.
+        self.exitbtn = QtWidgets.QPushButton('Exit')
+        self.exitbtn.clicked.connect(self.closeWindow)
+
+        # ---- Assemble -------------------------------------------------------
         grid = QtWidgets.QVBoxLayout()
-        grid.setSpacing(5)
-        grid.addWidget(optionsbox)
-        grid.addWidget(filesbox)
-        grid.addWidget(consolebox)
+        grid.setSpacing(10)
+        grid.addLayout(header)
+        grid.addWidget(modelbox)
+        grid.addWidget(supportbox)
+        grid.addLayout(actionrow)
+        grid.addWidget(consolebox, 1)   # console takes the remaining height
+        # Standalone keeps a slim Exit footer; embedded there is nothing left
+        # to show, so no footer row is added at all.
+        if not self.embedded:
+            footer = QtWidgets.QHBoxLayout()
+            footer.addStretch(1)
+            footer.addWidget(self.exitbtn)
+            grid.addLayout(footer)
         self.setLayout(grid)
 
-        # Rounded group-box borders matching the other Makerchip dock tabs.
+        # Rounded group-boxes matching the other Makerchip dock tabs, plus the
+        # primary button's hover/pressed/disabled feedback states.
         self.setStyleSheet(
             "QGroupBox { border: 1px solid gray; border-radius: 9px; "
-            "margin-top: 0.5em; } "
+            "margin-top: 0.6em; } "
             "QGroupBox::title { subcontrol-origin: margin; left: 10px; "
-            "padding: 0 3px 0 3px; }")
+            "padding: 0 4px 0 4px; } "
+            "QLabel#hint { font-style: italic; } "
+            "QLabel#pagetitle { font-size: 15px; font-weight: 700; } "
+            "QPushButton#uninstall { border: 1px solid #c0563a; "
+            "color: #c0563a; border-radius: 6px; padding: 6px 16px; "
+            "font-weight: 600; } "
+            "QPushButton#uninstall:hover { "
+            "background-color: rgba(192, 86, 58, 0.12); } "
+            "QPushButton#uninstall:pressed { "
+            "background-color: rgba(192, 86, 58, 0.22); } "
+            "QPushButton#primary { background-color: #2e7d32; color: white; "
+            "font-weight: bold; border-radius: 6px; padding: 7px 22px; } "
+            "QPushButton#primary:hover { background-color: #33883a; } "
+            "QPushButton#primary:pressed { background-color: #24632a; } "
+            "QPushButton#primary:disabled { background-color: #b9c9ba; "
+            "color: #eef3ee; }")
 
         # Standalone window chrome; skipped when embedded as a tab.
         if not self.embedded:
-            self.setGeometry(300, 300, 600, 600)
+            self.setGeometry(300, 300, 640, 620)
             self.setWindowTitle("Ngspice Digital Model Creator (from VHDL)")
             # self.setWindowIcon(QtGui.QIcon('logo.png'))
             self.show()
@@ -176,14 +267,37 @@ class Mainwindow(QtWidgets.QWidget):
 
     def addFiles(self):
         print("Starts adding supporting files")
-        title = self.addbtn.text()
-        for file in QtWidgets.QFileDialog.getOpenFileNames(self, title)[0]:
-            self.sedit.append(str(file))
+        for file in QtWidgets.QFileDialog.getOpenFileNames(
+                self, "Add supporting .vhdl files")[0]:
             self.file_list.append(file)
+        self._refresh_file_list()
         print("Supporting Files are :", self.file_list)
 
     def removeFiles(self):
-        self.fileRemover = FileRemover(self)
+        # Un-stage the selected supporting files from the pre-upload list.
+        # (This only edits the list; it never uninstalls a built model.)
+        selected_rows = {self.filelist.row(item)
+                         for item in self.filelist.selectedItems()}
+        if not selected_rows:
+            return
+        self.file_list = [f for i, f in enumerate(self.file_list)
+                          if i not in selected_rows]
+        self._refresh_file_list()
+
+    def _refresh_file_list(self):
+        """Rebuild the supporting-files list widget from file_list (the source
+        of truth). Row order stays 1:1 with file_list so removeFiles can map a
+        selected row straight back to an entry."""
+        self.filelist.clear()
+        for f in self.file_list:
+            item = QtWidgets.QListWidgetItem(os.path.basename(str(f)))
+            item.setToolTip(str(f))
+            self.filelist.addItem(item)
+        self._sync_file_buttons()
+
+    def _sync_file_buttons(self):
+        """Remove is only meaningful when something in the list is selected."""
+        self.removebtn.setEnabled(bool(self.filelist.selectedItems()))
 
     # ------------------------------------------------------------------ #
     #  NGHDL model uninstall. Mirrors eSim's NgVeri._remove_nghdl_model
@@ -311,14 +425,14 @@ class Mainwindow(QtWidgets.QWidget):
 
     # Check extensions of all supporting files
     def checkSupportFiles(self):
-        nonvhdl_count = 0
-        for file in self.file_list:
-            extension = os.path.splitext(str(file))[1]
-            if extension != ".vhdl":
-                nonvhdl_count += 1
-                self.file_list.remove(file)
-
-        if nonvhdl_count > 0:
+        # Rebuild via comprehension: mutating the list while iterating it (the
+        # old approach) skips the element after each removal, so back-to-back
+        # non-.vhdl files could slip through.
+        vhdl_only = [f for f in self.file_list
+                     if os.path.splitext(str(f))[1] == ".vhdl"]
+        if len(vhdl_only) != len(self.file_list):
+            self.file_list = vhdl_only
+            self._refresh_file_list()
             QtWidgets.QMessageBox.critical(
                 self, 'Critical', '''<b>Important Message.</b>
                 <br/><br/>Supporting files should be <b>.vhdl</b> file '''
@@ -639,73 +753,6 @@ class Mainwindow(QtWidgets.QWidget):
             self.uploadbtn.setEnabled(True)
             self.exitbtn.setEnabled(True)
             QtWidgets.QMessageBox.critical(self, 'Error', str(e))
-
-
-class FileRemover(QtWidgets.QWidget):
-
-    def __init__(self, main_obj):
-        super(FileRemover, self).__init__()
-        self.row = 0
-        self.col = 0
-        self.cb_dict = {}
-        self.marked_list = []
-        self.files = main_obj.file_list
-        self.sedit = main_obj.sedit
-
-        print(self.files)
-
-        self.grid = QtWidgets.QGridLayout()
-        removebtn = QtWidgets.QPushButton('Remove', self)
-        removebtn.clicked.connect(self.removeFiles)
-
-        self.grid.addWidget(self.createCheckBox(), 0, 0)
-        self.grid.addWidget(removebtn, 1, 1)
-
-        self.setLayout(self.grid)
-        self.show()
-
-    def createCheckBox(self):
-        self.checkbox = QtWidgets.QGroupBox()
-        self.checkbox.setTitle('Remove Files')
-        self.checkgrid = QtWidgets.QGridLayout()
-
-        self.checkgroupbtn = QtWidgets.QButtonGroup()
-
-        for path in self.files:
-            print(path)
-            self.cb_dict[path] = QtWidgets.QCheckBox(path)
-            self.checkgroupbtn.addButton(self.cb_dict[path])
-            self.checkgrid.addWidget(self.cb_dict[path], self.row, self.col)
-            self.row += 1
-
-        self.checkgroupbtn.setExclusive(False)
-        self.checkgroupbtn.buttonClicked.connect(self.mark_file)
-        self.checkbox.setLayout(self.checkgrid)
-
-        return self.checkbox
-
-    def mark_file(self):
-        for path in self.cb_dict:
-            if self.cb_dict[path].isChecked():
-                if path not in self.marked_list:
-                    self.marked_list.append(path)
-            else:
-                if path in self.marked_list:
-                    self.marked_list.remove(path)
-
-    def removeFiles(self):
-        for path in self.marked_list:
-            print(path + " is removed")
-            self.sedit.append(path + " removed")
-            self.files.remove(path)
-
-        self.sedit.clear()
-        for path in self.files:
-            self.sedit.append(path)
-
-        self.marked_list[:] = []
-        self.files[:] = []
-        self.close()
 
 
 def main():

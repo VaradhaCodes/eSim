@@ -103,12 +103,27 @@ def test_flownav_stage_build_is_guarded():
         "_ensure_stage must guard stage construction with try/except"
 
 
-def test_toolbar_no_standalone_nghdl():
+def test_nghdl_launcher_opens_vhdl_path():
+    """The NGHDL toolbar/menu action is kept, but no longer launches a flying
+    NGHDL window: it opens Model Creation straight on the VHDL / NGHDL path
+    (``makerchip(select_vhdl=True)``). Guard that contract so the shortcut can
+    never silently regress to the default Verilog stage."""
     app_src = _read(_APPLICATION)
-    assert "def open_nghdl" not in app_src, \
-        "standalone open_nghdl handler should be removed"
-    assert "addAction(self.nghdl)" not in app_src, \
-        "standalone NGHDL toolbar action should be removed"
+    assert "def open_nghdl" in app_src, \
+        "open_nghdl launcher must exist as the VHDL shortcut"
+    tree = ast.parse(app_src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "open_nghdl"),
+              None)
+    assert fn is not None, "open_nghdl must be defined"
+    # It must reach makerchip(...) with select_vhdl=True.
+    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "makerchip"]
+    assert any(any(kw.arg == "select_vhdl"
+                   and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                   for kw in c.keywords)
+               for c in calls), \
+        "open_nghdl must call makerchip(select_vhdl=True) so NGHDL lands on VHDL"
 
 
 # ---------------------------------------------------------------------------

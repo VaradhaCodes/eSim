@@ -115,8 +115,9 @@ class RemoveItemsDialog(QtWidgets.QDialog):
         self.remove_btn = self.buttons.addButton(
             "Remove Selected",
             QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
-        self.remove_btn.setStyleSheet(
-            "QPushButton { color: #b71c1c; font-weight: 600; }")
+        # Destructive action → Aurora danger button (themed red), instead of
+        # red text fighting the global cyan-gradient button background.
+        self.remove_btn.setProperty("cssClass", "danger")
         self.buttons.addButton(
             QtWidgets.QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self._on_accept)
