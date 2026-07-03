@@ -22,6 +22,7 @@
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration.Appconfig import Appconfig
+from configuration import Dialogs
 import os
 import json
 
@@ -184,7 +185,7 @@ class Workspace(QtWidgets.QDialog):
 
         path = self.workspace_loc.text().strip()
         if not path:
-            QtWidgets.QMessageBox.warning(
+            Dialogs.warning(
                 self, "Workspace",
                 "Please choose a folder for your workspace."
             )
@@ -201,7 +202,7 @@ class Workspace(QtWidgets.QDialog):
             ) as f:
                 f.write(f"{self.obj_appconfig.workspace_check} {path}")
         except OSError as e:
-            QtWidgets.QMessageBox.critical(
+            Dialogs.critical(
                 self, "Workspace",
                 f"Could not save workspace path:\n{e}"
             )
@@ -212,7 +213,7 @@ class Workspace(QtWidgets.QDialog):
             if not os.path.isdir(path):
                 os.makedirs(path)
         except OSError as e:
-            QtWidgets.QMessageBox.critical(
+            Dialogs.critical(
                 self, "Workspace",
                 f"Could not create that folder:\n{e}"
             )

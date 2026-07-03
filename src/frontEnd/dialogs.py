@@ -40,12 +40,20 @@ def show_info(parent, title, message):
 
 
 def ask_question(parent, title, message):
-    reply = QtWidgets.QMessageBox.question(
-        parent, title, message,
-        QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-        QtWidgets.QMessageBox.StandardButton.No
-    )
-    return reply == QtWidgets.QMessageBox.StandardButton.Yes
+    # Build the box the same way show_warning/show_info do (QMessageBox(parent)
+    # + _prepare_msg) rather than the static QMessageBox.question() — the
+    # static call is a parentless top-level window and is banned by the
+    # dialog-hygiene guard (configuration/tests/test_dialog_hygiene.py).
+    msg = QtWidgets.QMessageBox(parent)
+    msg.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    msg.setWindowTitle(title)
+    msg.setText(message)
+    msg.setStandardButtons(
+        QtWidgets.QMessageBox.StandardButton.Yes
+        | QtWidgets.QMessageBox.StandardButton.No)
+    msg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+    _prepare_msg(msg, "question")
+    return msg.exec() == QtWidgets.QMessageBox.StandardButton.Yes
 
 
 ESIM_VERSION = "2.5.0"
