@@ -57,6 +57,20 @@ class Analysis(QtWidgets.QWidget):
         self.grid.addWidget(self.createDCgroup(), 1, 0, 5, 0)
         self.grid.addWidget(self.createTRANgroup(), 1, 0, 5, 0)
 
+        # Combo polish (kept from the otherwise-reverted layout work): use Qt's
+        # styleable list popup instead of the platform's square native popup,
+        # and only RAISE each combo's width cap enough to fit its longest item
+        # so the unit labels (e.g. "Volts or Amperes") stop clipping -- without
+        # dropping the cap, which would let the combo stretch the whole column.
+        for _cb in self.findChildren(QtWidgets.QComboBox):
+            _cb.setView(QtWidgets.QListView())
+            _need = max(
+                (_cb.fontMetrics().horizontalAdvance(_cb.itemText(_i))
+                 for _i in range(_cb.count())),
+                default=0) + 80
+            if _cb.maximumWidth() < _need:
+                _cb.setMaximumWidth(_need)
+
         try:
             kicadFile = self.clarg1
             (projpath, filename) = os.path.split(kicadFile)

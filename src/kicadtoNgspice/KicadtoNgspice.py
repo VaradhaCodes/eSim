@@ -234,6 +234,20 @@ class MainWindow(QtWidgets.QWidget):
         """
         self.vbox = QtWidgets.QVBoxLayout()
 
+        # Aurora description strip: a gradient header that orients the user
+        # before the model/source/analysis tabs (#converterDescription supplies
+        # the gradient surface + padding).
+        self.descriptionFrame = QtWidgets.QFrame()
+        self.descriptionFrame.setObjectName("converterDescription")
+        descLayout = QtWidgets.QVBoxLayout(self.descriptionFrame)
+        descLayout.setContentsMargins(0, 0, 0, 0)
+        descLabel = QtWidgets.QLabel(
+            "Assign each schematic device its SPICE model, source and analysis "
+            "parameters, then convert to an Ngspice-ready netlist.")
+        descLabel.setWordWrap(True)
+        descLabel.setProperty("cssClass", "muted")
+        descLayout.addWidget(descLabel)
+
         # The tab widget lives in its own container layout so reloadNetlist()
         # can swap in freshly-built tabs when the source .cir changes, without
         # touching the persistent Convert button below it.
@@ -243,9 +257,12 @@ class MainWindow(QtWidgets.QWidget):
         self.hbox = QtWidgets.QHBoxLayout()
         self.hbox.addStretch(1)
         self.convertbtn = QtWidgets.QPushButton("Convert")
+        # Primary action of the converter dialog.
+        self.convertbtn.setProperty("cssClass", "primary")
         self.convertbtn.clicked.connect(self.callConvert)
         self.hbox.addWidget(self.convertbtn)
 
+        self.vbox.addWidget(self.descriptionFrame)
         self.vbox.addLayout(self.convertContainer)
         self.vbox.addLayout(self.hbox)
 

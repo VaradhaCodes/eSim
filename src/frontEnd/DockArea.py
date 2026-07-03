@@ -373,117 +373,167 @@ class DockArea(QtWidgets.QMainWindow):
 
         dockName = 'Schematic Converter-'
 
-        self.eConWidget = QtWidgets.QWidget()
-        self.eConLayout = QVBoxLayout()  # QVBoxLayout for the main layout
-
-        file_path_layout = QHBoxLayout()  # QHBoxLayout for file path line
-        lib_path_layout = QHBoxLayout()
-
-        file_path_text_box = QLineEdit()
-        file_path_text_box.setFixedHeight(30)
-        file_path_text_box.setFixedWidth(800)
-        file_path_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        file_path_layout.addWidget(file_path_text_box)
-
-        browse_button = QPushButton("Browse")
-        browse_button.setFixedSize(100, 30)
-        browse_button.clicked.connect(lambda: browse_path(self,file_path_text_box))
-        file_path_layout.addWidget(browse_button)
-
-        self.eConLayout.addLayout(file_path_layout)  # Add file path layout to main layout
-
-        button_layout = QHBoxLayout()  # QHBoxLayout for the buttons
-
         self.pspice_converter = PspiceConverter(self)
         self.ltspice_converter = LTspiceConverter(self)
         self.pspiceLib_converter = PspiceLibConverter(self)
         self.ltspiceLib_converter = LTspiceLibConverter(self)
 
-        upload_button2 = QPushButton("Convert PSpice library")
-        upload_button2.setFixedSize(180, 30)
-        upload_button2.clicked.connect(lambda: self.pspiceLib_converter.upload_file_Pspice(file_path_text_box.text()))
-        button_layout.addWidget(upload_button2)
+        # ── Root: full-bleed layout that fills the whole dock.
+        # The old version capped the content at 920px and centred it, so it sat
+        # in a compressed island with dead margins all around. Here the content
+        # spans the panel's full width and the working area (convert actions +
+        # about) stretches to claim the vertical space down to the dock floor.
+        self.eConWidget = QtWidgets.QWidget()
+        col = QVBoxLayout(self.eConWidget)
+        col.setContentsMargins(28, 24, 28, 24)
+        col.setSpacing(18)
 
-        upload_button1 = QPushButton("Convert Pspice schematic")
-        upload_button1.setFixedSize(180, 30)
-        upload_button1.clicked.connect(lambda: self.pspice_converter.upload_file_Pspice(file_path_text_box.text()))
-        button_layout.addWidget(upload_button1)
+        # ── Header ───────────────────────────────────────────────────────
+        title = QLabel("Schematic Converter")
+        title.setProperty("cssClass", "title")
+        col.addWidget(title)
 
-        upload_button3 = QPushButton("Convert LTspice library")
-        upload_button3.setFixedSize(184, 30)
-        upload_button3.clicked.connect(lambda: self.ltspiceLib_converter.upload_file_LTspice(file_path_text_box.text()))
-        button_layout.addWidget(upload_button3)
+        subtitle = QLabel(
+            "Bring PSpice and LTspice designs into eSim — converted to KiCad "
+            "schematics and libraries, ready to simulate and lay out."
+        )
+        subtitle.setProperty("cssClass", "muted")
+        subtitle.setWordWrap(True)
+        col.addWidget(subtitle)
 
-        upload_button = QPushButton("Convert LTspice schematic")
-        upload_button.setFixedSize(184, 30)
-        upload_button.clicked.connect(lambda: self.ltspice_converter.upload_file_LTspice(file_path_text_box.text()))
-        button_layout.addWidget(upload_button)
+        # ── Source file picker (full width) ──────────────────────────────
+        source_group = QtWidgets.QGroupBox("Source file")
+        source_group.setProperty("cssClass", "themedGroupBox")
+        source_layout = QHBoxLayout(source_group)
+        source_layout.setSpacing(10)
 
-        self.eConLayout.addLayout(button_layout)
+        file_path_text_box = QLineEdit()
+        file_path_text_box.setMinimumHeight(38)
+        file_path_text_box.setClearButtonEnabled(True)
+        file_path_text_box.setPlaceholderText(
+            "Choose a PSpice (.sch, .lib) or LTspice (.asc, .asy) file…"
+        )
+        file_path_text_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        source_layout.addWidget(file_path_text_box, 1)
 
-        self.eConWidget.setLayout(self.eConLayout)
+        browse_button = QPushButton("Browse…")
+        browse_button.setProperty("cssClass", "primary")
+        browse_button.setMinimumHeight(38)
+        browse_button.clicked.connect(
+            lambda: browse_path(self, file_path_text_box))
+        source_layout.addWidget(browse_button, 0)
 
-        # lib_path_text_box = QLineEdit()
-        # lib_path_text_box.setFixedHeight(30)
-        # lib_path_text_box.setFixedWidth(800)
-        # lib_path_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # lib_path_layout.addWidget(lib_path_text_box)
+        col.addWidget(source_group)
 
-        # browse_button1 = QPushButton("Browse lib")
-        # browse_button1.setFixedSize(110, 30)
-        # browse_button1.clicked.connect(lambda: browse_path(self,lib_path_text_box))
-        # lib_path_layout.addWidget(browse_button1)
+        # ── Convert actions, grouped by source format ────────────────────
+        # Tiles that grow to fill the panel. The format lives in the group
+        # title so the captions stay short (they used to clip, e.g. "onvert
+        # Pspice schemat"), and the buttons expand in both axes so the action
+        # area owns the dock's free space instead of leaving a big blank below
+        # a cramped row.
+        def _convert_btn(text, handler):
+            btn = QPushButton(text)
+            btn.setMinimumHeight(64)
+            btn.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
+            btn.clicked.connect(handler)
+            return btn
 
-        # self.eConLayout.addLayout(lib_path_layout)
+        pspice_lib_btn = _convert_btn(
+            "Library",
+            lambda: self.pspiceLib_converter.upload_file_Pspice(
+                file_path_text_box.text()))
+        pspice_sch_btn = _convert_btn(
+            "Schematic",
+            lambda: self.pspice_converter.upload_file_Pspice(
+                file_path_text_box.text()))
+        ltspice_lib_btn = _convert_btn(
+            "Library",
+            lambda: self.ltspiceLib_converter.upload_file_LTspice(
+                file_path_text_box.text()))
+        ltspice_sch_btn = _convert_btn(
+            "Schematic",
+            lambda: self.ltspice_converter.upload_file_LTspice(
+                file_path_text_box.text()))
 
-        # Add the description HTML content
-        description_html = """
-            <html>
-                <head>
-                    <style>
-                        body {
-                            font-family: sans-serif;
-                            margin: 0px;
-                            padding: 0px;
-                            background-color: white;
-                            border: 4px solid  black;
-                            font-size: 10pt; /* Adjust the font size as needed */
-                        }
+        pspice_group = QtWidgets.QGroupBox("PSpice")
+        pspice_group.setProperty("cssClass", "themedGroupBox")
+        pspice_row = QHBoxLayout(pspice_group)
+        pspice_row.setSpacing(10)
+        pspice_row.addWidget(pspice_lib_btn)
+        pspice_row.addWidget(pspice_sch_btn)
 
-                        h1{
-                            font-weight: bold;
-                            font-size: 9pt;
-                            color: #eeeeee;
-                            padding: 10px;
-                            background-color: #165982;
-                            border: 4px outset  #0E324B;
-                        }
-                    </style>
-                </head>
+        ltspice_group = QtWidgets.QGroupBox("LTspice")
+        ltspice_group.setProperty("cssClass", "themedGroupBox")
+        ltspice_row = QHBoxLayout(ltspice_group)
+        ltspice_row.setSpacing(10)
+        ltspice_row.addWidget(ltspice_lib_btn)
+        ltspice_row.addWidget(ltspice_sch_btn)
 
-                <body>
-                    <h1>About eSim Converter</h1>
-                    <p>
-                        <b>Pspice to eSim </b> will convert the PSpice Schematic and Library files to KiCad Schematic and
-                        Library files respectively with proper mapping of the components and the wiring. By this way one 
-                        will be able to simulate their schematic in PSpice and get the PCB layout in KiCad.</b> 
-                        <br/><br/>
-                        <b>LTspice to eSim </b> will convert symbols and schematic from LTspice to Kicad.The goal is to design and
-                        simulate under LTspice and to automatically transfer the circuit under Kicad to draw the PCB.</b>
-                    </p>
-                </body>
-            </html>
-        """
+        # Left rail of the body: the two format groups stacked, each taking an
+        # equal share of the vertical space so the tiles fill the height.
+        actions_col = QVBoxLayout()
+        actions_col.setSpacing(16)
+        actions_col.addWidget(pspice_group, 1)
+        actions_col.addWidget(ltspice_group, 1)
 
-        self.description_label = QLabel()
-        self.description_label.setFixedHeight(160)
-        self.description_label.setFixedWidth(950)
-        self.description_label.setAlignment(Qt.AlignmentFlag.AlignBottom)
+        # ── About + how-it-works (right rail) ────────────────────────────
+        # Themed rich-text, not the old white box with a 4px black border and a
+        # blue outset bezel that fought the Aurora surface underneath it.
+        about_group = QtWidgets.QGroupBox("About")
+        about_group.setProperty("cssClass", "themedGroupBox")
+        about_layout = QVBoxLayout(about_group)
+        about_layout.setSpacing(14)
+
+        self.description_label = QLabel(
+            "<p><b>PSpice&nbsp;→&nbsp;eSim</b> converts PSpice schematic and "
+            "library files to KiCad, mapping components and wiring so a design "
+            "simulated in PSpice can go straight to a PCB layout in KiCad.</p>"
+            "<p><b>LTspice&nbsp;→&nbsp;eSim</b> converts LTspice symbols and "
+            "schematics to KiCad — design and simulate in LTspice, then carry "
+            "the circuit into KiCad for the PCB.</p>"
+        )
+        self.description_label.setTextFormat(Qt.TextFormat.RichText)
         self.description_label.setWordWrap(True)
-        self.description_label.setText(description_html)
-        self.eConLayout.addWidget(self.description_label)  # Add the description label to the layout
+        about_layout.addWidget(self.description_label)
 
-        self.eConWidget.setLayout(self.eConLayout)
+        steps_label = QLabel(
+            "<p style='margin-bottom:0'><b>How it works</b><br/>"
+            "1&nbsp;&nbsp;Choose a source file above.<br/>"
+            "2&nbsp;&nbsp;Pick its format — PSpice or LTspice.<br/>"
+            "3&nbsp;&nbsp;Convert it to a KiCad library or schematic.</p>"
+        )
+        steps_label.setTextFormat(Qt.TextFormat.RichText)
+        steps_label.setProperty("cssClass", "muted")
+        steps_label.setWordWrap(True)
+        about_layout.addWidget(steps_label)
+        about_layout.addStretch(1)
+
+        # Body row fills the rest of the dock: actions on the left, about on the
+        # right. Added with a stretch factor so it expands to the bottom edge.
+        body_row = QHBoxLayout()
+        body_row.setSpacing(18)
+        body_row.addLayout(actions_col, 3)
+        body_row.addWidget(about_group, 2)
+        col.addLayout(body_row, 1)
+
+        # Empty state: nothing to convert until a file is picked, so the four
+        # actions stay disabled and light up together once the field is filled.
+        convert_buttons = [
+            pspice_lib_btn, pspice_sch_btn, ltspice_lib_btn, ltspice_sch_btn]
+
+        def _sync_actions(text):
+            enabled = bool(text.strip())
+            for b in convert_buttons:
+                b.setEnabled(enabled)
+
+        file_path_text_box.textChanged.connect(_sync_actions)
+        _sync_actions("")
 
         dock[dockName + str(count)] = QtWidgets.QDockWidget(dockName + str(count))
         self.apply_fullscreen_feature(

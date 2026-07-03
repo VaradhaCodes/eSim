@@ -239,8 +239,51 @@ class ModelGroupWidget(QtWidgets.QGroupBox):
 
     def _on_toggle(self):
         expanded = self._toggle.isChecked()
-        self._body.setVisible(expanded)
         self._toggle.setArrowType(_arrow(expanded))
+        self._animate_body(expanded)
+
+    def _animate_body(self, expanded):
+        """Slide the instance list open/closed instead of snapping it.
+
+        Falls back to a plain show/hide when motion is off or the widget is not
+        on screen (headless tests, pre-display construction) -- the animation's
+        ``finished`` callback never fires there, so the body must reach its final
+        visibility synchronously."""
+        body = self._body
+        if not _motion_enabled() or not self.isVisible():
+            body.setMaximumHeight(_UNCAPPED)
+            body.setVisible(expanded)
+            return
+
+        target = body.sizeHint().height()
+
+        # Scale the duration to the distance travelled. A fixed time over a small
+        # one-row span leaves the decelerating tail of OutCubic moving <1px per
+        # frame; the integer maximumHeight then holds for several frames and jumps
+        # 1px at a time -> visible stutter. Tying duration to height keeps every
+        # frame moving >=1px so a 1-row slide is as smooth as a 5-row one. A tall
+        # body (~150px) still lands at ~180ms, so multi-row feel is unchanged.
+        distance = target if expanded else body.height()
+        anim = QtCore.QPropertyAnimation(body, b"maximumHeight", self)
+        anim.setDuration(max(100, min(200, int(distance * 1.2))))
+        anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        if expanded:
+            body.setMaximumHeight(0)
+            body.setVisible(True)
+            anim.setStartValue(0)
+            anim.setEndValue(target)
+            # Drop the height cap once open so the row grid can grow naturally.
+            anim.finished.connect(lambda: body.setMaximumHeight(_UNCAPPED))
+        else:
+            anim.setStartValue(body.height())
+            anim.setEndValue(0)
+
+            def _done():
+                body.setVisible(False)
+                body.setMaximumHeight(_UNCAPPED)
+            anim.finished.connect(_done)
+        self._body_anim = anim          # keep a ref so it is not GC'd mid-run
+        anim.start()
 
     def _on_group_browse(self):
         if not self._group_browse_fn:
@@ -271,3 +314,19 @@ class ModelGroupWidget(QtWidgets.QGroupBox):
 def _arrow(expanded):
     return (QtCore.Qt.ArrowType.DownArrow if expanded
             else QtCore.Qt.ArrowType.RightArrow)
+
+
+# QWIDGETSIZE_MAX -- the "no cap" value to restore on QWidget.maximumHeight once
+# the open animation finishes.
+_UNCAPPED = 16777215
+
+
+def _motion_enabled():
+    """True only when the app's motion preference is on. Defaults to False (no
+    animation, plain show/hide) if frontEnd isn't importable -- keeps headless
+    tests on the synchronous path."""
+    try:
+        from frontEnd.motion import motion_enabled
+        return motion_enabled()
+    except Exception:
+        return False

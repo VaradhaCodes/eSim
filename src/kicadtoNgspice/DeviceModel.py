@@ -166,12 +166,7 @@ class DeviceModel(QtWidgets.QWidget):
         self.trackLibraryWithoutButton(beg, path_name)
 
         sky130box.setLayout(sky130grid)
-        sky130box.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius:\
-                 9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
+        sky130box.setProperty("cssClass", "themedGroupBox")
         self.grid.addWidget(sky130box)
         # if self.entry_var[self.count-3].text() == "":
         #    pass
@@ -230,12 +225,7 @@ class DeviceModel(QtWidgets.QWidget):
                 sky130grid.addWidget(self.entry_var[self.count], self.row, 1)
                 self.entry_var[self.count].textChanged.connect(self.textChange)
                 sky130box.setLayout(sky130grid)
-                sky130box.setStyleSheet(" \
-                QGroupBox { border: 1px solid gray; border-radius: \
-                9px; margin-top: 0.5em; } \
-                QGroupBox::title { subcontrol-origin: margin; left:\
-                 10px; padding: 0 3px 0 3px; } \
-                ")
+                sky130box.setProperty("cssClass", "themedGroupBox")
                 try:
                     for child in self.root:
                         if child.tag == words[0]:
@@ -482,12 +472,7 @@ class DeviceModel(QtWidgets.QWidget):
                 self.obj_trac.deviceModelTrack[device_ref] = f"{lib_path}:{corner}:{params}"
             
             ihpbox.setLayout(ihpgrid)
-            ihpbox.setStyleSheet("""
-                QGroupBox { border: 1px solid #4a86c7; border-radius: 9px;
-                            margin-top: 0.5em; background-color: #f0f8ff; }
-                QGroupBox::title { subcontrol-origin: margin; left: 10px;
-                                  padding: 0 3px 0 3px; color: #2c5aa0; }
-            """)
+            ihpbox.setProperty("cssClass", "ihpGroup")
             self.grid.addWidget(ihpbox)
             
             self.row += 1
