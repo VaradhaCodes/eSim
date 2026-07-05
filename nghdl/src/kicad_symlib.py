@@ -30,6 +30,7 @@
 
 import re
 import os
+import shutil
 import tempfile
 
 
@@ -117,3 +118,109 @@ def _write_lib(path, parts):
         except OSError:
             pass
         raise
+
+
+# =========================================================================
+# Location of the runtime-generated libraries + KiCad table registration.
+#
+# eSim ships 17 static symbol libraries but *rewrites* three of them every
+# time a user builds an HDL model (eSim_Ngveri / eSim_NgVeriCosim /
+# eSim_Nghdl). Those three now live in the user's own ~/.esim/kicad_symbols
+# so the app never needs write access to KiCad's root-owned
+# /usr/share/kicad/symbols. The other 14 stay there untouched.
+# =========================================================================
+
+GENERATED_LIBS = ("eSim_Ngveri", "eSim_NgVeriCosim", "eSim_Nghdl")
+
+
+def generated_symlib_dir():
+    '''Directory holding eSim's runtime-generated KiCad symbol libraries:
+       ~/.esim/kicad_symbols, created on demand. Same path on every OS
+       (os.path.expanduser resolves ~ on Windows too).'''
+    d = os.path.join(os.path.expanduser('~'), '.esim', 'kicad_symbols')
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def generated_symlib_path(libname, legacy_dirs=()):
+    '''Absolute path of the generated library <libname>.kicad_sym under
+       generated_symlib_dir(), performing a one-time lazy migration.
+
+       A user's built models accumulate INSIDE the library file. When eSim
+       used to write these libs into /usr/share/kicad/symbols (Linux) or
+       <inst_dir>/KiCad/share/kicad/symbols (old Windows layout), an existing
+       install already holds all of that user's models there. So: if the new
+       ~/.esim location has no copy yet but a legacy copy exists, COPY (never
+       move) the legacy file in, preserving those models. The legacy file is
+       left behind on purpose -- uninstall/cleanup handles it; we never write
+       to the legacy location.
+
+       legacy_dirs adds extra probe directories (e.g. the old Windows install
+       path) ahead of the default /usr/share one. copy2 is wrapped so a
+       root-owned/unreadable legacy file just means "no migration" (a fresh
+       empty lib is created on first write) rather than an error.'''
+    new_path = os.path.join(generated_symlib_dir(), libname + '.kicad_sym')
+    if not os.path.exists(new_path):
+        for d in list(legacy_dirs) + ['/usr/share/kicad/symbols']:
+            legacy = os.path.join(d, libname + '.kicad_sym')
+            if os.path.isfile(legacy):
+                try:
+                    shutil.copy2(legacy, new_path)
+                except OSError:
+                    pass
+                break
+    return new_path
+
+
+def _kicad_config_dir():
+    '''KiCad per-user config root holding the version dirs with sym-lib-table:
+       %APPDATA%/kicad on Windows, ~/.config/kicad elsewhere.'''
+    if os.name == 'nt':
+        return os.path.join(os.environ.get('APPDATA', ''), 'kicad')
+    return os.path.join(os.path.expanduser('~'), '.config', 'kicad')
+
+
+def ensure_lib_registered(libname, lib_path, descr=""):
+    '''Ensure <libname> is registered in every KiCad per-user sym-lib-table,
+       pointing at the absolute lib_path. Idempotent and best-effort.
+
+       A library added AFTER install (eSim_NgVeriCosim) is missing from
+       existing users' tables; a relocated library (the three generated libs,
+       moved out of ${KICAD6_SYMBOL_DIR}) is present but STALE. So for each
+       version dir that has a table:
+         * no entry for libname   -> append one,
+         * entry with a different uri (e.g. a stale ${KICAD6_SYMBOL_DIR} one)
+           -> rewrite that single line's uri in place,
+         * entry already correct   -> leave untouched.
+       Failures here must NEVER block model creation (broad OSError guard).'''
+    base = _kicad_config_dir()
+    if not os.path.isdir(base):
+        return
+    lib_line = (
+        '  (lib (name "%s")(type "KiCad")(uri "%s")'
+        '(options "")(descr "%s"))\n' % (libname, lib_path, descr))
+    entry_re = re.compile(
+        r'^[ \t]*\(lib \(name "%s"\).*\)[ \t]*$' % re.escape(libname),
+        re.MULTILINE)
+    for ver in os.listdir(base):
+        table = os.path.join(base, ver, 'sym-lib-table')
+        if not os.path.isfile(table):
+            continue
+        try:
+            with open(table) as fh:
+                content = fh.read()
+            m = entry_re.search(content)
+            if m:
+                if ('(uri "%s")' % lib_path) in m.group(0):
+                    continue                    # already correct
+                new_content = (content[:m.start()] +
+                               lib_line.rstrip('\n') + content[m.end():])
+            else:
+                idx = content.rstrip().rfind(')')   # final ) closes the table
+                if idx == -1:
+                    continue
+                new_content = content[:idx] + lib_line + content[idx:]
+            with open(table, 'w') as fh:
+                fh.write(new_content)
+        except OSError:
+            pass

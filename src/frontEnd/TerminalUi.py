@@ -89,11 +89,8 @@ class TerminalUi(QtWidgets.QMainWindow):
         if apply_fn is None:
             return
         from frontEnd.theme_utils import get_preferences
-        if os.name == 'nt':
-            user_home = os.path.join('library', 'config')
-        else:
-            user_home = os.path.expanduser('~')
-        prefs = get_preferences(user_home)
+        from configuration import paths
+        prefs = get_preferences()
         order = ("System", "Light", "Dark")
         try:
             idx = order.index(prefs.get("theme_mode", "System"))
@@ -103,7 +100,7 @@ class TerminalUi(QtWidgets.QMainWindow):
         try:
             import json
             prefs["theme_mode"] = next_mode
-            path = os.path.join(user_home, ".esim", "preferences.json")
+            path = paths.esim_config_path("preferences.json")
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as fh:
                 json.dump(prefs, fh)
@@ -157,48 +154,15 @@ class TerminalUi(QtWidgets.QMainWindow):
 
         self.qProcess.start(self.ngspice_bin, self.args)
 
-    # Persisted across runs in the shared QSettings store. When the user ticks
-    # "Remember my choice" the popup is skipped on every later simulation and
-    # the saved answer is reused. It can be re-enabled from
-    # Preferences ▸ Simulation ("Ask before generating Ngspice plots").
-    NGSPICE_REMEMBER_KEY = "ngspicePlots/remember"
-    NGSPICE_FLAG_KEY = "ngspicePlots/flag"
-
     def _resolveNgspicePlotChoice(self):
         """Return whether to also generate ngspice plots for this run.
 
-        If the user previously chose "Remember my choice", reuse the stored
-        answer silently. Otherwise show the Yes/No popup (with a remember
-        checkbox) and persist the decision when the box is ticked.
+        Thin wrapper over ``dialogs.ask_ngspice_plots`` (the single copy of the
+        popup + its "remember my choice" persistence, shared with
+        Application.plotFlagPopBox).
         """
-        settings = QtCore.QSettings('eSim', 'eSim')
-        if settings.value(self.NGSPICE_REMEMBER_KEY, False, type=bool):
-            return settings.value(self.NGSPICE_FLAG_KEY, False, type=bool)
-
-        msg_box = QtWidgets.QMessageBox(self)
-        msg_box.setWindowTitle("Ngspice Plots")
-        msg_box.setText("Do you want Ngspice plots?")
-        # Widen the message label so the window title ("Ngspice Plots") is not
-        # clipped behind the close/minimise/maximise buttons on tight window
-        # managers. QMessageBox ignores setMinimumWidth, so size via the label.
-        msg_box.setStyleSheet("QLabel { min-width: 360px; }")
-
-        remember_cb = QtWidgets.QCheckBox(
-            "Remember my choice (re-enable in Preferences ▸ Simulation)")
-        msg_box.setCheckBox(remember_cb)
-
-        yes_button = msg_box.addButton(
-            "Yes", QtWidgets.QMessageBox.ButtonRole.YesRole)
-        msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
-
-        msg_box.exec()
-        flag = msg_box.clickedButton() == yes_button
-
-        if remember_cb.isChecked():
-            settings.setValue(self.NGSPICE_REMEMBER_KEY, True)
-            settings.setValue(self.NGSPICE_FLAG_KEY, flag)
-
-        return flag
+        from frontEnd.dialogs import ask_ngspice_plots
+        return ask_ngspice_plots(self)
 
     # Note: the legacy `changeColor()` per-widget dark/light toggle has been
     # removed; use `_cycle_theme()` (the lightDarkModeButton target) instead so

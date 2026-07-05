@@ -1,28 +1,24 @@
 import os
+import sys
 import subprocess
 import shutil
 from PyQt6.QtWidgets import QMessageBox
 from configuration import Dialogs
+from configuration import paths
 
 class LTspiceConverter:
     def __init__(self, parent):
         self.parent = parent
 
     def get_workspace_directory(self):
-        # Path to the hidden folder and the workspace file
-        hidden_folder_path = os.path.join(os.path.expanduser('~'), '.esim')
-        workspace_file_path = os.path.join(hidden_folder_path, 'workspace.txt')
-
-        # Check if the hidden folder and the workspace file exist
-        if os.path.exists(hidden_folder_path) and os.path.exists(workspace_file_path):
-            # Read the workspace directory from the workspace.txt file
-            with open(workspace_file_path, 'r') as file:
-                workspace_directory = file.read().strip()  # Remove any leading/trailing whitespaces
-            # Split the string by spaces and select the last element
-            workspace_directory = workspace_directory.split()[-1]
-            return workspace_directory
-
-        return None  # Return None if the hidden folder or the workspace file is not found
+        # read_workspace splits on the first space only, so a workspace path
+        # containing spaces survives (the old split()[-1] returned only the
+        # last token).
+        workspace_file_path = paths.esim_config_path('workspace.txt')
+        if not os.path.exists(workspace_file_path):
+            return None
+        _check, workspace_directory = paths.read_workspace()
+        return workspace_directory
 
     def convert(self, file_path):
         
@@ -45,10 +41,15 @@ class LTspiceConverter:
             # Construct the full path to parser.py
             parser_path = os.path.join(script_dir, relative_parser_path)
             
-            command = command = ["python3", f"{parser_path}/sch_LTspice2Kicad.py", f"{filename}.asc"]
+            # sys.executable (not "python3", absent on Windows); arg list, no
+            # shell. The vendored script appends its own extension handling --
+            # it is invoked with cwd=conPath and the bare filename by design.
+            command = [sys.executable,
+                       f"{parser_path}/sch_LTspice2Kicad.py", f"{filename}.asc"]
 
             try:
-                subprocess.run(command, check=True, cwd=conPath)
+                subprocess.run(command, check=True, cwd=conPath,
+                               capture_output=True, text=True)
                 # Message box with the conversion success message
                 msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Information)
@@ -57,17 +58,26 @@ class LTspiceConverter:
                 workspace_directory = self.get_workspace_directory()
                 if workspace_directory:
                         print(f"Workspace directory found: {workspace_directory}")
-                        merge_copytree(newFile, workspace_directory, filename)
+                        shutil.copytree(
+                            newFile,
+                            os.path.join(workspace_directory,
+                                         "LTspice_" + filename),
+                            dirs_exist_ok=True, copy_function=shutil.copy2)
                         msg_box.setText(f"The file has been converted successfully.  Saved in {workspace_directory}.  Open the Project manually.")
                         print("File added under the project explorer.")
                 else:
                         print("Workspace directory not found.")
                 result = msg_box.exec()
                 print("Conversion of LTspice to eSim schematic Successful")
-            
 
             except subprocess.CalledProcessError as e:
-                print("Error:", e)
+                # Surface the parser failure that was invisible before.
+                detail = (e.stderr or e.stdout or str(e)).strip()
+                print("Error:", detail)
+                Dialogs.critical(
+                    self.parent, "Conversion failed",
+                    "LTspice to eSim conversion failed:\n\n"
+                    + "\n".join(detail.splitlines()[:15]))
         else:
             print("File is empty. Cannot perform conversion.")
             # A message box indicating that the file is empty
@@ -113,32 +123,3 @@ class LTspiceConverter:
             msg_box.setText("Please select a file before uploading.")
             msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg_box.exec()
-
-def find_workspace_directory(target_directory_name):
-    for root, dirs, files in os.walk("/"):
-        if target_directory_name in dirs or target_directory_name in files:
-            return os.path.join(root, target_directory_name)
-    return None  # Return None if the directory is not found
-
-def merge_copytree(src, dst, filename):
-    if not os.path.exists(dst):
-        os.makedirs(dst)
-
-    folder_path = f"{dst}/LTspice_{filename}" # Folder to be created in eSim-Workspace
-
-    # Create the folder 
-    try:
-        os.makedirs(folder_path)
-        print(f"Folder created at {folder_path}")
-    except OSError as error:
-        print(f"Folder creation failed: {error}")
-        
-    for item in os.listdir(src):
-        src_item = os.path.join(src, item)
-        dst_item = os.path.join(folder_path, item)
-
-        if os.path.isdir(src_item):
-            merge_copytree(src_item, dst_item)
-        else:
-            if not os.path.exists(dst_item) or os.stat(src_item).st_mtime > os.stat(dst_item).st_mtime:
-                shutil.copy2(src_item, dst_item)

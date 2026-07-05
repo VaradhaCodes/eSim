@@ -14,19 +14,11 @@
 It is an integrated tool build using open source softwares such as KiCad, Ngspice and GHDL.
 
 ## Releases and Installation
-eSim is released for the following distributions (operating systems):
-* **All Linux distributions** (Fedora, Ubuntu, openSUSE, Arch, etc.) via Flatpak
-* Ubuntu 22.04, 23.04, 24.04 LTS versions (native installer)
-* Microsoft Windows 8, 10 and 11
+eSim is released for the following operating systems:
+* Ubuntu 24.04 LTS and 26.04 LTS (23.04 / 25.04 best-effort) — native installer
+* Microsoft Windows 10 and 11
 
-**For Fedora and other Linux distributions:** Use the Flatpak method for easy installation:
-```bash
-flatpak install flathub org.fossee.eSim
-flatpak run org.fossee.eSim
-```
-Or build from source: `flatpak-builder build flatpak/org.fossee.eSim.yml --install --user`
-
-**For Ubuntu and Windows:** Please refer to [downloads](https://esim.fossee.in/downloads) for installation guidelines.
+Please refer to [downloads](https://esim.fossee.in/downloads) for installers and guidelines.
 
 See [INSTALL](INSTALL) for detailed installation instructions for all platforms.
 

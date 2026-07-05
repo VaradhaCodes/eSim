@@ -1,14 +1,17 @@
 import os
 import glob
+import shlex
+import shutil
 import traceback
 from PyQt6 import QtWidgets, QtCore
 from configuration import Dialogs
 from configuration.Appconfig import Appconfig
 from projManagement import Worker
 from projManagement.Validation import Validation
+from projManagement.projectPaths import resolve_stem
 from .NgspicetoModelica import NgMoConverter
 
-BROWSE_LOCATION = '/home'
+BROWSE_LOCATION = os.path.expanduser('~')
 
 
 class OpenModelicaEditor(QtWidgets.QWidget):
@@ -18,7 +21,14 @@ class OpenModelicaEditor(QtWidgets.QWidget):
         self.obj_validation = Validation()
         self.obj_appconfig = Appconfig()
         self.projDir = dir
-        self.projName = os.path.basename(self.projDir)
+        # Resolve the stem from the .proj anchor, not the folder basename —
+        # renamed/imported projects have folder name != file stem, and the
+        # rest of the app already anchors on resolve_stem (cf. convertSub.py).
+        if self.projDir:
+            stem, _status = resolve_stem(str(self.projDir), 'proj')
+            self.projName = stem or os.path.basename(self.projDir)
+        else:
+            self.projName = ''
         self.ngspiceNetlist = os.path.join(
             self.projDir, self.projName + ".cir.out")
         self.modelicaNetlist = os.path.join(self.projDir, "*.mo")
@@ -179,7 +189,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
     def OMPathbrowseFile(self):
         temp = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
-                self, "Open OpenModelica Directory", "home"
+                self, "Open OpenModelica Directory", BROWSE_LOCATION
             )
         )
 
@@ -204,11 +214,11 @@ class OpenModelicaEditor(QtWidgets.QWidget):
         # file_basename = os.path.basename(self.ngspiceNetlist)
 
         cwd = os.getcwd()
-        os.chdir(dir_name)
-
-        obj_NgMoConverter = NgMoConverter(self.map_json)
 
         try:
+            os.chdir(dir_name)
+
+            obj_NgMoConverter = NgMoConverter(self.map_json)
             # Getting all the require information
             lines = obj_NgMoConverter.readNetlist(self.ngspiceNetlist)
             # print("Complete Lines of Ngspice netlist : " +
@@ -333,20 +343,27 @@ class OpenModelicaEditor(QtWidgets.QWidget):
 
             out.close()
 
-            os.chdir(cwd)
-
+            base_msg = ("Ngspice netlist successfully converted to "
+                        "OpenModelica netlist")
+            skipped = getattr(obj_NgMoConverter, "skipped", [])
             self.msg = Dialogs.make_message_box(self)
-            self.msg.setText(
-                "Ngspice netlist successfully converted to OpenModelica " +
-                "netlist"
-            )
-            self.obj_appconfig.print_info(
-                "Ngspice netlist successfully converted to OpenModelica " +
-                "netlist"
-            )
+            if skipped:
+                # Do not pretend the model is complete: some parameters had no
+                # Modelica equivalent and were left out. Name them so the user
+                # can check the .mo instead of discovering the gap in OMEdit.
+                preview = ", ".join(skipped[:12])
+                if len(skipped) > 12:
+                    preview += ", …"
+                detail = ("%s, with %d unsupported parameter(s) skipped: %s"
+                          % (base_msg, len(skipped), preview))
+                self.msg.setText(detail)
+                self.obj_appconfig.print_warning(detail)
+            else:
+                self.msg.setText(base_msg)
+                self.obj_appconfig.print_info(base_msg)
             self.msg.exec()
 
-        except BaseException as e:
+        except Exception as e:
             traceback.print_exc()
             print("================")
             self.msg = Dialogs.make_error_message(self)
@@ -356,20 +373,37 @@ class OpenModelicaEditor(QtWidgets.QWidget):
                 'Unable to convert Ngspice netlist to Modelica netlist. ' +
                 'Check the netlist : ' + repr(e)
             )
+        finally:
+            # Always restore CWD — a mid-conversion exception used to leave
+            # the process chdir'd into the project dir (CWD-mutation hazard).
+            os.chdir(cwd)
 
     def callOMEdit(self):
 
         try:
             modelFiles = glob.glob(self.modelicaNetlist)
-            modelFiles = ' '.join(file for file in modelFiles)
-            self.cmd2 = self.OMPath+"/OMEdit " + modelFiles
+            # Resolve the OMEdit binary from the user-supplied folder, else
+            # from PATH. Quote every path (binary + each .mo) so folders or
+            # files containing spaces don't shatter into bogus args when the
+            # WorkerThread shlex.split()s the command.
+            ompath = self.OMPathtext.text().strip()
+            if ompath:
+                ombin = os.path.join(ompath, "OMEdit")
+            else:
+                ombin = shutil.which("OMEdit")
+            if not ombin:
+                raise FileNotFoundError("OMEdit executable not found")
+            self.cmd2 = " ".join(
+                [shlex.quote(ombin)] + [shlex.quote(f) for f in modelFiles]
+            )
             print(self.cmd2)
             self.obj_workThread2 = Worker.WorkerThread(self.cmd2)
             self.obj_workThread2.start()
             print("OMEdit called")
             self.obj_appconfig.print_info("OMEdit called")
 
-        except BaseException:
+        except Exception as e:
+            traceback.print_exc()
             self.msg = Dialogs.make_message_box(self)
             self.msgContent = (
                 "There was an error while opening OMEdit.<br/>"
@@ -386,5 +420,6 @@ class OpenModelicaEditor(QtWidgets.QWidget):
             self.msg.setTextFormat(QtCore.Qt.TextFormat.RichText)
             self.msg.setText(self.msgContent)
             self.msg.setWindowTitle("Missing OpenModelica")
-            self.obj_appconfig.print_info(self.msgContent)
+            self.obj_appconfig.print_info(
+                self.msgContent + " [" + repr(e) + "]")
             self.msg.exec()

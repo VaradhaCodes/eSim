@@ -30,6 +30,7 @@
 import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
+from configuration import paths
 from configuration.Appconfig import Appconfig
 import os
 import shutil
@@ -147,13 +148,10 @@ class Maker(QtWidgets.QWidget):
     # This function is to Add new verilog file
     def addverilog(self):
 
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
         self.verilogfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
                 self, "Open Verilog Directory",
-                init_path + "home", "*v"
+                os.path.join(paths.repo_root(), "home"), "*v"
             )[0]
         )
         if self.verilogfile == "":
@@ -192,19 +190,12 @@ class Maker(QtWidgets.QWidget):
             return
         self.bus.set_content(self.entry_var[1].toPlainText())
         if not self.bus.save_to_disk():
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
-                "Error in saving verilog file. Please check if it is chosen."
-            )
-            self.msg.exec()
+            Dialogs.critical(
+                self, "Error Message",
+                "Error in saving verilog file. Please check if it is chosen.")
 
     # This is used to run the makerchip-app
     def runmakerchip(self):
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
         try:
             if not makerchipTOSAccepted(True):
                 return
@@ -272,7 +263,7 @@ name and module name not matching error')
                         return
 
                     with open(
-                            init_path + "library/tlv/lint_off.txt") as fh:
+                            paths.library_path("tlv/lint_off.txt")) as fh:
                         lint_off = fh.readlines()
                     string = '''\\TLV_version 1d: tl-x.org\n\\SV\n'''
                     for item in lint_off:
@@ -352,13 +343,10 @@ Add \\TLV here if desired\
                 self.process.processId())
         except Exception as e:
             print(e)
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
-                "Error in running Makerchip IDE. \
-Please check if verilog file is chosen.")
-            self.msg.exec()
+            Dialogs.critical(
+                self, "Error Message",
+                "Error in running Makerchip IDE. "
+                "Please check if verilog file is chosen.")
             print("Error in running Makerchip IDE. \
 Please check if verilog file is chosen.")
         #   initial = self.read_file()
@@ -380,13 +368,10 @@ Please check if verilog file is chosen.")
             start (e.g. not installed, or no working browser/network). Tells
             the user instead of failing silently.
         '''
-        self.msg = QtWidgets.QErrorMessage(self)
-        self.msg.setModal(True)
-        self.msg.setWindowTitle("Error Message")
-        self.msg.showMessage(
+        Dialogs.critical(
+            self, "Error Message",
             "Could not launch the Makerchip IDE. It needs the makerchip-app "
             "installed, an active internet connection and a browser.")
-        self.msg.exec()
 
     # This creates the buttons/options
 

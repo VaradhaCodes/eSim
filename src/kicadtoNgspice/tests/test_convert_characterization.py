@@ -35,28 +35,27 @@ def _sub_dir(name, nports):
     return sub
 
 
-def _convert(schematic, kicad_file):
-    conv = Convert.Convert(None, None, list(schematic), kicad_file)
-    conv.obj_track = TrackWidget.TrackWidget()
-    return conv
+def _convert(schematic, kicad_file, track):
+    return Convert.Convert(None, None, list(schematic), kicad_file, track)
 
 
 def test_grouped_subcircuit_fanout_produces_one_include_and_rewrites_lines():
-    TrackWidget.TrackWidget.reset()
     sub = _sub_dir("myamp", 3)                       # dir basename != model tok
     proj = tempfile.mkdtemp(prefix="esim_proj_")
     kicad_file = os.path.join(proj, "proj.cir")
     try:
         schematic = ["x1 a b c lm_741", "x2 d e f lm_741"]
-        # What the grouped tab fans out: same dir for both instances.
-        TrackWidget.TrackWidget.subcircuitTrack = {"x1": sub, "x2": sub}
+        # The converter's shared data bus, filled as the grouped tab would:
+        # same dir for both instances.
+        track = TrackWidget.TrackWidget()
+        track.subcircuitTrack = {"x1": sub, "x2": sub}
         # subcircuitList must match in length (Convert's "all specified" guard).
-        TrackWidget.TrackWidget.subcircuitList = {
+        track.subcircuitList = {
             "projx1": schematic[0].split(),
             "projx2": schematic[1].split(),
         }
 
-        conv = _convert(schematic, kicad_file)
+        conv = _convert(schematic, kicad_file, track)
         out = conv.addSubcircuit(list(schematic), kicad_file)
 
         # Exactly one .include despite two instances (Convert dedups).

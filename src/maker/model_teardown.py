@@ -119,9 +119,20 @@ def _resolve_backend(xml_loc, name):
 
 
 def _nghdl_sym_path(src_home):
-    """Absolute path of the shared eSim_Nghdl.kicad_sym, mirroring (per-OS) the
-    location createkicad uses for eSim_Ngveri."""
+    """Absolute path of the shared eSim_Nghdl.kicad_sym, in eSim's generated
+    symbol-lib dir (~/.esim/kicad_symbols) -- mirroring where createkicad now
+    puts eSim_Ngveri. Lazily migrates a legacy /usr/share (or old Windows)
+    copy in on first use so existing users keep their accumulated models.
+
+    kicad_symlib is stdlib-only, so importing it does not break this module's
+    "no Qt/config/hdlparse" contract. The dual import handles both layouts:
+    packaged (maker.*) and the flat vendored NGHDL tarball."""
+    try:
+        from .kicad_symlib import generated_symlib_path
+    except ImportError:                 # flat vendored layout (NGHDL package)
+        from kicad_symlib import generated_symlib_path
+    legacy = []
     if os.name == 'nt':
         inst_dir = (src_home or "").replace('\\eSim', '')
-        return inst_dir + '/KiCad/share/kicad/symbols/eSim_Nghdl.kicad_sym'
-    return '/usr/share/kicad/symbols/eSim_Nghdl.kicad_sym'
+        legacy.append(inst_dir + '/KiCad/share/kicad/symbols')
+    return generated_symlib_path("eSim_Nghdl", legacy_dirs=legacy)

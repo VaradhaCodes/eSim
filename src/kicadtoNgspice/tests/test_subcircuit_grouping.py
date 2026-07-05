@@ -23,7 +23,7 @@ for _p in (SRC, PKG):
         sys.path.insert(0, _p)
 
 from PyQt6 import QtWidgets                                    # noqa: E402
-from kicadtoNgspice import SubcircuitTab, TrackWidget          # noqa: E402
+from kicadtoNgspice import SubcircuitTab                       # noqa: E402
 from kicadtoNgspice.ModelGroupWidget import ModelGroupWidget   # noqa: E402
 from projManagement.projectPaths import previous_values_path   # noqa: E402
 
@@ -31,7 +31,6 @@ _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
 
 def _build(schematic, kicad_file):
-    TrackWidget.TrackWidget.reset()
     return SubcircuitTab.SubcircuitTab(schematic, kicad_file)
 
 
@@ -61,7 +60,7 @@ def test_same_subcircuit_groups_and_fans_out():
     grp = _group_with_ref(tab, "x1")
     assert sorted(r.ref for r in grp._rows) == ["x1", "x2", "x3"]
     grp.set_group_path("/subs/lm741")
-    track = TrackWidget.TrackWidget.subcircuitTrack
+    track = tab.obj_trac.subcircuitTrack
     assert track["x1"] == track["x2"] == track["x3"] == "/subs/lm741"
 
 
@@ -71,7 +70,7 @@ def test_override_one_subcircuit():
     grp = _group_with_ref(tab, "x1")
     grp.set_group_path("/subs/buf")
     grp.override("x2", "/subs/buf_alt")
-    track = TrackWidget.TrackWidget.subcircuitTrack
+    track = tab.obj_trac.subcircuitTrack
     assert track["x1"] == "/subs/buf"
     assert track["x2"] == "/subs/buf_alt"
 
@@ -80,9 +79,9 @@ def test_empty_not_tracked():
     tab = _build([_line("x1", 3, "buf")], _tmp_cir())
     grp = _group_with_ref(tab, "x1")
     grp.set_group_path("/subs/buf")
-    assert "x1" in TrackWidget.TrackWidget.subcircuitTrack
+    assert "x1" in tab.obj_trac.subcircuitTrack
     grp.set_group_path("")
-    assert "x1" not in TrackWidget.TrackWidget.subcircuitTrack
+    assert "x1" not in tab.obj_trac.subcircuitTrack
 
 
 def test_subcircuitList_count_matches_when_all_assigned():
@@ -91,11 +90,11 @@ def test_subcircuitList_count_matches_when_all_assigned():
     schematic = [_line("x1", 4, "a"), _line("x2", 4, "a"),
                  _line("x3", 2, "b")]
     tab = _build(schematic, _tmp_cir())
-    assert len(TrackWidget.TrackWidget.subcircuitList) == 3
+    assert len(tab.obj_trac.subcircuitList) == 3
     for ref in ("x1", "x2", "x3"):
         _group_with_ref(tab, ref).set_group_path("/subs/x")
-    assert (len(TrackWidget.TrackWidget.subcircuitList)
-            == len(TrackWidget.TrackWidget.subcircuitTrack) == 3)
+    assert (len(tab.obj_trac.subcircuitList)
+            == len(tab.obj_trac.subcircuitTrack) == 3)
 
 
 # -- restore: exists guard + exact-ref match ----------------------------------
@@ -133,7 +132,7 @@ def test_restore_blanks_missing_dir():
     tab = _build([_line("x1", 3, "buf")], cir)
     b1 = tab.subcircuit_dict_beg["x1"]
     assert tab.entry_var[b1].text() == ""
-    assert "x1" not in TrackWidget.TrackWidget.subcircuitTrack
+    assert "x1" not in tab.obj_trac.subcircuitTrack
     os.remove(previous_values_path(cir))
 
 

@@ -23,8 +23,10 @@
 import os
 import sys
 import glob
+import json
 import shutil
 import hashlib
+import tempfile
 
 
 def canonical_path(path):
@@ -235,3 +237,26 @@ def main_schematic(proj_dir, stem):
     if os.path.exists(kicad4):
         return kicad4
     return kicad6
+
+
+def save_project_explorer(path, data):
+    """Atomically persist the project-explorer registry (``data`` dict).
+
+    The registry is the JSON list of every known project. A plain
+    ``open(path,'w') + json.dump`` truncates the file the instant it starts;
+    a crash mid-write leaves a truncated file that Appconfig then reads as
+    ``{}`` -- the user's entire project tree silently vanishes. Write to a temp
+    file in the same directory and ``os.replace`` it in (atomic on POSIX and
+    Windows), so a reader always sees either the old or the new complete file.
+    """
+    directory = os.path.dirname(path) or '.'
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix='.json.tmp')
+    try:
+        with os.fdopen(fd, 'w') as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise

@@ -18,10 +18,10 @@
 
 from PyQt6 import QtWidgets
 from .Validation import Validation
-from .projectPaths import canonical_path
+from .projectPaths import canonical_path, save_project_explorer
 from configuration.Appconfig import Appconfig
+from configuration import Dialogs
 import os
-import json
 
 
 class NewProjectInfo(QtWidgets.QWidget):
@@ -87,15 +87,11 @@ class NewProjectInfo(QtWidgets.QWidget):
                     self.projDir, self.projName + ".proj")
                 f = open(self.projFile, "w")
 
-            except BaseException:
-                self.msg = QtWidgets.QErrorMessage(self)
-                self.msg.setModal(True)
-                self.msg.setWindowTitle("Error Message")
-                self.msg.showMessage(
+            except Exception:
+                Dialogs.critical(
+                    self, "Error Message",
                     'Unable to create project. Please make sure you have ' +
-                    'write permission on ' + self.workspace
-                )
-                self.msg.exec()
+                    'write permission on ' + self.workspace)
                 return None, None
 
             # New KiCad v6 file extension
@@ -119,37 +115,28 @@ class NewProjectInfo(QtWidgets.QWidget):
             self.obj_appconfig.print_info(
                 'Current project is : ' + self.projDir)
 
-            with open(self.obj_appconfig.dictPath["path"], 'w') as fh:
-                json.dump(self.obj_appconfig.project_explorer, fh)
+            save_project_explorer(
+                self.obj_appconfig.dictPath["path"],
+                self.obj_appconfig.project_explorer)
             return self.projDir, newprojlist
 
         elif self.reply == "CHECKEXIST":
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
+            Dialogs.critical(
+                self, "Error Message",
                 'The project "' + self.projName +
                 '" already exist.Please select the different name or delete' +
-                ' existing project'
-            )
-            self.msg.exec()
+                ' existing project')
             return None, None
 
         elif self.reply == "CHECKNAME":
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
+            Dialogs.critical(
+                self, "Error Message",
                 'The project name should not contain space between them')
-            self.msg.exec()
             return None, None
 
         elif self.reply == "NONE":
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage('The project name cannot be empty')
-            self.msg.exec()
+            Dialogs.critical(
+                self, "Error Message", 'The project name cannot be empty')
             return None, None
 
     def cancelProject(self):

@@ -25,10 +25,13 @@ class Analysis(QtWidgets.QWidget):
       - op_check
     """
 
-    def __init__(self, clarg1):
+    def __init__(self, clarg1, track=None):
         self.clarg1 = clarg1
         QtWidgets.QWidget.__init__(self)
-        self.track_obj = TrackWidget.TrackWidget()
+        # Shared per-conversion data bus, injected by the converter window; a
+        # standalone construction falls back to its own instance.
+        self.track_obj = track if track is not None else \
+            TrackWidget.TrackWidget()
         self.count = 0
         self.parameter_cnt = 0
         self.ac_entry_var = {}
@@ -138,7 +141,7 @@ class Analysis(QtWidgets.QWidget):
                 self.check.setChecked(True)
                 self.track_obj.set_CheckBox["ITEMS"] = "DC"
 
-        except BaseException:
+        except Exception:
             self.checkTRAN.setChecked(True)
             self.track_obj.set_CheckBox["ITEMS"] = "TRAN"
 
@@ -227,7 +230,7 @@ class Analysis(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "analysis":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
             print("AC Previous Values XML is Empty")
 
@@ -288,7 +291,7 @@ class Analysis(QtWidgets.QWidget):
         # Try setting to default value from anaylsis file
         try:
             self.ac_parameter[self.parameter_cnt] = str(root[0][6].text)
-        except BaseException:
+        except Exception:
             self.ac_parameter[self.parameter_cnt] = "Hz"
 
         # Event listener for combo action
@@ -307,7 +310,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.ac_parameter[self.parameter_cnt] = str(root[0][7].text)
-        except BaseException:
+        except Exception:
             self.ac_parameter[self.parameter_cnt] = "Hz"
 
         self.stop_fre_combo.currentTextChanged.connect(self.stop_combovalue)
@@ -347,7 +350,7 @@ class Analysis(QtWidgets.QWidget):
                 if index >= 0:
                     self.stop_fre_combo.setCurrentIndex(index)
 
-            except BaseException:
+            except Exception:
                 print("AC Analysis XML Parse Error")
 
         return self.acbox
@@ -410,7 +413,7 @@ class Analysis(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "analysis":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
             print("DC Previous Values XML is empty")
 
@@ -502,7 +505,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][5].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.start_combo.currentTextChanged.connect(self.start_changecombo)
@@ -519,7 +522,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][6].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.increment_combo.currentTextChanged.connect(self.increment_changecombo)
@@ -536,7 +539,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][7].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.stop_combo.currentTextChanged.connect(self.stop_changecombo)
@@ -553,7 +556,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][12].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.start_combo2.currentTextChanged.connect(self.start_changecombo2)
@@ -570,7 +573,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][13].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.increment_combo2.currentTextChanged.connect(
@@ -588,7 +591,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.dc_parameter[self.parameter_cnt] = str(root[1][14].text)
-        except BaseException:
+        except Exception:
             self.dc_parameter[self.parameter_cnt] = "Volts or Amperes"
 
         self.stop_combo2.currentTextChanged.connect(self.stop_changecombo2)
@@ -598,7 +601,7 @@ class Analysis(QtWidgets.QWidget):
         try:
             self.track_obj.op_check.append(
                 str(root[1][4].text()))
-        except BaseException:
+        except Exception:
             self.track_obj.op_check.append('0')
 
         self.check.stateChanged.connect(self.setflag)
@@ -647,7 +650,7 @@ class Analysis(QtWidgets.QWidget):
                     self.check.setChecked(True)
                 else:
                     self.check.setChecked(False)
-            except BaseException:
+            except Exception:
                 print("DC Analysis XML Parse Error")
 
         return self.dcbox
@@ -708,7 +711,7 @@ class Analysis(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "analysis":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
             print("Transient Previous Values XML is Empty")
 
@@ -751,7 +754,7 @@ class Analysis(QtWidgets.QWidget):
 
         try:
             self.tran_parameter[self.parameter_cnt] = str(root[2][3].text)
-        except BaseException:
+        except Exception:
             self.tran_parameter[self.parameter_cnt] = "sec"
 
         self.start_combobox.currentTextChanged.connect(self.start_combo_change)
@@ -766,7 +769,7 @@ class Analysis(QtWidgets.QWidget):
         self.trgrid.addWidget(self.step_combobox, 2, 3)
         try:
             self.tran_parameter[self.parameter_cnt] = str(root[2][4].text)
-        except BaseException:
+        except Exception:
             self.tran_parameter[self.parameter_cnt] = "sec"
 
         self.step_combobox.currentTextChanged.connect(self.step_combo_change)
@@ -781,7 +784,7 @@ class Analysis(QtWidgets.QWidget):
         self.trgrid.addWidget(self.stop_combobox, 3, 3)
         try:
             self.tran_parameter[self.parameter_cnt] = str(root[2][5].text)
-        except BaseException:
+        except Exception:
             self.tran_parameter[self.parameter_cnt] = "sec"
 
         self.stop_combobox.currentTextChanged.connect(self.stop_combo_change)
@@ -811,7 +814,7 @@ class Analysis(QtWidgets.QWidget):
                 index = self.stop_combobox.findText(root[2][5].text or "")
                 if index >= 0:
                     self.stop_combobox.setCurrentIndex(index)
-            except BaseException:
+            except Exception:
                 print("Transient Analysis XML Parse Error")
 
         return self.trbox

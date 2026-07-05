@@ -3,7 +3,9 @@ import re
 import os
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
-from kicad_symlib import _balanced_end, _read_parts, _write_lib
+from kicad_symlib import (
+    _balanced_end, _read_parts, _write_lib,
+    generated_symlib_path, ensure_lib_registered)
 
 class AutoSchematic(QtWidgets.QWidget):
 
@@ -14,14 +16,14 @@ class AutoSchematic(QtWidgets.QWidget):
         self.template = Appconfig.kicad_sym_template.copy()
         self.xml_loc = Appconfig.xml_loc
         self.lib_loc = Appconfig.lib_loc
+        # eSim_Nghdl now lives in ~/.esim/kicad_symbols (see kicad_symlib);
+        # the old Windows install path is passed as a legacy migration probe.
+        legacy = []
         if os.name == 'nt':
-            eSim_src = Appconfig.src_home
-            inst_dir = eSim_src.replace('\\eSim', '')
-            self.kicad_nghdl_sym = \
-                inst_dir + '/KiCad/share/kicad/symbols/eSim_Nghdl.kicad_sym'
-        else:
-            self.kicad_nghdl_sym = \
-                '/usr/share/kicad/symbols/eSim_Nghdl.kicad_sym'
+            inst_dir = Appconfig.src_home.replace('\\eSim', '')
+            legacy.append(inst_dir + '/KiCad/share/kicad/symbols')
+        self.kicad_nghdl_sym = generated_symlib_path(
+            "eSim_Nghdl", legacy_dirs=legacy)
         self.parser = Appconfig.parser_nghdl
 
     def createKicadSymbol(self):
@@ -371,8 +373,9 @@ class AutoSchematic(QtWidgets.QWidget):
                 symbol_block.append(" ".join(output_port))
 
         # end draw + end symbol
+        # end_draw is "))" which closes both (symbol "<name>_1_1" and
+        # the outer (symbol "<name>" — no additional ")" needed.
         symbol_block.append(tmpl["end_draw"])
-        symbol_block.append(")")  # close symbol
 
         # -------------------------------
         # 6. Commit to library (idempotent + atomic)
@@ -391,6 +394,12 @@ class AutoSchematic(QtWidgets.QWidget):
         parts = _read_parts(self.kicad_nghdl_sym)
         parts[self.modelname] = block
         _write_lib(self.kicad_nghdl_sym, parts)
+
+        # eSim_Nghdl moved out of ${KICAD6_SYMBOL_DIR}; point the user's
+        # sym-lib-table(s) at the ~/.esim path (best-effort, non-blocking).
+        ensure_lib_registered(
+            "eSim_Nghdl", self.kicad_nghdl_sym,
+            descr="eSim NGHDL (GHDL co-simulation) symbols")
 
         QtWidgets.QMessageBox.information(
             self.parent,

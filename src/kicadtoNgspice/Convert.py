@@ -9,6 +9,17 @@ from maker import CosimConfig
 from maker.CosimLogger import CosimLog
 
 
+def _star_encode(path):
+    """Wrap every uppercase char as ``*C**`` to protect it from the netlist
+    lowercasing (the decoder on the ngspice/nghdl side expects this framing).
+
+    A single linear pass -- the old code called ``path.index(c)`` which returns
+    the *first* occurrence, so a path with a repeated uppercase letter (e.g.
+    ``/home/U/ADC/ADC.hex``) computed the wrong insertion point and corrupted.
+    """
+    return ''.join('*' + c + '**' if c.isupper() else c for c in path)
+
+
 class Convert:
     """
     - This class has all the necessary function required to convert \
@@ -24,12 +35,33 @@ class Convert:
     """
 
     def __init__(self, sourcelisttrack, source_entry_var,
-                 schematicInfo, clarg1):
+                 schematicInfo, clarg1, track=None):
         self.sourcelisttrack = sourcelisttrack
         self.schematicInfo = schematicInfo
         self.entry_var = source_entry_var
         self.sourcelistvalue = []
         self.clarg1 = clarg1
+        self.errors = []
+        # The converter's shared data bus, injected by the converter window so
+        # every tab and this Convert read/write the same instance. A standalone
+        # construction (e.g. tests exercising a single method) falls back to a
+        # private instance.
+        self.obj_track = track if track is not None else \
+            TrackWidget.TrackWidget()
+
+    def _record_error(self, component, exc):
+        """Collect one component failure so conversion can abort as a unit."""
+        message = f"{component}: {exc}"
+        self.errors.append(message)
+        print("Conversion error:", message)
+
+    def raise_for_errors(self):
+        """Abort before output is written when any component was incomplete."""
+        if self.errors:
+            details = "\n".join(f"- {error}" for error in self.errors)
+            raise RuntimeError(
+                "Some components could not be converted:\n" + details
+            )
 
     def addSourceParameter(self):
         """
@@ -74,10 +106,8 @@ class Convert:
                         '(')[0] + "(" + vo_val + " " + va_val + " " + \
                         freq_val + " " + td_val + " " + theta_val + ")"
                     self.sourcelistvalue.append([self.index, self.addline])
-                except BaseException:
-                    print(
-                        "Caught an exception in sine voltage source ",
-                        self.addline)
+                except Exception as exc:
+                    self._record_error(self.addline, exc)
 
             elif compline[1] == 'pulse':
                 try:
@@ -109,10 +139,8 @@ class Convert:
                         td_val + " " + tr_val + " " + tf_val + " " + \
                         pw_val + " " + tp_val + ")"
                     self.sourcelistvalue.append([self.index, self.addline])
-                except BaseException:
-                    print(
-                        "Caught an exception in pulse voltage source ",
-                        self.addline)
+                except Exception as exc:
+                    self._record_error(self.addline, exc)
 
             elif compline[1] == 'pwl':
                 try:
@@ -123,10 +151,8 @@ class Convert:
                     self.addline = self.addline.partition(
                         '(')[0] + "(" + t_v_val + ")"
                     self.sourcelistvalue.append([self.index, self.addline])
-                except BaseException:
-                    print(
-                        "Caught an exception in pwl voltage source ",
-                        self.addline)
+                except Exception as exc:
+                    self._record_error(self.addline, exc)
 
             elif compline[1] == 'ac':
                 try:
@@ -141,10 +167,8 @@ class Convert:
                     self.addline = self.addline.partition(
                         'ac')[0] + " " + 'ac' + " " + va_val + " " + ph_val
                     self.sourcelistvalue.append([self.index, self.addline])
-                except BaseException:
-                    print(
-                        "Caught an exception in ac voltage source ",
-                        self.addline)
+                except Exception as exc:
+                    self._record_error(self.addline, exc)
 
             elif compline[1] == 'dc':
                 try:
@@ -156,10 +180,8 @@ class Convert:
                     self.addline = self.addline.partition(
                         'dc')[0] + " " + 'dc' + " " + v1_val
                     self.sourcelistvalue.append([self.index, self.addline])
-                except BaseException:
-                    print(
-                        "Caught an exception in dc voltage source",
-                        self.addline)
+                except Exception as exc:
+                    self._record_error(self.addline, exc)
 
             elif compline[1] == 'exp':
                 try:
@@ -190,10 +212,8 @@ class Convert:
                         td1_val + " " + tau1_val + " " + td2_val + \
                         " " + tau2_val + ")"
                     self.sourcelistvalue.append([self.index, self.addline])
-                except BaseException:
-                    print(
-                        "Caught an exception in exp voltage source ",
-                        self.addline)
+                except Exception as exc:
+                    self._record_error(self.addline, exc)
 
         # Updating Schematic with source value
         for item in self.sourcelistvalue:
@@ -367,9 +387,6 @@ class Convert:
         This function adds the Ngspice Model details to schematicInfo
         """
 
-        # Create object of TrackWidget
-        self.obj_track = TrackWidget.TrackWidget()
-
         # List to store model line
         addmodelLine = []
         modelParamValue = []
@@ -435,9 +452,8 @@ class Convert:
                                    num_turns2 + ")"
                     modelParamValue.append(
                         [line[0], addmodelLine, "*secondary lcouple"])
-                except Exception as e:
-                    print("Caught an exception in transfo model ", line[1])
-                    print("Exception Message : ", str(e))
+                except Exception as exc:
+                    self._record_error(line[1], exc)
 
             elif line[2] == 'ic':
                 try:
@@ -453,9 +469,8 @@ class Convert:
                         addmodelLine = ".ic v(" + node + ")=" + initVal
                         modelParamValue.append(
                             [line[0], addmodelLine, line[4]])
-                except Exception as e:
-                    print("Caught an exception in initial condition ", line[1])
-                    print("Exception Message : ", str(e))
+                except Exception as exc:
+                    self._record_error(line[1], exc)
 
             else:
                 try:
@@ -503,9 +518,8 @@ class Convert:
 
                     addmodelLine += ") "
                     modelParamValue.append([line[0], addmodelLine, line[4]])
-                except Exception as e:
-                    print("Caught an exception in model ", line[1])
-                    print("Exception Message : ", str(e))
+                except Exception as exc:
+                    self._record_error(line[1], exc)
 
         # Adding it to schematic
         for item in modelParamValue:
@@ -559,9 +573,6 @@ class Convert:
         This function adds the Microcontroller Model details to schematicInfo
         """
 
-        # Create object of TrackWidget
-        self.obj_track = TrackWidget.TrackWidget()
-
         # List to store model line
         addmodelLine = []
         modelParamValue = []
@@ -600,24 +611,7 @@ class Convert:
                                     [lineVar].text())
                             # Checks For 5th Parameter(Hex File Path)
                             if z == 4:
-                                chosen_file_path = paramVal
-                                star_file_path = chosen_file_path
-                                star_count = 0
-                                for c in chosen_file_path:
-                                    # If character is uppercase
-                                    if c.isupper():
-                                        c_in = chosen_file_path.index(c)
-                                        c_in += star_count
-                                        # Adding asterisks(*) to the path
-                                        # around the character
-                                        star_file_path = \
-                                            star_file_path[
-                                                :c_in] + "*" + star_file_path[
-                                                c_in] + "**" + star_file_path[
-                                                c_in + 1:]
-                                        star_count += 3
-
-                                paramVal = "\"" + star_file_path + "\""
+                                paramVal = "\"" + _star_encode(paramVal) + "\""
 
                             addmodelLine += paramVal + " "
                             z = z + 1
@@ -633,31 +627,14 @@ class Convert:
                                 [value].text())
                         # Checks For 5th Parameter(Hex File Path)
                         if z == 4:
-                            chosen_file_path = paramVal
-                            star_file_path = chosen_file_path
-                            star_count = 0
-                            for c in chosen_file_path:
-                                # If character is uppercase
-                                if c.isupper():
-                                    c_in = chosen_file_path.index(c)
-                                    c_in += star_count
-                                    # Adding asterisks(*) to the path around
-                                    # the character
-                                    star_file_path = \
-                                        star_file_path[:c_in] + "*" + \
-                                        star_file_path[c_in] + "**" + \
-                                        star_file_path[c_in + 1:]
-                                    star_count += 3
-
-                            paramVal = "\"" + star_file_path + "\""
+                            paramVal = "\"" + _star_encode(paramVal) + "\""
                         z = z + 1
                         addmodelLine += param + "=" + paramVal + " "
 
                 addmodelLine += ") "
                 modelParamValue.append([line[0], addmodelLine, line[4]])
-            except Exception as e:
-                print("Caught an exception in microcontroller ", line[1])
-                print("Exception Message : ", str(e))
+            except Exception as exc:
+                self._record_error(line[1], exc)
 
         # Adding it to schematic
         for item in modelParamValue:
@@ -768,14 +745,17 @@ class Convert:
                         print("==============================================")
                         print("Writing to the .spiceinit file to " +
                               "make ngspice SKY130 compatible")
-                        self.writefile = open(self.Fileopen, "w")
-                        self.writefile.write('''
+                        # `with` so the handle is closed even on write error;
+                        # num_threads from the actual CPU count, not a hardcoded 8.
+                        num_threads = os.cpu_count() or 4
+                        with open(self.Fileopen, "w") as self.writefile:
+                            self.writefile.write('''
 set ngbehavior=hsa     ; set compatibility for reading PDK libs
 set ng_nomodcheck      ; don't check the model parameters
-set num_threads=8      ; CPU hardware threads available
+set num_threads={0}      ; CPU hardware threads available
 option noinit          ; don't print operating point data
 optran 0 0 0 100p 2n 0 ; don't use dc operating point, but transient op)
-''')
+'''.format(num_threads))
                         print("==============================================")
 
                         libs = '''
@@ -885,11 +865,15 @@ sky130_fd_pr__model__r+c.model.spice
     def getReferenceName(self, libname, libpath):
         libname = libname.replace('.lib', '.xml')
         library = os.path.join(libpath, libname)
+        fallback = os.path.splitext(libname)[0]
 
         # Extracting Value from XML
-        libtree = ET.parse(library)
-        for child in libtree.iter():
-            if child.tag == 'ref_model':
-                retVal = child.text
-
-        return retVal
+        try:
+            libtree = ET.parse(library)
+            for child in libtree.iter():
+                if child.tag == 'ref_model' and child.text:
+                    return child.text
+            raise ValueError("ref_model is missing or empty")
+        except Exception as exc:
+            self._record_error(library, exc)
+            return fallback

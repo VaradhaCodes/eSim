@@ -486,7 +486,17 @@ class FlowNavigator(QtWidgets.QWidget):
 
     def _make_nghdl(self):
         """VHDL path = the embedded NGHDL window (GHDL toolchain), built lazily
-        and guarded exactly as before."""
+        and guarded exactly as before. Doctor-gated: a missing GHDL/make/
+        ghdl.cm shows an actionable placeholder instead of letting the NGHDL
+        window fail mid-build later."""
+        from . import ToolchainCheck
+        doctor_msg = ToolchainCheck.failure_message(ToolchainCheck.NGHDL)
+        if doctor_msg:
+            doctor_msg += ('\nAfter fixing, close and reopen this Makerchip '
+                           'tab.')
+            return self._placeholder(
+                "<b>The NGHDL / GHDL VHDL toolchain is incomplete.</b>",
+                doctor_msg.replace('\n', '<br/>'))
         from ngspice_ghdl import Mainwindow
         return Mainwindow(embedded=True)
 

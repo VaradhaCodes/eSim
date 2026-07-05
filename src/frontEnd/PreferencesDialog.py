@@ -338,7 +338,8 @@ class PreferencesDialog(QtWidgets.QDialog):
         when the live preview actually diverged from the opening snapshot.
         """
         try:
-            path = os.path.join(self.appconfig.user_home, ".esim", "preferences.json")
+            from configuration import paths
+            path = paths.esim_config_path("preferences.json")
             try:
                 with open(path, "r") as f:
                     current = json_load(f)
@@ -437,7 +438,8 @@ class PreferencesDialog(QtWidgets.QDialog):
             prefs["internal_bg_color"],
         )
         try:
-            path = os.path.join(self.appconfig.user_home, ".esim", "preferences.json")
+            from configuration import paths
+            path = paths.esim_config_path("preferences.json")
             with open(path, "r") as f:
                 existing = json_load(f)
             existing.update(prefs)

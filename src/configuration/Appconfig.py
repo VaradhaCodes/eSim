@@ -17,13 +17,13 @@
 #      REVISION: Thursday 29 June 2023
 # =========================================================================
 
-from PyQt6 import QtWidgets
 import os
 import json
 from configparser import ConfigParser
+from configuration import paths
 
 
-class Appconfig(QtWidgets.QWidget):
+class Appconfig:
     """
     All configuration goes here.
     May change in future for code optimization.
@@ -32,29 +32,29 @@ class Appconfig(QtWidgets.QWidget):
     - Printing error.
     - Showing warnings.
     - Displaying information.
+
+    This is a plain class, not a QWidget: it is instantiated dozens of times
+    across the app purely to reach its shared class-level state, and a QWidget
+    base only leaked parentless invisible widgets. All the attributes below are
+    **class-level, shared** -- Appconfig is a de-facto singleton, and callers
+    read/mutate the shared dicts/lists through any instance.
+
+    The file I/O that seeds this state (workspace.txt, config.ini,
+    .projectExplorer.txt) is NOT done at import time. It lives in the
+    ``load_*`` classmethods, which ``Application.__init__`` calls once at
+    startup. That keeps importing this module side-effect-free (tests can
+    isolate; import order stops mattering) while every non-GUI caller still
+    sees the same populated state once the app is up.
     """
 
-    # Home directory
-    if os.name == 'nt':
-        user_home = os.path.join('library', 'config')
-    else:
-        user_home = os.path.expanduser('~')
+    # class-level, shared -- the user's home dir. Cheap, no I/O, always valid.
+    user_home = paths.user_home()
+    # class-level, shared -- seeded by load_workspace(); safe defaults so a
+    # read before startup (or in an isolated test) never explodes.
+    workspace_check = '0'
+    home = ''
 
-    try:
-        file = open(os.path.join(
-            user_home, ".esim/workspace.txt"), 'r'
-        )
-        workspace_check, home = file.readline().split(' ', 1)
-        file.close()
-    except (IOError, ValueError):
-        # ValueError: workspace.txt was truncated/empty (e.g. an interrupted
-        # write left it blank), so "<check> <home>".split(' ', 1) cannot unpack
-        # into two names. Fall back to the default workspace instead of letting
-        # the exception escape the class body and abort startup.
-        home = os.path.join(os.path.expanduser("~"), "eSim-Workspace")
-        workspace_check = 0
-
-    default_workspace = {"workspace": home}
+    default_workspace = {"workspace": ''}
     # Current Project detail.
     #   ProjectName => the project *folder* path
     #   ProjName    => the project *stem* (basename shared by <stem>.proj/.cir/
@@ -69,11 +69,19 @@ class Appconfig(QtWidgets.QWidget):
     workspace_text += "workspace folder to use for this session."
 
     procThread_list = []
-    proc_dict = {}  # hold pids of all external windows of the current project
+    # Holds the *process handles* (subprocess.Popen / QProcess) of the current
+    # project's external windows -- NOT bare pids. Close Project / app exit
+    # terminate through the handle; a stored integer pid can be recycled by the
+    # OS between spawn and kill and take out an unrelated process.
+    proc_dict = {}
+    # Live WorkerThread instances. Each babysits its child with a blocking
+    # wait(), so a per-launch thread must be retained here or Python may GC the
+    # QThread while it is still running (deleting a running QThread crashes).
+    worker_threads = []
     dock_dict = {}  # holds all dockwidgets
-    dictPath = {"path": os.path.join(
-        default_workspace["workspace"], ".projectExplorer.txt")
-    }
+    # class-level, shared -- path to .projectExplorer.txt; seeded by
+    # load_workspace() (depends on the resolved workspace home).
+    dictPath = {"path": ''}
 
     noteArea = {"Note": []}
 
@@ -81,32 +89,55 @@ class Appconfig(QtWidgets.QWidget):
     #: here so the full console panel can stay collapsed by default.
     statusbar = None
 
-    parser_esim = ConfigParser()
-    parser_esim.read(
-        os.path.join(user_home, '.esim', 'config.ini')
-    )
-
-    # Default so the attribute always exists: if config.ini is missing the key
-    # (or unreadable on Win10), ModelicaUI reading Appconfig.modelica_map_json
-    # gets None instead of an AttributeError.
+    # class-level, shared -- seeded by load_config(). Default None so ModelicaUI
+    # reading Appconfig.modelica_map_json gets None (not AttributeError) if
+    # config.ini is missing the key or is unreadable on Win10.
     modelica_map_json = None
-    # Try catch added, since eSim cannot be accessed under parser for Win10
-    try:
-        modelica_map_json = parser_esim.get('eSim', 'MODELICA_MAP_JSON')
-    except BaseException as e:
-        print("Cannot access Modelica map file --- .esim folder")
-        print(str(e))
 
-    try:
-        with open(dictPath["path"]) as _pe_fh:
-            project_explorer = json.load(_pe_fh)
-    except BaseException:
-        project_explorer = {}
+    # class-level, shared -- the known-projects registry; seeded by
+    # load_project_explorer(). Kept as a stable dict identity (mutated in place)
+    # so callers that cache a reference stay in sync.
+    project_explorer = {}
     process_obj = []
 
-    def __init__(self):
-        super(Appconfig, self).__init__()
+    @classmethod
+    def load_workspace(cls):
+        """Read workspace.txt and seed the workspace-derived paths. Called once
+        from Application.__init__ (was import-time I/O)."""
+        cls.workspace_check, cls.home = paths.read_workspace()
+        cls.default_workspace["workspace"] = cls.home
+        cls.dictPath["path"] = os.path.join(
+            cls.home, ".projectExplorer.txt")
 
+    @classmethod
+    def load_config(cls):
+        """Read config.ini for the Modelica map location. Called once from
+        Application.__init__ (was import-time I/O). Tolerant of a missing key
+        or an unreadable .esim folder (Win10)."""
+        parser_esim = ConfigParser()
+        parser_esim.read(paths.esim_config_path('config.ini'))
+        try:
+            cls.modelica_map_json = parser_esim.get(
+                'eSim', 'MODELICA_MAP_JSON')
+        except BaseException as e:
+            print("Cannot access Modelica map file --- .esim folder")
+            print(str(e))
+
+    @classmethod
+    def load_project_explorer(cls):
+        """Load the known-projects registry from .projectExplorer.txt. Called
+        once from Application.__init__, after load_workspace() has resolved
+        dictPath. Updates the registry in place so its dict identity is stable.
+        A missing/corrupt file falls back to an empty registry."""
+        try:
+            with open(cls.dictPath["path"]) as _pe_fh:
+                loaded = json.load(_pe_fh)
+        except BaseException:
+            loaded = {}
+        cls.project_explorer.clear()
+        cls.project_explorer.update(loaded)
+
+    def __init__(self):
         # Application Details
         self._APPLICATION = 'eSim'
         self._VERSION = '2.5'
@@ -162,16 +193,26 @@ class Appconfig(QtWidgets.QWidget):
         self.current_project["ProjName"] = stem
         return stem
 
+    def _append_note(self, line):
+        """Append to the log sink. Before the GUI attaches its console,
+        noteArea['Note'] is a plain list (class-level, never cleared) -- bound
+        it so a long pre-GUI session cannot grow it without limit. After the
+        GUI attaches, it is a QTextEdit that manages its own buffer."""
+        notes = self.noteArea['Note']
+        notes.append(line)
+        if isinstance(notes, list) and len(notes) > 5000:
+            del notes[:1000]
+
     def print_info(self, info):
-        self.noteArea['Note'].append('[INFO]: ' + info)
+        self._append_note('[INFO]: ' + info)
         self._echo_status('[INFO]: ' + info)
 
     def print_warning(self, warning):
-        self.noteArea['Note'].append('[WARNING]: ' + warning)
+        self._append_note('[WARNING]: ' + warning)
         self._echo_status('[WARNING]: ' + warning)
 
     def print_error(self, error):
-        self.noteArea['Note'].append('[ERROR]: ' + error)
+        self._append_note('[ERROR]: ' + error)
         self._echo_status('[ERROR]: ' + error)
 
     def _echo_status(self, msg):
@@ -186,7 +227,7 @@ class Appconfig(QtWidgets.QWidget):
 
     def save_current_project(self):
         try:
-            path = os.path.join(self.user_home, ".esim", "last_project.json")
+            path = paths.esim_config_path("last_project.json")
             with open(path, "w") as f:
                 json.dump(self.current_project, f)
         except Exception as e:
@@ -194,7 +235,7 @@ class Appconfig(QtWidgets.QWidget):
 
     def load_last_project(self):
         try:
-            path = os.path.join(self.user_home, ".esim", "last_project.json")
+            path = paths.esim_config_path("last_project.json")
             with open(path, "r") as f:
                 data = json.load(f)
                 project_path = data.get("ProjectName", None)
@@ -215,7 +256,7 @@ class Appconfig(QtWidgets.QWidget):
                  "internal_bg_color": "system",
                  "enable_motion": True}
         try:
-            path = os.path.join(self.user_home, ".esim", "preferences.json")
+            path = paths.esim_config_path("preferences.json")
             if os.path.exists(path):
                 with open(path, "r") as f:
                     prefs.update(json.load(f))
@@ -228,7 +269,8 @@ class Appconfig(QtWidgets.QWidget):
                          internal_bg_color="system"):
         """Persist the Aurora theme preferences to ~/.esim/preferences.json."""
         try:
-            path = os.path.join(self.user_home, ".esim", "preferences.json")
+            path = paths.esim_config_path("preferences.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 json.dump({
                     "theme_mode": theme_mode,

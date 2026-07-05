@@ -247,6 +247,28 @@ copyKicadLibrary() {
         return 0
     fi
 
+    # The 3 libraries eSim rewrites at runtime when users build HDL models.
+    local gen_libs=(eSim_Ngveri eSim_NgVeriCosim eSim_Nghdl) g
+
+    # --- Static libs: the 14 eSim never rewrites go into KiCad's own dir and
+    #     stay ROOT-OWNED. No chown here: the old chown -R of the whole symbols
+    #     dir hijacked ownership of KiCad's standard libraries.
+    sudo mkdir -p /usr/share/kicad/symbols
+    sudo rsync -a \
+        --exclude='eSim_Ngveri.kicad_sym' \
+        --exclude='eSim_NgVeriCosim.kicad_sym' \
+        --exclude='eSim_Nghdl.kicad_sym' \
+        "$libdir/eSim-symbols/" /usr/share/kicad/symbols/
+
+    # --- Generated libs: live in the user's own ~/.esim/kicad_symbols so the
+    #     app never needs write access to /usr/share. Seed each ONCE ( -n ) —
+    #     a reinstall must not clobber a user's accumulated models.
+    local gendir="$config_dir/kicad_symbols"
+    mkdir -p "$gendir"
+    for g in "${gen_libs[@]}"; do
+        cp -n "$libdir/eSim-symbols/$g.kicad_sym" "$gendir/" 2>/dev/null || true
+    done
+
     # Seed sym-lib-table into the KiCad per-user config dir that actually exists
     # (do NOT hard-code 6.0 — the old scripts did and broke under KiCad 8/9).
     local cfg="$HOME/.config/kicad" ver
@@ -255,15 +277,26 @@ copyKicadLibrary() {
         local major
         major=$(dpkg-query -W -f='${Version}' kicad 2>/dev/null | grep -oP '^\d+')
         ver="${major:-9}.0"
-        mkdir -p "$cfg/$ver"
     fi
+    mkdir -p "$cfg/$ver"
     log "Using KiCad config dir: $cfg/$ver"
-    cp "$libdir/template/sym-lib-table" "$cfg/$ver/" 2>/dev/null \
-        || warn "sym-lib-table copy failed (eSim registers libs at runtime anyway)"
 
-    sudo mkdir -p /usr/share/kicad/symbols
-    sudo rsync -a "$libdir/eSim-symbols/" /usr/share/kicad/symbols/
-    sudo chown -R "$USER:$USER" /usr/share/kicad/symbols
+    # Rewrite the 3 generated-lib uris from ${KICAD6_SYMBOL_DIR}/<lib> to their
+    # ~/.esim absolute path on a TEMP copy of the template (never modify the
+    # file inside $libdir), then install it.
+    local tmptable
+    tmptable=$(mktemp)
+    cp "$libdir/template/sym-lib-table" "$tmptable"
+    for g in "${gen_libs[@]}"; do
+        sed -i "s|\${KICAD6_SYMBOL_DIR}/$g.kicad_sym|$gendir/$g.kicad_sym|g" \
+            "$tmptable"
+    done
+    cp "$tmptable" "$cfg/$ver/sym-lib-table" 2>/dev/null \
+        || warn "sym-lib-table copy failed (eSim registers libs at runtime anyway)"
+    rm -f "$tmptable"
+
+    log "Static eSim symbols -> /usr/share/kicad/symbols (root-owned)"
+    log "Generated symbols   -> $gendir (user-writable)"
 
     # The extracted copy is only needed during install.
     [ -f "$eSim_Home/library/kicadLibrary.tar.xz" ] && rm -rf "$libdir"
@@ -336,8 +369,11 @@ installIhpPdk() {
 createDesktopStartScript() {
     log "Creating launcher (esim) + desktop entry"
 
-    printf '#!/bin/bash\ncd %s/src/frontEnd\nsource %s/env/bin/activate\npython3 Application.py\n' \
-        "$eSim_Home" "$config_dir" > esim-start.sh
+    # The application anchors all resources to __file__ (configuration.paths),
+    # so the launcher no longer needs to cd into src/frontEnd or source the
+    # venv — invoking the venv's python directly is equivalent and quoting-safe.
+    printf '#!/bin/bash\nexec "%s/env/bin/python3" "%s/src/frontEnd/Application.py" "$@"\n' \
+        "$config_dir" "$eSim_Home" > esim-start.sh
     sudo chmod 755 esim-start.sh
     sudo cp -p esim-start.sh /usr/bin/esim
     rm -f esim-start.sh
@@ -376,13 +412,20 @@ EOF
 #-----------------------------------------------------------------------------
 uninstall_eSim() {
     log "Removing eSim application files"
+    # ~/.esim now also holds the generated KiCad symbol libs (kicad_symbols/),
+    # so this one removal covers them too.
     sudo rm -rf "$HOME/.esim" "$HOME/Desktop/esim.desktop" \
                 /usr/bin/esim /usr/share/applications/esim.desktop
 
     log "Removing KiCad (any version) + eSim symbols"
     sudo apt-get purge -y kicad kicad-footprints kicad-libraries kicad-symbols kicad-templates 2>/dev/null || true
     sudo apt-get autoremove -y 2>/dev/null || true
-    sudo rm -rf /usr/share/kicad
+    # Remove ONLY eSim's own files. /usr/share/kicad belongs to the kicad apt
+    # package (purged above); never rm -rf the whole dir — that nuked KiCad's
+    # standard libraries. Generated symbol libs now live under ~/.esim and are
+    # already cleared by the "$HOME/.esim" removal at the top of this function.
+    sudo rm -f /usr/share/kicad/symbols/eSim_*.kicad_sym \
+               /usr/share/kicad/symbols/eSim_*.lib 2>/dev/null || true
     sudo rm -f /etc/apt/sources.list.d/kicad* 2>/dev/null || true
 
     log "Removing SKY130 PDK"
@@ -407,6 +450,23 @@ uninstall_eSim() {
            "$eSim_Home"/library/modelParamXML/Ngveri/* 2>/dev/null || true
 
     log "eSim uninstalled."
+}
+
+#-----------------------------------------------------------------------------
+# Post-install self-check: the same toolchain doctor the app ships
+# (Help menu / `esim --doctor`). Non-fatal: a red row here is exactly the
+# actionable report we want the user to see, not an abort.
+#-----------------------------------------------------------------------------
+runToolchainDoctor() {
+    log "Running the simulation-toolchain doctor (esim --doctor)"
+    set +e; trap "" ERR
+    "$config_dir/env/bin/python3" "$eSim_Home/src/frontEnd/Application.py" --doctor
+    local rc=$?
+    set -e; trap error_exit ERR
+    if [ $rc -ne 0 ]; then
+        warn "Toolchain doctor reported missing pieces (see report above)."
+        warn "eSim will run; the affected flows will explain what to fix."
+    fi
 }
 
 #-----------------------------------------------------------------------------
@@ -443,6 +503,7 @@ print_plan() {
  nghdl input      : $( [ -d "$eSim_Home/nghdl" ] && echo "nghdl/ dir" || ( [ -f "$eSim_Home/nghdl.zip" ] && echo "nghdl.zip" || echo "MISSING" ) )
  kicadLibrary     : $( [ -d "$eSim_Home/library/kicadLibrary" ] && echo "dir" || ( [ -f "$eSim_Home/library/kicadLibrary.tar.xz" ] && echo "tarball" || echo "MISSING" ) )
  sky130 PDK       : $( [ -f "$eSim_Home/library/sky130_fd_pr.tar.xz" ] && echo "present" || echo "MISSING" )
+ kicad symbols    : 14 static -> /usr/share/kicad/symbols (root); 3 generated -> $config_dir/kicad_symbols (user)
  Steps            : config -> deps+venv -> PyQt6+QScintilla -> KiCad -> kicadLib
                     -> nghdl(optional) -> sky130 -> ihp(prompt) -> launcher
 =============================================================
@@ -486,6 +547,7 @@ case "$option" in
         installSky130Pdk
         installIhpPdk
         createDesktopStartScript
+        runToolchainDoctor
         echo
         echo "----------------- eSim installed successfully -----------------"
         echo 'Type "esim" in a terminal to launch it, or use the desktop icon.'

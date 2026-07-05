@@ -1,4 +1,6 @@
 from PyQt6 import QtWidgets, QtCore
+from configuration import paths
+from configuration import Dialogs
 from . import TrackWidget
 from . import ModelGrouping
 from .ModelGroupWidget import ModelGroupWidget, InstanceRow
@@ -26,7 +28,7 @@ class SubcircuitTab(QtWidgets.QWidget):
     existing per-ref ``subcircuitTrack`` storage.
     """
 
-    def __init__(self, schematicInfo, clarg1):
+    def __init__(self, schematicInfo, clarg1, track=None):
         kicadFile = clarg1
         # Stem of the .cir handed in -- the key prefix for subcircuitList.
         project_name = stem_from_file(kicadFile)
@@ -38,12 +40,15 @@ class SubcircuitTab(QtWidgets.QWidget):
             for child in tree.getroot():
                 if child.tag == "subcircuit":
                     self.root = child
-        except BaseException:
+        except Exception:
             print("Subcircuit Previous values XML is Empty")
 
         QtWidgets.QWidget.__init__(self)
 
-        self.obj_trac = TrackWidget.TrackWidget()
+        # Shared per-conversion data bus, injected by the converter window; a
+        # standalone construction falls back to its own instance.
+        self.obj_trac = track if track is not None else \
+            TrackWidget.TrackWidget()
         self.obj_validation = Validation.Validation()
 
         self.count = 1                 # entry_var index counter
@@ -160,11 +165,10 @@ class SubcircuitTab(QtWidgets.QWidget):
 
     def _open_sub_dir(self):
         """Open the subcircuit directory picker; return the path or ''."""
-        init_path = '' if os.name == 'nt' else '../../'
         return str(QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
                 self, "Open Subcircuit",
-                init_path + "library/SubcircuitLibrary")))
+                paths.library_path("SubcircuitLibrary"))))
 
     def _validate(self, path, ref):
         """True if `path` is a valid subcircuit dir with the right port count
@@ -178,6 +182,9 @@ class SubcircuitTab(QtWidgets.QWidget):
         elif reply == "DIREC":
             self._error("Please select a valid Subcircuit directory "
                         "(containing a '.sub' file).")
+        elif reply == "NOSUBCKT":
+            self._error("The selected '.sub' file has no '.subckt' line "
+                        "-- it is not a valid subcircuit.")
         return False
 
     def _make_group_browse(self, instances):
@@ -206,8 +213,4 @@ class SubcircuitTab(QtWidgets.QWidget):
         return browse
 
     def _error(self, message):
-        msg = QtWidgets.QErrorMessage(self)
-        msg.setModal(True)
-        msg.setWindowTitle("Error Message")
-        msg.showMessage(message)
-        msg.exec()
+        Dialogs.critical(self, "Error Message", message)

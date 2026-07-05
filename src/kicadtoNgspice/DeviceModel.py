@@ -1,5 +1,6 @@
 from PyQt6 import QtWidgets, QtCore
 from configuration import Dialogs
+from configuration import paths
 import os
 from xml.etree import ElementTree as ET
 from . import TrackWidget
@@ -27,7 +28,7 @@ class DeviceModel(QtWidgets.QWidget):
         - trackLibraryWithoutButton
     """
 
-    def __init__(self, schematicInfo, clarg1):
+    def __init__(self, schematicInfo, clarg1, track=None):
 
         self.clarg1 = clarg1
         kicadFile = self.clarg1
@@ -41,13 +42,15 @@ class DeviceModel(QtWidgets.QWidget):
             for child in parent_self:
                 if child.tag == "devicemodel":
                     self.root = child
-        except BaseException:
+        except Exception:
             print("Device Model Previous XML is Empty")
 
         QtWidgets.QWidget.__init__(self)
 
-        # Creating track widget object
-        self.obj_trac = TrackWidget.TrackWidget()
+        # Shared per-conversion data bus, injected by the converter window; a
+        # standalone construction falls back to its own instance.
+        self.obj_trac = track if track is not None else \
+            TrackWidget.TrackWidget()
 
         # Row and column count
         self.row = 0
@@ -120,8 +123,7 @@ class DeviceModel(QtWidgets.QWidget):
                     path_name = child[0].text
                 else:
                     if os.name == 'nt':
-                        path_name = os.path.abspath(
-                            "library/" +
+                        path_name = paths.library_path(
                             "sky130_fd_pr/models/sky130.lib.spice"
                         )
                     else:
@@ -239,10 +241,10 @@ class DeviceModel(QtWidgets.QWidget):
                                 else:
                                     self.entry_var[self.count].setText("")
                                     path_name = ""
-                            except BaseException as e:
+                            except Exception as e:
                                 print("Error when set text of Device " +
                                       "SKY130 Component :", str(e))
-                except BaseException:
+                except Exception:
                     pass
                 self.trackLibraryWithoutButton(self.count, path_name)
                 self.grid.addWidget(sky130box)
@@ -661,11 +663,10 @@ class DeviceModel(QtWidgets.QWidget):
 
     def _browse_lib(self):
         """Open the device-library file picker; return the chosen path or ''."""
-        init_path = '' if os.name == 'nt' else '../../'
         return QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
                 self, "Open Library Directory",
-                init_path + "library/deviceModelLibrary", "*.lib")[0])
+                paths.library_path("deviceModelLibrary"), "*.lib")[0])
 
     def _resolve_device(self, ref, path):
         """Write one instance's selection into deviceModelTrack -- the same
@@ -717,8 +718,7 @@ class DeviceModel(QtWidgets.QWidget):
         sending_btn = self.sender()
         self.widgetObjCount = int(sending_btn.objectName())
         if os.name == 'nt':
-            path_name = os.path.abspath(
-                "library/" +
+            path_name = paths.library_path(
                 "sky130_fd_pr/models/sky130.lib.spice"
             )
         else:
@@ -781,14 +781,10 @@ class DeviceModel(QtWidgets.QWidget):
         sending_btn = self.sender()
         self.widgetObjCount = int(sending_btn.objectName())
 
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-
         self.libfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
                 self, "Open Library Directory",
-                init_path + "library/deviceModelLibrary", "*.lib"
+                paths.library_path("deviceModelLibrary"), "*.lib"
             )[0]
         )
 

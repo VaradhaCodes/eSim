@@ -30,6 +30,7 @@
 # importing the files and libraries
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
+from configuration import paths
 from . import Maker
 from . import ModelGeneration
 from . import createkicad
@@ -38,10 +39,10 @@ from .model_teardown import _safe_model_subdir, _resolve_backend
 from . import CosimConfig
 from .CosimLogger import CosimLog
 from .RemoveItemsDialog import RemoveItemsDialog
+from .hdl.jobs import BackgroundJob
 import os
 import shutil
 from configuration.Appconfig import Appconfig
-from configparser import ConfigParser, NoSectionError, NoOptionError
 
 
 class NgVeri(QtWidgets.QWidget):
@@ -53,29 +54,16 @@ class NgVeri(QtWidgets.QWidget):
         # Maker.addverilog(self)
         self.obj_Appconfig = Appconfig()
 
-        if os.name == 'nt':
-            self.home = os.path.join('library', 'config')
-        else:
-            self.home = os.path.expanduser('~')
-
-        self.parser = ConfigParser()
-        self.parser.read(os.path.join(
-            self.home, os.path.join('.nghdl', 'config.ini')))
         # NGHDL may not be installed/configured yet. Read defensively so a
         # missing or partial ~/.nghdl/config.ini degrades this tab instead of
         # crashing the whole Makerchip dock -- NgVeri is built eagerly, unlike
         # the NGHDL tab which is already lazy+guarded.
-        self.config_available = self.parser.has_section('NGHDL')
-        self.nghdl_home = self._cfg('NGHDL', 'NGHDL_HOME')
-        self.release_dir = self._cfg('NGHDL', 'RELEASE')
-        self.src_home = self._cfg('SRC', 'SRC_HOME')
-        self.licensefile = self._cfg('SRC', 'LICENSE')
-        digital = self._cfg('NGHDL', 'DIGITAL_MODEL')
-        # Never let an empty base collapse model paths to "/Ngveri"; fall back
-        # to a user-local dir so any downstream makedirs/rmtree stays in $HOME.
-        if not digital:
-            digital = os.path.join(
-                os.path.expanduser('~'), '.nghdl', 'DigitalModelLibrary')
+        self.nghdl_home = CosimConfig.nghdl_cfg('NGHDL', 'NGHDL_HOME')
+        self.release_dir = CosimConfig.nghdl_cfg('NGHDL', 'RELEASE')
+        self.src_home = CosimConfig.nghdl_cfg('SRC', 'SRC_HOME')
+        self.licensefile = CosimConfig.nghdl_cfg('SRC', 'LICENSE')
+        self.config_available = bool(self.nghdl_home)
+        digital = CosimConfig.digital_model_root()
         self.digital_home = digital + "/Ngveri"
         # NGHDL (GHDL) models live in a sibling tree under the same icm base.
         self.ghdl_home = digital + "/ghdl"
@@ -92,15 +80,6 @@ class NgVeri(QtWidgets.QWidget):
         self.createNgveriWidget()
         self.fname = ""
         self.filecount = filecount
-
-    def _cfg(self, section, key, default=""):
-        '''Read one ~/.nghdl/config.ini value, or `default` when the section/
-        key is absent. Keeps a missing/partial NGHDL install from crashing the
-        NgVeri tab (and with it the whole eagerly-built Makerchip dock).'''
-        try:
-            return self.parser.get(section, key) or default
-        except (NoSectionError, NoOptionError):
-            return default
 
     def createNgveriWidget(self):
         '''
@@ -126,23 +105,26 @@ class NgVeri(QtWidgets.QWidget):
         '''
         # b=Maker.Maker(self)
         print(Maker.verilogFile)
-        if Maker.verilogFile[self.filecount] == "":
-            reply = Dialogs.critical(
+        if self.filecount >= len(Maker.verilogFile) or \
+                Maker.verilogFile[self.filecount] == "":
+            Dialogs.critical(
                 self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
                 Please choose a verilog file in Makerchip Tab</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
-            if reply == QtWidgets.QMessageBox.StandardButton.Ok:
-                self.obj_Appconfig.print_error(
-                    'No Verilog File Chosen. '
-                    'Please choose a verilog file in Makerchip Tab'
-                )
-                return
+            self.obj_Appconfig.print_error(
+                'No Verilog File Chosen. '
+                'Please choose a verilog file in Makerchip Tab'
+            )
+            return
 
         self.fname = Maker.verilogFile[self.filecount]
         currentTermLogs = QtWidgets.QTextEdit()
         model = ModelGeneration.ModelGeneration(self.fname, currentTermLogs)
+        if not model.require_legacy_toolchain():
+            self.entry_var[0].append(currentTermLogs.toHtml())
+            return
         file = (os.path.basename(self.fname)).split('.')[0]
         # If this name was previously built via d_cosim, ASK, then remove that
         # version first so the switch to the legacy NgVeri flow is clean. A
@@ -163,84 +145,125 @@ class NgVeri(QtWidgets.QWidget):
 
             return
 
+        # Fast file-generation stays on the GUI thread (it runs in
+        # milliseconds and is also the ONLY place a dialog is raised --
+        # verilogParse's name-mismatch box -- so no QWidget is ever touched
+        # off-thread). If any of these fail, abort before spawning a worker.
         try:
             model.verilogfile()
-            error = model.verilogParse()
-            if error != "Error":
-                model.getPortInfo()
-                model.cfuncmod()
-                model.ifspecwrite()
-                model.sim_main_header()
-                model.sim_main()
-                model.modpathlst()
-                # Each build step now returns True only when its process
-                # exits cleanly with code 0. Short-circuit so we stop at the
-                # first failing step, and base the verdict on those real exit
-                # codes instead of a fragile "is the word 'error' somewhere in
-                # the terminal text" search (which both passed broken models
-                # and failed working ones whose log merely mentioned "error").
-                ok = (
-                    model.run_verilator()
-                    and model.make_verilator()
-                    and model.copy_verilator()
-                    and model.runMake()
-                )
-
-                if ok:
-                    if os.name != 'nt':
-                        ok = model.runMakeInstall()
-                    else:
-                        try:
-                            shutil.copy(
-                                self.release_dir +
-                                "/src/xspice/icm/Ngveri/Ngveri.cm",
-                                self.nghdl_home + "/lib/ngspice/"
-                            )
-                        except FileNotFoundError as err:
-                            ok = False
-                            currentTermLogs.append(
-                                "Error in copying Ngveri code model: " +
-                                str(err)
-                            )
-
-                if ok:
-                    currentTermLogs.append('''
-                        <p style=\" font-size:16pt; font-weight:1000;
-                        color:#00FF00;\"> Model Created Successfully!
-                        </p>
-                    ''')
-                    placedName = os.path.basename(
-                        self.fname).split('.')[0].lower()
-                    currentTermLogs.append(
-                        '<p style="color:#00AA00; font-weight:600;">'
-                        'Model "' + placedName + '" — place it from the '
-                        'eSim_Ngveri library in KiCad.</p>')
-                else:
-                    currentTermLogs.append('''
-                        <p style=\" font-size:16pt; font-weight:1000;
-                        color:#FF0000;\">There was an error during model
-                        creation,<br/>Please rectify the error and try again!
-                        </p>
-                    ''')
-
+            if model.verilogParse() == "Error":
+                self._flush_build_logs(currentTermLogs)
+                return
+            model.getPortInfo()
+            model.cfuncmod()
+            model.ifspecwrite()
+            model.sim_main_header()
+            model.sim_main()
+            model.modpathlst()
         except Exception as err:
             currentTermLogs.append(
-                "Error in Ngspice code model generation " +
-                "from Verilog: " + str(err)
-            )
-            currentTermLogs.append('''
+                "Error in Ngspice code model generation "
+                "from Verilog: " + str(err))
+            currentTermLogs.append(self._build_failure_html())
+            self._flush_build_logs(currentTermLogs)
+            return
+
+        # The slow half -- verilator, make, the ngspice code-model rebuild and
+        # `make install` -- can take several minutes. Run it on a worker thread
+        # so the GUI stays responsive (the old QProcess+waitForFinished froze
+        # eSim, "not responding" overlay and all, for the whole build). Disable
+        # both convert buttons until it returns so a second build can't race
+        # this one.
+        self._set_convert_buttons_enabled(False)
+        self._build_model = model            # keep refs alive for the build
+        self._build_logs = currentTermLogs
+        self._build_job = BackgroundJob(
+            self._legacy_build_pipeline, model, parent=self)
+        self._build_job.succeeded.connect(self._on_legacy_build_finished)
+        self._build_job.failed.connect(self._on_legacy_build_error)
+        self._build_job.finished.connect(self._build_job.deleteLater)
+        self._build_job.start()
+
+    def _legacy_build_pipeline(self, model):
+        '''
+            The slow half of the legacy NgVeri build, run on a BackgroundJob
+            worker thread: verilator -> make -> copy artifacts -> ngspice
+            `make` [-> `make install`]. Each step returns True only when its
+            process exits cleanly (exit code 0), so we short-circuit at the
+            first failure and base the verdict on real exit codes rather than a
+            "is the word 'error' somewhere in the log" search (which both
+            passed broken models and failed working ones). Touches only files +
+            model.line (queued to the GUI terminal); never a widget directly.
+        '''
+        ok = (
+            model.run_verilator()
+            and model.make_verilator()
+            and model.copy_verilator()
+            and model.runMake()
+        )
+        if not ok:
+            return False
+        # make install on EVERY platform: the Windows nghdl tree is configured
+        # with prefix=install_dir exactly like Ubuntu, so Ngveri.cm lands
+        # where ngspice loads code models from (<install_dir>/lib/ngspice).
+        # The old nt hand-copy targeted <NGHDL_HOME>/lib/ngspice, where
+        # ngspice never looks.
+        return model.runMakeInstall()
+
+    def _on_legacy_build_finished(self, ok):
+        '''GUI-thread epilogue for a completed legacy build (success path).'''
+        logs = self._build_logs
+        if ok:
+            logs.append('''
                 <p style=\" font-size:16pt; font-weight:1000;
-                color:#FF0000;\">There was an error during model creation,
-                <br/>Please rectify the error and try again!
+                color:#00FF00;\"> Model Created Successfully!
                 </p>
             ''')
+            placedName = os.path.basename(self.fname).split('.')[0].lower()
+            logs.append(
+                '<p style="color:#00AA00; font-weight:600;">'
+                'Model "' + placedName + '" — place it from the '
+                'eSim_Ngveri library in KiCad.</p>')
+        else:
+            logs.append(self._build_failure_html())
+        self._flush_build_logs(logs)
 
-        self.entry_var[0].append(currentTermLogs.toHtml())
+    def _on_legacy_build_error(self, msg):
+        '''GUI-thread epilogue when the build worker raised an exception.'''
+        self._build_logs.append(
+            "Error in Ngspice code model generation from Verilog: " + msg)
+        self._build_logs.append(self._build_failure_html())
+        self._flush_build_logs(self._build_logs)
 
-        # Force scroll the terminal widget at bottom
+    @staticmethod
+    def _build_failure_html():
+        return '''
+            <p style=\" font-size:16pt; font-weight:1000;
+            color:#FF0000;\">There was an error during model creation,
+            <br/>Please rectify the error and try again!
+            </p>
+        '''
+
+    def _set_convert_buttons_enabled(self, enabled):
+        '''Enable/disable the two convert buttons around an async build.'''
+        for name in ("addverilogbutton", "addcosimbutton"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn.setEnabled(enabled)
+
+    def _flush_build_logs(self, logs):
+        '''
+            Append the build's captured HTML into the visible terminal, scroll
+            to the bottom, re-enable the convert buttons and drop the build
+            refs. Shared by the success, failure and pre-worker abort paths.
+        '''
+        self.entry_var[0].append(logs.toHtml())
         self.entry_var[0].verticalScrollBar().setValue(
             self.entry_var[0].verticalScrollBar().maximum()
         )
+        self._set_convert_buttons_enabled(True)
+        self._build_model = None
+        self._build_logs = None
 
     def addverilog_cosim(self):
         '''
@@ -250,11 +273,14 @@ class NgVeri(QtWidgets.QWidget):
             C/C++ compiler, never rebuilds ngspice, and runs fully locally (no
             Makerchip). Gated on the d_cosim toolchain being present.
         '''
-        if not CosimConfig.has_iverilog():
+        # Doctor gate: covers iverilog/vvp/libvvp AND the ngspice ivlng
+        # adapter, with the exact probed paths + fix hints, so a broken
+        # install fails here instead of at simulation time.
+        from . import ToolchainCheck
+        doctor_msg = ToolchainCheck.failure_message(ToolchainCheck.DCOSIM)
+        if doctor_msg:
             Dialogs.warning(
-                self, "d_cosim unavailable",
-                "<b>" + (CosimConfig.missing_reason() or
-                         "Icarus Verilog (with libvvp) not found.") + "</b>",
+                self, "d_cosim unavailable", doctor_msg,
                 QtWidgets.QMessageBox.StandardButton.Ok)
             return
 
@@ -276,6 +302,9 @@ class NgVeri(QtWidgets.QWidget):
         # case-sensitive filesystem otherwise loses the vvp at sim time).
         modelname = (os.path.basename(self.fname)).split('.')[0].lower()
 
+        # Fast GUI-thread half: the backend-switch prompt, source generation and
+        # parse. These are the only dialog-raising steps, so they stay on the
+        # GUI thread; abort before spawning a worker if any fails.
         try:
             # If this name was previously built via the legacy NgVeri flow,
             # ASK, then remove that version FIRST -- before verilogfile()
@@ -286,12 +315,38 @@ class NgVeri(QtWidgets.QWidget):
                 return
             model.verilogfile()
             if model.verilogParse(make_symbol=False) == "Error":
+                self._flush_build_logs(currentTermLogs)
                 return
-            sim_lib = model.build_cosim(engine="icarus")
-            if sim_lib == "Error":
-                # build_cosim already logged the phased failure + fix hint.
-                pass
-            else:
+        except Exception as err:
+            currentTermLogs.append(
+                "Error in d_cosim model creation: " + str(err))
+            self._flush_build_logs(currentTermLogs)
+            return
+
+        # Slow half: the iverilog compile (build_cosim) can take a while on a
+        # large model. Run it on a worker thread so the GUI stays responsive
+        # (it used to block the event loop). KiCad symbol creation stays in the
+        # epilogue because it may raise an overwrite-confirmation dialog, which
+        # must run on the GUI thread. Disable both convert buttons until the
+        # build returns so a second build can't race it.
+        self._set_convert_buttons_enabled(False)
+        self._build_model = model            # keep refs alive for the build
+        self._build_logs = currentTermLogs
+        self._cosim_modelname = modelname
+        self._build_job = BackgroundJob(model.build_cosim, parent=self)
+        self._build_job.succeeded.connect(self._on_cosim_build_finished)
+        self._build_job.failed.connect(self._on_cosim_build_error)
+        self._build_job.finished.connect(self._build_job.deleteLater)
+        self._build_job.start()
+
+    def _on_cosim_build_finished(self, sim_lib):
+        '''GUI-thread epilogue for a completed d_cosim build. build_cosim ran on
+        the worker; the KiCad symbol is created here (it may prompt).'''
+        model = self._build_model
+        logs = self._build_logs
+        modelname = self._cosim_modelname
+        try:
+            if sim_lib and sim_lib != "Error":
                 model.clog.phase("Create KiCad symbol")
                 schematicLib = createkicadCosim.CosimSchematic()
                 schematicLib.init(modelname, model.modelpath, "icarus", sim_lib)
@@ -306,13 +361,16 @@ class NgVeri(QtWidgets.QWidget):
                     model.clog.error(
                         'KiCad symbol generation failed for "' + modelname +
                         '". The vvp built but the symbol was not created.')
-        except BaseException as err:
+            # sim_lib == "Error": build_cosim already logged the phased failure.
+        except Exception as err:
             model.clog.error("Error in d_cosim model creation: " + str(err))
+        self._flush_build_logs(logs)
 
-        self.entry_var[0].append(currentTermLogs.toHtml())
-        self.entry_var[0].verticalScrollBar().setValue(
-            self.entry_var[0].verticalScrollBar().maximum()
-        )
+    def _on_cosim_build_error(self, msg):
+        '''GUI-thread epilogue when the d_cosim build worker raised.'''
+        self._build_model.clog.error(
+            "Error in d_cosim model creation: " + msg)
+        self._flush_build_logs(self._build_logs)
 
     def addfile(self):
         '''
@@ -320,17 +378,16 @@ class NgVeri(QtWidgets.QWidget):
             by the verilog top module
         '''
         if len(Maker.verilogFile) < (self.filecount + 1):
-            reply = Dialogs.critical(
+            Dialogs.critical(
                 self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
                 Please choose a verilog file in Makerchip Tab</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
-            if reply == QtWidgets.QMessageBox.StandardButton.Ok:
-                self.obj_Appconfig.print_error(
-                    'No Verilog File Chosen. Please choose \
-                     a verilog file in Makerchip Tab')
-                return
+            self.obj_Appconfig.print_error(
+                'No Verilog File Chosen. Please choose \
+                 a verilog file in Makerchip Tab')
+            return
 
         self.fname = Maker.verilogFile[self.filecount]
         model = ModelGeneration.ModelGeneration(self.fname, self.entry_var[0])
@@ -343,17 +400,16 @@ class NgVeri(QtWidgets.QWidget):
             by the verilog top module.
         '''
         if len(Maker.verilogFile) < (self.filecount + 1):
-            reply = Dialogs.critical(
+            Dialogs.critical(
                 self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
                 Please choose a verilog file in Makerchip Tab</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
-            if reply == QtWidgets.QMessageBox.StandardButton.Ok:
-                self.obj_Appconfig.print_error(
-                    'No Verilog File Chosen. Please choose \
-                    a verilog file in Makerchip Tab')
-                return
+            self.obj_Appconfig.print_error(
+                'No Verilog File Chosen. Please choose \
+                a verilog file in Makerchip Tab')
+            return
         self.fname = Maker.verilogFile[self.filecount]
         model = ModelGeneration.ModelGeneration(self.fname, self.entry_var[0])
         # model.verilogfile()
@@ -712,18 +768,16 @@ class NgVeri(QtWidgets.QWidget):
         self.fname = self._current_verilog_fname()
         model = ModelGeneration.ModelGeneration(
             self.fname, self.entry_var[0])
+        if not model.require_legacy_toolchain():
+            return
         model.prune_modpathlst()
 
         try:
             log.phase("Rebuild Ngveri.cm")
+            # make + make install on every platform (Windows is configured
+            # with prefix=install_dir like Ubuntu; see _legacy_build_pipeline).
             ok = model.runMake()
-            if os.name != 'nt':
-                ok = model.runMakeInstall() and ok
-            else:
-                shutil.copy(
-                    self.release_dir + "/src/xspice/icm/Ngveri/Ngveri.cm",
-                    self.nghdl_home + "/lib/ngspice/"
-                )
+            ok = model.runMakeInstall() and ok
             if not ok:
                 raise RuntimeError(
                     "the ngspice code-model rebuild returned a "
@@ -843,9 +897,8 @@ class NgVeri(QtWidgets.QWidget):
         return True
 
     def _lint_off_path(self):
-        '''Path to library/tlv/lint_off.txt (cwd-relative, like the rest).'''
-        init_path = '' if os.name == 'nt' else '../../'
-        return os.path.join(init_path, "library/tlv/lint_off.txt")
+        '''Path to library/tlv/lint_off.txt, anchored to the install root.'''
+        return paths.library_path("tlv/lint_off.txt")
 
     def _list_lint_off(self):
         '''Current lint_off entries (one per non-blank line), in file order.'''

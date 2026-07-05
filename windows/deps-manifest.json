@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "Every third-party artifact the Windows build downloads, pinned by URL +",
+    "sha256. build-windows.ps1 refuses a mismatching hash. To bump a dep:",
+    "update url/version, blank the sha256, run build-windows.ps1 -AcceptNewHashes",
+    "(it downloads, records the hash, and rewrites this file), then VERIFY the",
+    "new hash against the upstream project's published checksum before",
+    "committing. Rationale for each source lives in PACKAGING.md's dependency",
+    "matrix.",
+    "",
+    "kicad: NOT bundled. The official KiCad Windows installer is downloaded by",
+    "build-windows.ps1 only to be shipped ALONGSIDE the eSim installer (the",
+    "eSim installer offers to run it). Bundling a private KiCad copy is what",
+    "made the old off-repo installer unmaintainable."
+  ],
+  "python": {
+    "version": "3.12.10",
+    "url": "https://www.nuget.org/api/v2/package/python/3.12.10",
+    "filename": "python-3.12.10.nupkg",
+    "sha256": "",
+    "notes": "Full private CPython (nuget layout: tools/ = the runtime). Unlike the 'embeddable' zip, pip works normally, which is how the PyQt6 wheel set is installed."
+  },
+  "ngspice": {
+    "version": "45.2",
+    "url": "https://sourceforge.net/projects/ngspice/files/ng-spice-rework/45.2/ngspice-45.2_64.7z/download",
+    "filename": "ngspice-45.2_64.7z",
+    "sha256": "",
+    "notes": "Official 64-bit Windows build with XSPICE code models. Same version the Ubuntu nghdl toolchain builds from source."
+  },
+  "iverilog": {
+    "version": "v12-20220611",
+    "url": "https://bleyer.org/icarus/iverilog-v12-20220611-x64_setup.exe",
+    "filename": "iverilog-v12-20220611-x64_setup.exe",
+    "sha256": "",
+    "notes": "Bleyer's Windows Icarus build. FALLBACK ONLY (-SkipSimBuild): it ships without libvvp, so d_cosim cannot run with it - only the Verilog Verifier. The Full build compiles iverilog_source instead. Extracted (7z), NOT run, staged under library/bin/iverilog/."
+  },
+  "iverilog_source": {
+    "version": "de415b2f (post-v12, pinned)",
+    "url": "https://github.com/steveicarus/iverilog/archive/de415b2f03c1b41ab5b46faa9632716d98c1cd86.tar.gz",
+    "filename": "iverilog-de415b2f.tar.gz",
+    "sha256": "",
+    "notes": "Icarus Verilog source at the SAME pinned commit nghdl/install-nghdl.sh builds on Ubuntu (ICARUS_REF). Built inside the staged MSYS2 (mingw64) with --enable-libvvp - the one piece d_cosim needs that no prebuilt Windows Icarus provides - and staged under library/bin/iverilog/."
+  },
+  "msys2": {
+    "version": "20250622",
+    "url": "https://github.com/msys2/msys2-installer/releases/download/2025-06-22/msys2-base-x86_64-20250622.tar.xz",
+    "filename": "msys2-base-x86_64-20250622.tar.xz",
+    "sha256": "",
+    "notes": "Base MSYS2, then pacman installs mingw-w64-x86_64-{gcc,make,verilator,ghdl-llvm} plus the msys build tools (autotools/bison/flex/gperf/patch/make) inside it (see build-windows.ps1). Powers the OPTIONAL 'HDL toolchain' installer component (NgVeri code-model builds + NGHDL/GHDL VHDL co-sim) AND hosts the Stage-SimToolchain source builds. ghdl-llvm, NEVER ghdl-mcode: mcode cannot link the nghdl socket server (GHDL-BACKEND-26.04.md applies on Windows too)."
+  },
+  "kicad_installer": {
+    "version": "9.0.3",
+    "url": "https://downloads.kicad.org/kicad/windows/explore/stable/download/kicad-9.0.3-x86_64.exe",
+    "filename": "kicad-9.0.3-x86_64.exe",
+    "sha256": "",
+    "notes": "Shipped next to the eSim installer as a prerequisite; eSim's installer launches it if KiCad is absent. Never repacked."
+  },
+  "innosetup": {
+    "version": "6.3.3",
+    "url": "https://files.jrsoftware.org/is/6/innosetup-6.3.3.exe",
+    "filename": "innosetup-6.3.3.exe",
+    "sha256": "",
+    "notes": "Build-machine tool only (provides ISCC.exe); nothing from it ships inside the eSim installer."
+  }
+}

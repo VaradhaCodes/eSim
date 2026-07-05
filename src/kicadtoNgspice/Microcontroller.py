@@ -8,6 +8,7 @@ from xml.etree import ElementTree as ET
 from PyQt6 import QtWidgets, QtCore
 
 from . import TrackWidget
+from configuration import paths
 from projManagement.projectPaths import previous_values_path
 
 
@@ -23,14 +24,10 @@ class Microcontroller(QtWidgets.QWidget):
         """
         This function is use to keep track of all Device Model widget
         """
-        if os.name == 'nt':
-            self.home = os.path.join('library', 'config')
-        else:
-            self.home = os.path.expanduser('~')
+        self.home = paths.user_home()
 
         self.parser = ConfigParser()
-        self.parser.read(os.path.join(
-            self.home, os.path.join('.nghdl', 'config.ini')))
+        self.parser.read(paths.nghdl_config_path())
         self.nghdl_home = self.parser.get('NGHDL', 'NGHDL_HOME')
 
         self.hexfile = QtCore.QDir.toNativeSeparators(
@@ -62,6 +59,7 @@ class Microcontroller(QtWidgets.QWidget):
             schematicInfo,
             modelList,
             clarg1,
+            track=None,
     ):
 
         QtWidgets.QWidget.__init__(self)
@@ -80,14 +78,15 @@ class Microcontroller(QtWidgets.QWidget):
             for parent in parent_root:
                 if parent.tag == "microcontroller":
                     self.root = parent
-        except BaseException:
+        except Exception:
 
             check = 0
             print("Microcontroller Previous Values XML is Empty")
 
-        # Creating track widget object
-
-        self.obj_trac = TrackWidget.TrackWidget()
+        # Shared per-conversion data bus, injected by the converter window; a
+        # standalone construction falls back to its own instance.
+        self.obj_trac = track if track is not None else \
+            TrackWidget.TrackWidget()
 
         # for increasing row and counting/tracking line edit widget
 
@@ -168,7 +167,7 @@ class Microcontroller(QtWidgets.QWidget):
                                     self.obj_trac.microcontroller_var[
                                         self.nextcount].setText(child[i].text)
                                     i = i + 1
-                        except BaseException:
+                        except Exception:
                             print("Passes previous values")
 
                         modelgrid.addWidget(
@@ -230,7 +229,7 @@ class Microcontroller(QtWidgets.QWidget):
                                     self.nextcount].setText(child[i].text)
                                 i = i + 1
 
-                    except BaseException:
+                    except Exception:
                         print("Passes previous values")
 
                     modelgrid.addWidget(

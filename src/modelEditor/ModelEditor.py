@@ -1,5 +1,6 @@
 from PyQt6 import QtWidgets, QtCore
 from configuration import Dialogs
+from configuration import paths
 from PyQt6.QtWidgets import QTableWidgetItem
 import xml.etree.ElementTree as ET
 from configuration.Appconfig import Appconfig
@@ -21,9 +22,7 @@ class ParameterEditDelegate(QtWidgets.QStyledItemDelegate):
         from PyQt6 import QtGui
         try:
             from frontEnd import theme_utils
-            home = (os.path.join('library', 'config')
-                    if os.name == 'nt' else os.path.expanduser('~'))
-            mode = theme_utils.get_preferences(home).get(
+            mode = theme_utils.get_preferences().get(
                 'theme_mode', 'System')
             if mode == 'Dark':
                 return True
@@ -91,11 +90,7 @@ class ModelEditorclass(QtWidgets.QWidget):
     def __init__(self):
         QtWidgets.QWidget.__init__(self)
 
-        self.init_path = '../../'
-        if os.name == 'nt':
-            self.init_path = ''
-
-        self.savepathtest = self.init_path + 'library/deviceModelLibrary'
+        self.savepathtest = paths.library_path('deviceModelLibrary')
         self.obj_appconfig = Appconfig()
         self.newflag = 0
 
@@ -302,11 +297,8 @@ class ModelEditorclass(QtWidgets.QWidget):
             if not text:
                 print("Model name cannot be empty")
                 print("==================")
-                msg = QtWidgets.QErrorMessage(self)
-                msg.setModal(True)
-                msg.setWindowTitle("Error Message")
-                msg.showMessage('The model name cannot be empty')
-                msg.exec()
+                Dialogs.critical(
+                    self, "Error Message", 'The model name cannot be empty')
                 return
 
             self.newflag = 1
@@ -435,7 +427,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         - Accordingly call `createtable(path)` to draw tables usingg QTable
         - Check for the state of button before rendering
         '''
-        self.path = self.init_path + 'library/deviceModelLibrary/Templates'
+        self.path = paths.library_path('deviceModelLibrary/Templates')
         if self.diode.isChecked():
             if filetype == 'Diode':
                 path = os.path.join(self.path, 'D.xml')
@@ -508,7 +500,7 @@ class ModelEditorclass(QtWidgets.QWidget):
             self.editfile = QtCore.QDir.toNativeSeparators(
                 QtWidgets.QFileDialog.getOpenFileName(
                     self, "Open Library Directory",
-                    self.init_path + "library/deviceModelLibrary", "*.lib"
+                    paths.library_path("deviceModelLibrary"), "*.lib"
                 )[0]
             )
 
@@ -585,23 +577,30 @@ class ModelEditorclass(QtWidgets.QWidget):
 
     def edit_modeltable(self):
         '''
-        - Called when editing model inplace in QTableWidget
-        - Set states of other components
-        - Get data from the modeltable of the selected row
-        - Edit name and value as per needed
-        - Add the val name pair in the modeldict
+        - Called when a cell is edited in-place in the QTableWidget.
+        - Only flags the file dirty. The authoritative parameter→value map is
+          rebuilt from the table at save time (_rebuild_modeldict_from_table),
+          so an edit to EITHER column is captured correctly. The old handler
+          wrote ``modeldict[val] = name`` unconditionally; when the parameter
+          *name* column was edited it produced ``modeldict[newname] = newname``,
+          dropping the real value and leaking the old key (silent corruption).
         '''
-
         self.savebtn.setDisabled(False)
-        try:
-            indexitem = self.modeltable.currentItem()
-            name = str(indexitem.data(0))
-            rowno = indexitem.row()
-            para = self.modeltable.item(rowno, 0)
-            val = str(para.data(0))
-            self.modeldict[val] = name
-        except BaseException:
-            pass
+
+    def _rebuild_modeldict_from_table(self):
+        '''Rebuild self.modeldict from the current table contents so the table
+        is the single source of truth. Skips empty/blank parameter names.'''
+        rebuilt = {}
+        for r in range(self.modeltable.rowCount()):
+            keyitem = self.modeltable.item(r, 0)
+            if keyitem is None:
+                continue
+            key = keyitem.text().strip()
+            if not key:
+                continue
+            valitem = self.modeltable.item(r, 1)
+            rebuilt[key] = valitem.text() if valitem is not None else ''
+        self.modeldict = rebuilt
 
     def addparameters(self):
         '''
@@ -618,20 +617,18 @@ class ModelEditorclass(QtWidgets.QWidget):
             if not text1:
                 print("Parameter name cannot be empty")
                 print("==================")
-                msg = QtWidgets.QErrorMessage(self)
-                msg.setModal(True)
-                msg.setWindowTitle("Error Message")
-                msg.showMessage('The parameter name cannot be empty')
-                msg.exec()
+                Dialogs.critical(
+                    self, "Error Message",
+                    'The parameter name cannot be empty')
                 return
-            elif text1 in list(self.modeldict.keys()):
-                self.msg = QtWidgets.QErrorMessage(self)
-                self.msg.setModal(True)
-                self.msg.setWindowTitle("Error Message")
-                self.msg.showMessage(
-                    "The paramaeter " + text1 + " is already in the list"
-                )
-                self.msg.exec()
+            elif text1 in {
+                self.modeltable.item(r, 0).text().strip()
+                for r in range(self.modeltable.rowCount())
+                if self.modeltable.item(r, 0) is not None
+            }:
+                Dialogs.critical(
+                    self, "Error Message",
+                    "The paramaeter " + text1 + " is already in the list")
                 return
             text2, ok = QtWidgets.QInputDialog.getText(
                 self, 'Value', 'Enter Value'
@@ -640,11 +637,8 @@ class ModelEditorclass(QtWidgets.QWidget):
                 if not text2:
                     print("Value cannot be empty")
                     print("==================")
-                    msg = QtWidgets.QErrorMessage(self)
-                    msg.setModal(True)
-                    msg.setWindowTitle("Error Message")
-                    msg.showMessage('Value cannot be empty')
-                    msg.exec()
+                    Dialogs.critical(
+                        self, "Error Message", 'Value cannot be empty')
                     return
 
                 currentRowCount = self.modeltable.rowCount()
@@ -663,6 +657,9 @@ class ModelEditorclass(QtWidgets.QWidget):
         - If new file created, call `createXML` file
         - Else call `savethefile`
         '''
+        # The table is the source of truth — rebuild the map from it before
+        # writing so an in-place parameter-name edit is captured, not corrupted.
+        self._rebuild_modeldict_from_table()
         if self.newflag == 1:
             self.createXML(self.model_name)
         else:
@@ -685,7 +682,7 @@ class ModelEditorclass(QtWidgets.QWidget):
             ET.SubElement(param, tags).text = text
         tree = ET.ElementTree(root)
         defaultcwd = os.getcwd()
-        self.savepath = self.init_path + 'library/deviceModelLibrary'
+        self.savepath = paths.library_path('deviceModelLibrary')
         if self.diode.isChecked():
             savepath = os.path.join(self.savepath, 'Diode')
             os.chdir(savepath)
@@ -833,12 +830,9 @@ class ModelEditorclass(QtWidgets.QWidget):
         for each_dir in all_dir:
             all_files = os.listdir(each_dir)
             if newfilename in all_files:
-                self.msg = QtWidgets.QErrorMessage(self)
-                self.msg.setModal(True)
-                self.msg.setWindowTitle("Error Message")
-                self.msg.showMessage(
+                Dialogs.critical(
+                    self, "Error Message",
                     'The file with name ' + text + ' already exists.')
-                self.msg.exec()
 
     def savethefile(self, editfile):
         '''
@@ -891,15 +885,14 @@ class ModelEditorclass(QtWidgets.QWidget):
         if remove_item:
             remove_item = remove_item.text()
             self.modeltable.removeRow(index.row())
-            del self.modeldict[str(remove_item)]
+            # pop-not-del: the key may be stale after a name edit (the map is
+            # rebuilt from the table on save anyway), so never raise KeyError.
+            self.modeldict.pop(str(remove_item), None)
         else:
             print("No parameter selected to remove")
             print("==================")
-            msg = QtWidgets.QErrorMessage(self)
-            msg.setModal(True)
-            msg.setWindowTitle("Error Message")
-            msg.showMessage('No parameter selected to remove')
-            msg.exec()
+            Dialogs.critical(
+                self, "Error Message", 'No parameter selected to remove')
 
     def converttoxml(self):
         '''
@@ -920,7 +913,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         self.libfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
                 self, "Open Library Directory",
-                self.init_path + "library/deviceModelLibrary", "*.lib"
+                paths.library_path("deviceModelLibrary"), "*.lib"
             )[0]
         )
 
@@ -1028,11 +1021,9 @@ class ModelEditorclass(QtWidgets.QWidget):
             if not text:
                 print("Model library name cannot be empty")
                 print("==================")
-                msg = QtWidgets.QErrorMessage(self)
-                msg.setModal(True)
-                msg.setWindowTitle("Error Message")
-                msg.showMessage('The model library name cannot be empty')
-                msg.exec()
+                Dialogs.critical(
+                    self, "Error Message",
+                    'The model library name cannot be empty')
             else:
                 tree.write(text + ".xml")
                 fileopen = open(text + ".lib", 'w')

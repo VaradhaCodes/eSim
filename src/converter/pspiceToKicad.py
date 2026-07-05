@@ -1,8 +1,10 @@
 import os
+import sys
 import subprocess
 import shutil
 from PyQt6.QtWidgets import QMessageBox
 from configuration import Dialogs
+from configuration import paths
 from frontEnd import ProjectExplorer
 
 class PspiceConverter:
@@ -10,20 +12,14 @@ class PspiceConverter:
         self.parent = parent
 
     def get_workspace_directory(self):
-        # Path to the hidden folder and the workspace file
-        hidden_folder_path = os.path.join(os.path.expanduser('~'), '.esim')
-        workspace_file_path = os.path.join(hidden_folder_path, 'workspace.txt')
-
-        # Check if the hidden folder and the workspace file exist
-        if os.path.exists(hidden_folder_path) and os.path.exists(workspace_file_path):
-            # Read the workspace directory from the workspace.txt file
-            with open(workspace_file_path, 'r') as file:
-                workspace_directory = file.read().strip()  # Remove any leading/trailing whitespaces
-            # Split the string by spaces and select the last element
-            workspace_directory = workspace_directory.split()[-1]
-            return workspace_directory
-
-        return None  # Return None if the hidden folder or the workspace file is not found
+        # read_workspace splits on the first space only, so a workspace path
+        # that itself contains spaces survives (the old split()[-1] returned
+        # only the last token).
+        workspace_file_path = paths.esim_config_path('workspace.txt')
+        if not os.path.exists(workspace_file_path):
+            return None
+        _check, workspace_directory = paths.read_workspace()
+        return workspace_directory
 
     def convert(self, file_path):
         # Get the base name of the file without the extension
@@ -40,27 +36,29 @@ class PspiceConverter:
 
             # Construct the full path to parser.py
             parser_path = os.path.join(script_dir, relative_parser_path)
-            # Pass args as a list (no shell). parser.py reads sys.argv[1:],
-            # so it receives the same two tokens as before -- but a path with
-            # spaces or shell metacharacters can no longer break or inject into
-            # the command.
+            # Pass args as a list (no shell) and run the parser with the same
+            # interpreter running eSim (sys.executable) -- "python3" is absent
+            # on Windows installs that expose only python.exe. A path with
+            # spaces or shell metacharacters can no longer break or inject.
             command = [
-                "python3", os.path.join(parser_path, "parser.py"),
+                sys.executable, os.path.join(parser_path, "parser.py"),
                 file_path, os.path.join(conPath, filename),
             ]
             try:
-                subprocess.run(command, check=True)
+                subprocess.run(command, check=True,
+                               capture_output=True, text=True)
                 # Message box with the conversion success message
                 msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Information)
                 msg_box.setWindowTitle("Conversion Successful")
                 newFile = str(conPath + "/" + filename)
                 workspace_directory = self.get_workspace_directory()
-                    
 
                 if workspace_directory:
                         print(f"Workspace directory found: {workspace_directory}")
-                        merge_copytree(newFile, workspace_directory, filename)
+                        shutil.copytree(
+                            newFile, os.path.join(workspace_directory, filename),
+                            dirs_exist_ok=True, copy_function=shutil.copy2)
                         msg_box.setText(f"The file has been converted successfully.  Saved in {workspace_directory}.  Open the Project manually.")
                         print("File added under the project explorer.")
                 else:
@@ -69,7 +67,13 @@ class PspiceConverter:
                 print("Conversion of Pspice to eSim schematic Successful")
 
             except subprocess.CalledProcessError as e:
-                print("Error:", e)
+                # The parser's failure output was invisible before; surface it.
+                detail = (e.stderr or e.stdout or str(e)).strip()
+                print("Error:", detail)
+                Dialogs.critical(
+                    self.parent, "Conversion failed",
+                    "PSpice to eSim conversion failed:\n\n"
+                    + "\n".join(detail.splitlines()[:15]))
         else:
             print("File is empty. Cannot perform conversion.")
             # A message box indicating that the file is empty
@@ -115,26 +119,3 @@ class PspiceConverter:
             msg_box.setText("Please select a file before uploading.")
             msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg_box.exec()
-
-def merge_copytree(src, dst, filename):
-    if not os.path.exists(dst):
-        os.makedirs(dst)
-
-    folder_path = f"{dst}/{filename}" # Folder to be created in eSim-Workspace
-
-    # Create the folder 
-    try:
-        os.makedirs(folder_path)
-        print(f"Folder created at {folder_path}")
-    except OSError as error:
-        print(f"Folder creation failed: {error}")
-
-    for item in os.listdir(src):
-        src_item = os.path.join(src, item)
-        dst_item = os.path.join(folder_path, item)
-
-        if os.path.isdir(src_item):
-            merge_copytree(src_item, dst_item, filename)
-        else:
-            if not os.path.exists(dst_item) or os.stat(src_item).st_mtime > os.stat(dst_item).st_mtime:
-                shutil.copy2(src_item, dst_item)

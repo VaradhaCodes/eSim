@@ -33,7 +33,9 @@ import os
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
 from configuration import Dialogs
-from .kicad_symlib import _balanced_end, _read_parts, _write_lib
+from .kicad_symlib import (
+    _balanced_end, _read_parts, _write_lib,
+    generated_symlib_path, ensure_lib_registered)
 
 
 class AutoSchematic:
@@ -44,14 +46,15 @@ class AutoSchematic:
         self.xml_loc = self.App_obj.xml_loc
         self.lib_loc = self.App_obj.lib_loc
         self.modelpath = modelpath
+        # eSim_Ngveri now lives in ~/.esim/kicad_symbols (see kicad_symlib);
+        # pass the old Windows install path as a legacy probe so existing
+        # Windows users' accumulated models migrate in on first use.
+        legacy = []
         if os.name == 'nt':
-            eSim_src = self.App_obj.src_home
-            inst_dir = eSim_src.replace('\\eSim', '')
-            self.kicad_ngveri_sym = \
-                inst_dir + '/KiCad/share/kicad/symbols/eSim_Ngveri.kicad_sym'
-        else:
-            self.kicad_ngveri_sym = \
-                '/usr/share/kicad/symbols/eSim_Ngveri.kicad_sym'
+            inst_dir = self.App_obj.src_home.replace('\\eSim', '')
+            legacy.append(inst_dir + '/KiCad/share/kicad/symbols')
+        self.kicad_ngveri_sym = generated_symlib_path(
+            "eSim_Ngveri", legacy_dirs=legacy)
         # self.parser = self.App_obj.parser_ngveri
 
     def createKicadSymbol(self):
@@ -69,6 +72,7 @@ class AutoSchematic:
             self.getPortInformation()
             self.createXML()
             self.createSym()
+            self._register_lib()
 
         elif (xmlFound == os.path.join(self.xml_loc, 'Ngveri')):
             print('Library already exists...')
@@ -89,6 +93,7 @@ class AutoSchematic:
                 # name idempotently, so pre-removing only rewrites the shared
                 # file twice (and widened the crash window it guards against).
                 self.createSym()
+                self._register_lib()
             else:
                 print("Library Creation Cancelled")
                 return "Error"
@@ -119,6 +124,7 @@ class AutoSchematic:
                 self.getPortInformation()
                 self.createXML()
                 self.createSym()
+                self._register_lib()
                 return "No Error"
             # A built-in / NgHDL / standard library primitive — not ours to
             # replace. The user must rename their module.
@@ -188,6 +194,17 @@ class AutoSchematic:
 
     def char_sum(self, ls):
         return sum([int(x) for x in ls])
+
+    def _register_lib(self):
+        '''
+            Register eSim_Ngveri in the user's KiCad sym-lib-table(s) pointing
+            at its ~/.esim path. Existing users' tables point this lib at the
+            stale ${KICAD6_SYMBOL_DIR} location after relocation, so rewrite it
+            in place; best-effort, never blocks model creation.
+        '''
+        ensure_lib_registered(
+            "eSim_Ngveri", self.kicad_ngveri_sym,
+            descr="eSim NgVeri (Ngspice code model) symbols")
 
     def removeOldLibrary(self):
         '''

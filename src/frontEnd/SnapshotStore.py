@@ -25,6 +25,7 @@ import re
 import json
 import shutil
 from datetime import datetime
+from configuration import paths as app_paths
 
 
 # Legacy filename: ``<file>(I.MM AM/PM dd-mm-yyyy)``.
@@ -35,11 +36,7 @@ _LEGACY_TIME_FMT = "%I.%M %p %d-%m-%Y"
 
 def _history_root():
     """Root that holds every project's snapshot history."""
-    if os.name == "nt":
-        home = os.path.join("library", "config")
-    else:
-        home = os.path.expanduser("~")
-    return os.path.join(home, ".esim", "history")
+    return app_paths.esim_config_path("history")
 
 
 class Snapshot(object):
@@ -346,11 +343,9 @@ class SnapshotStore(object):
 
     def _known_project_paths(self):
         paths = []
-        home = os.path.expanduser("~")
-
         # last_project.json -> {"ProjectName": "/abs/path", ...}
         try:
-            with open(os.path.join(home, ".esim", "last_project.json")) as fh:
+            with open(app_paths.esim_config_path("last_project.json")) as fh:
                 data = json.load(fh)
             if data.get("ProjectName"):
                 paths.append(data["ProjectName"])
@@ -359,9 +354,7 @@ class SnapshotStore(object):
 
         # workspace registry: keys are absolute project paths
         try:
-            ws_line = open(
-                os.path.join(home, ".esim", "workspace.txt")).readline()
-            workspace = ws_line.split(" ", 1)[-1].strip()
+            _check, workspace = app_paths.read_workspace()
             reg = os.path.join(workspace, ".projectExplorer.txt")
             with open(reg) as fh:
                 paths.extend(json.load(fh).keys())

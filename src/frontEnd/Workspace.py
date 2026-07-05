@@ -23,6 +23,7 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration.Appconfig import Appconfig
 from configuration import Dialogs
+from configuration import paths
 import os
 import json
 
@@ -49,11 +50,9 @@ class Workspace(QtWidgets.QDialog):
         self.setMinimumWidth(520)
 
         # Window icon
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-        if os.path.exists(init_path + 'images/logo.png'):
-            self.setWindowIcon(QtGui.QIcon(init_path + 'images/logo.png'))
+        logo = paths.image_path('logo.png')
+        if os.path.exists(logo):
+            self.setWindowIcon(QtGui.QIcon(logo))
 
         # --- Header -----------------------------------------------------
         title = QtWidgets.QLabel('Workspace')
@@ -191,24 +190,7 @@ class Workspace(QtWidgets.QDialog):
             )
             return
 
-        if os.name == 'nt':
-            user_home = os.path.join('library', 'config')
-        else:
-            user_home = os.path.expanduser('~')
-
-        try:
-            with open(
-                os.path.join(user_home, '.esim/workspace.txt'), 'w'
-            ) as f:
-                f.write(f"{self.obj_appconfig.workspace_check} {path}")
-        except OSError as e:
-            Dialogs.critical(
-                self, "Workspace",
-                f"Could not save workspace path:\n{e}"
-            )
-            return
-
-        # Create folder if it doesn't exist
+        # Create the destination before persisting it as the new default.
         try:
             if not os.path.isdir(path):
                 os.makedirs(path)
@@ -216,6 +198,15 @@ class Workspace(QtWidgets.QDialog):
             Dialogs.critical(
                 self, "Workspace",
                 f"Could not create that folder:\n{e}"
+            )
+            return
+
+        try:
+            paths.write_workspace(self.obj_appconfig.workspace_check, path)
+        except OSError as e:
+            Dialogs.critical(
+                self, "Workspace",
+                f"Could not save workspace path:\n{e}"
             )
             return
 
@@ -231,11 +222,18 @@ class Workspace(QtWidgets.QDialog):
 
         try:
             with open(self.obj_appconfig.dictPath["path"]) as f:
-                self.obj_appconfig.project_explorer = json.load(f)
+                loaded = json.load(f)
         except (OSError, ValueError):
-            self.obj_appconfig.project_explorer = {}
+            loaded = {}
 
-        Appconfig.project_explorer = self.obj_appconfig.project_explorer
+        # Rebuild the shared class-level project_explorer dict in place. Other
+        # Appconfig instances (openProject, newProject, ProjectExplorer) hold
+        # and mutate this same object; reassigning it would shadow it on this
+        # instance only and desync everyone else (the identity hazard
+        # ProjectExplorer.loadProjects documents). clear()+update() keeps the
+        # one shared dict.
+        self.obj_appconfig.project_explorer.clear()
+        self.obj_appconfig.project_explorer.update(loaded)
 
         self._refresh_project_explorer()
         self._finish_workspace_change()

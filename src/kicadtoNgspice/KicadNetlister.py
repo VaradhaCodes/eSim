@@ -31,7 +31,7 @@ import xml.etree.ElementTree as ET
 
 
 def _kicad_cli():
-    """Locate kicad-cli (KiCad >= 7). Env override for flatpak/appimage."""
+    """Locate kicad-cli (KiCad >= 7). ESIM_KICAD_CLI overrides PATH lookup."""
     return os.environ.get('ESIM_KICAD_CLI') or shutil.which('kicad-cli')
 
 

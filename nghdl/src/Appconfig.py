@@ -3,10 +3,11 @@ from configparser import ConfigParser
 
 
 class Appconfig:
-    if os.name == 'nt':
-        home = os.path.join('library', 'config')
-    else:
-        home = os.path.expanduser('~')
+    # Per-user config lives under ~/.esim and ~/.nghdl on EVERY platform
+    # (the Windows bootstrap writes them there); the old nt branch read a
+    # CWD-relative 'library/config' that broke unless eSim was launched
+    # from its install root.
+    home = os.path.expanduser('~')
 
     # Reading all variables from eSim config.ini
     parser_esim = ConfigParser()

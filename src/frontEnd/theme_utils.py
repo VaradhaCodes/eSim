@@ -1,6 +1,7 @@
 import os
 import json
 from PyQt6 import QtGui, QtCore
+from configuration import paths
 
 ACCENT_TOKENS = {
     "dark": ["#53D7FF", "#8BEAFF", "#18A8D8", "#0E7490", "#7CE3FF", "#1CB8E8", "#3B82F6", "#165982", "#1E88E5"],
@@ -22,6 +23,76 @@ def replace_tokens(qss, tokens, value):
     for token in tokens:
         qss = qss.replace(token, value)
     return qss
+
+
+# Process-lifetime cache of fully-resolved stylesheets, keyed by everything
+# that affects the output: (qss file, accent, secondary, internal, zoom). The
+# build step reads the file, rewrites image urls, runs three token-replace
+# passes, an rgba() recolor regex and a per-metric px-scale regex over a large
+# sheet -- doing that on every theme toggle (the user flipping Light/Dark back
+# and forth, or the OS colorScheme signal firing) is pure waste when the inputs
+# repeat. There are only a handful of distinct combinations in a session, so an
+# unbounded dict here stays tiny.
+_QSS_CACHE = {}
+
+
+def build_qss(qss_name, is_dark, accent_color, secondary_color,
+              internal_bg_color, zoom_level):
+    """Return the fully-resolved stylesheet string for the given inputs,
+    memoized. Pure function of its arguments (plus the on-disk .qss, which does
+    not change during a run), so it is safe to cache for the process lifetime."""
+    key = (qss_name, accent_color, secondary_color, internal_bg_color,
+           zoom_level)
+    cached = _QSS_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    qss_path = os.path.join(os.path.dirname(__file__), qss_name)
+    if not os.path.exists(qss_path):
+        _QSS_CACHE[key] = ""
+        return ""
+    with open(qss_path, 'r') as f:
+        qss_content = f.read()
+
+    # Resolve the relative ``url("images/...")`` references in the QSS to an
+    # absolute path next to this module. Previously these only worked because
+    # the launcher does ``cd src/frontEnd`` first; from any other working
+    # directory (or a frozen PyInstaller build) the dock/tab icons silently
+    # failed to load. This makes them CWD-independent.
+    img_dir = os.path.join(os.path.dirname(__file__), 'images')
+    img_dir = img_dir.replace(os.sep, '/')
+    qss_content = qss_content.replace('url("images/', 'url("%s/' % img_dir)
+
+    mode_key = "dark" if is_dark else "light"
+
+    if accent_color != "default":
+        qss_content = replace_tokens(
+            qss_content, ACCENT_TOKENS[mode_key], accent_color)
+        # Also recolor the rgba() glows/borders so the accent fully propagates.
+        qss_content = recolor_accent_rgba(qss_content, mode_key, accent_color)
+
+    if secondary_color != "system":
+        qss_content = replace_tokens(
+            qss_content, SECONDARY_TOKENS[mode_key], secondary_color)
+
+    if internal_bg_color != "system":
+        qss_content = replace_tokens(
+            qss_content, INTERNAL_TOKENS[mode_key], internal_bg_color)
+
+    if zoom_level != 100:
+        scale = zoom_level / 100.0
+        import re
+
+        def scale_px(match):
+            val = float(match.group(1))
+            # Keep 1-2px hairline borders crisp; only scale real metrics.
+            if val <= 2:
+                return match.group(0)
+            return f"{int(round(val * scale))}px"
+        qss_content = re.sub(r'(\d+(?:\.\d+)?)px', scale_px, qss_content)
+
+    _QSS_CACHE[key] = qss_content
+    return qss_content
 
 
 def recolor_accent_rgba(qss, mode_key, accent_hex):
@@ -46,10 +117,11 @@ def recolor_accent_rgba(qss, mode_key, accent_hex):
     return pattern.sub("rgba(%d,%d,%d," % (nr, ng, nb), qss)
 
 
-def get_preferences(user_home):
+def get_preferences(user_home=None):
     prefs = {"theme_mode": "System", "accent_color": "default", "secondary_accent_color": "system"}
     try:
-        path = os.path.join(user_home, ".esim", "preferences.json")
+        path = (os.path.join(user_home, ".esim", "preferences.json")
+                if user_home else paths.esim_config_path("preferences.json"))
         if os.path.exists(path):
             with open(path, "r") as f:
                 data = json.load(f)
@@ -83,12 +155,7 @@ def _refresh_graphics_effects(app):
 
 
 def apply_theme(app):
-    if os.name == 'nt':
-        user_home = os.path.join('library', 'config')
-    else:
-        user_home = os.path.expanduser('~')
-
-    prefs = get_preferences(user_home)
+    prefs = get_preferences()
     theme_mode = prefs.get("theme_mode", "System")
     accent_color = prefs.get("accent_color", "default")
     secondary_color = prefs.get("secondary_accent_color", "system")
@@ -119,45 +186,12 @@ def apply_theme(app):
     else:
         qss_name = 'style_light.qss'
 
-    qss_path = os.path.join(os.path.dirname(__file__), qss_name)
-    qss_content = ""
-    if os.path.exists(qss_path):
-        with open(qss_path, 'r') as f:
-            qss_content = f.read()
-
-        # Resolve the relative ``url("images/...")`` references in the QSS to an
-        # absolute path next to this module. Previously these only worked
-        # because the launcher does ``cd src/frontEnd`` first; from any other
-        # working directory (or a frozen PyInstaller build) the dock/tab icons
-        # silently failed to load. This makes them CWD-independent.
-        img_dir = os.path.join(os.path.dirname(__file__), 'images')
-        img_dir = img_dir.replace(os.sep, '/')
-        qss_content = qss_content.replace('url("images/', 'url("%s/' % img_dir)
-
-        mode_key = "dark" if is_dark else "light"
-
-        if accent_color != "default":
-            qss_content = replace_tokens(qss_content, ACCENT_TOKENS[mode_key], accent_color)
-            # Also recolor the rgba() glows/borders so the accent fully propagates.
-            qss_content = recolor_accent_rgba(qss_content, mode_key, accent_color)
-
-        if secondary_color != "system":
-            qss_content = replace_tokens(qss_content, SECONDARY_TOKENS[mode_key], secondary_color)
-
-        if internal_bg_color != "system":
-            qss_content = replace_tokens(qss_content, INTERNAL_TOKENS[mode_key], internal_bg_color)
-
-        zoom_level = prefs.get("zoom_level", 100)
-        if zoom_level != 100:
-            scale = zoom_level / 100.0
-            import re
-            def scale_px(match):
-                val = float(match.group(1))
-                # Keep 1-2px hairline borders crisp; only scale real metrics.
-                if val <= 2:
-                    return match.group(0)
-                return f"{int(round(val * scale))}px"
-            qss_content = re.sub(r'(\d+(?:\.\d+)?)px', scale_px, qss_content)
+    # Build (or fetch from cache) the fully-resolved sheet. Toggling theme back
+    # and forth now re-reads nothing and re-runs no regex once each combination
+    # has been seen once.
+    zoom_level = prefs.get("zoom_level", 100)
+    qss_content = build_qss(qss_name, is_dark, accent_color, secondary_color,
+                            internal_bg_color, zoom_level)
 
     app.setStyleSheet(qss_content)
 

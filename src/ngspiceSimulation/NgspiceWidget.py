@@ -1,5 +1,6 @@
 import os
 import shlex
+import shutil
 import codecs
 import logging
 from typing import List, Optional
@@ -10,7 +11,6 @@ from configuration.Appconfig import Appconfig
 from frontEnd import TerminalUi
 from maker import CosimConfig
 from maker.CosimLogger import CosimLog
-from configparser import ConfigParser
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,9 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.obj_appconfig.process_obj.append(process)
         current_project_name = self.obj_appconfig.current_project['ProjectName']
         if current_project_name in self.obj_appconfig.proc_dict:
-            self.obj_appconfig.proc_dict[current_project_name].append(process.processId())
+            # Store the QProcess handle (not its pid): Close Project terminates
+            # through the handle, never a bare recycled pid.
+            self.obj_appconfig.proc_dict[current_project_name].append(process)
 
     def _unregister_process(self) -> None:
         """Drop the finished main-simulation process from the shared registries.
@@ -122,10 +124,10 @@ class NgspiceWidget(QtWidgets.QWidget):
         except (ValueError, AttributeError):
             pass
         proj = self.obj_appconfig.current_project.get('ProjectName')
-        pids = self.obj_appconfig.proc_dict.get(proj) if proj else None
-        if pids and self._main_pid is not None:
+        handles = self.obj_appconfig.proc_dict.get(proj) if proj else None
+        if handles is not None:
             try:
-                pids.remove(self._main_pid)
+                handles.remove(self.process)
             except ValueError:
                 pass
 
@@ -144,10 +146,14 @@ class NgspiceWidget(QtWidgets.QWidget):
             self._register_process(self.process)
 
     def _start_process(self) -> None:
+        # NGHDL ghdl models spawn mintty/bash from inside ngspice on Windows.
+        self._add_msys_paths()
         if self.uses_dcosim:
             if not CosimConfig.has_dcosim():
+                from maker import ToolchainCheck
                 Dialogs.warning(
                     self, "d_cosim unavailable",
+                    ToolchainCheck.failure_message(ToolchainCheck.DCOSIM) or
                     CosimConfig.missing_reason() or
                     "This ngspice build cannot run d_cosim co-simulation.")
             # ngspice's ivlng adapter dlopens libvvp at runtime, so the iverilog
@@ -181,9 +187,38 @@ class NgspiceWidget(QtWidgets.QWidget):
         if not lib:
             return
         var = CosimConfig.loader_path_var()
-        env = QtCore.QProcessEnvironment.systemEnvironment()
+        # Extend any environment already set on the process (_add_msys_paths
+        # may have run first) instead of resetting to the system one.
+        env = self.process.processEnvironment()
+        if env.isEmpty():
+            env = QtCore.QProcessEnvironment.systemEnvironment()
         existing = env.value(var, "")
         env.insert(var, lib + (os.pathsep + existing if existing else ""))
+        self.process.setProcessEnvironment(env)
+
+    def _add_msys_paths(self) -> None:
+        """Windows only: put the bundled MSYS2 dirs on ngspice's PATH.
+
+        NGHDL's generated ghdl code models launch their per-instance VHDL
+        testbench server with ``system("start mintty.exe ... bash.exe ...")``
+        from INSIDE ngspice, so mintty/bash must be resolvable from the
+        ngspice process environment (mingw64/bin additionally covers the
+        ghdl/gcc the server scripts call). No-op when MSYS2 is not installed
+        or on POSIX."""
+        if os.name != 'nt':
+            return
+        msys_home = CosimConfig.nghdl_cfg('COMPILER', 'MSYS_HOME')
+        if not msys_home or not os.path.isdir(msys_home):
+            return
+        extra = os.pathsep.join([
+            os.path.join(msys_home, 'usr', 'bin'),
+            os.path.join(msys_home, 'mingw64', 'bin'),
+        ])
+        env = self.process.processEnvironment()
+        if env.isEmpty():
+            env = QtCore.QProcessEnvironment.systemEnvironment()
+        existing = env.value('PATH', "")
+        env.insert('PATH', extra + (os.pathsep + existing if existing else ""))
         self.process.setProcessEnvironment(env)
 
     @staticmethod
@@ -198,16 +233,46 @@ class NgspiceWidget(QtWidgets.QWidget):
     def _is_linux(self) -> bool:
         return os.name != "nt"
 
+    # Terminal emulators that can host the interactive ngspice plot session,
+    # in preference order. Each entry is (binary, args-before-the-command);
+    # the shell command string is appended to that list. xterm keeps its
+    # window open with -hold; gnome-terminal separates its own args with --.
+    _TERMINALS = (
+        ('xterm', ['-hold', '-e', 'sh', '-c']),
+        ('x-terminal-emulator', ['-e', 'sh', '-c']),
+        ('gnome-terminal', ['--', 'sh', '-c']),
+        ('konsole', ['-e', 'sh', '-c']),
+    )
+
+    @classmethod
+    def _resolve_terminal(cls):
+        """Return (path, args-template) for the first installed terminal, else
+        None. Modern Ubuntu/GNOME ships no xterm, so falling back keeps the
+        interactive plot feature working instead of silently doing nothing."""
+        for binary, template in cls._TERMINALS:
+            path = shutil.which(binary)
+            if path:
+                return path, template
+        return None
+
     def _start_gaw_process(self) -> None:
         """Launch the GTK analog wave viewer on the rawfile.
 
         Only called after the batch run has finished and actually written the
         rawfile — starting it in __init__ (as before) opened gaw on a file that
         ngspice had not produced yet, flashing an empty viewer on every run.
+
+        gaw is a bonus viewer: if it isn't installed, log and skip silently (no
+        dialog — the xterm ngspice plot is the primary path).
         """
+        if not shutil.which('gaw'):
+            logger.info("gaw not installed; skipping analog wave viewer.")
+            return
         try:
             self.gaw_process = QtCore.QProcess(self)
             self.gaw_command = f"gaw {shlex.quote(self.raw_file)}"
+            self.gaw_process.errorOccurred.connect(
+                lambda err: logger.error(f"gaw process error: {err}"))
             self.gaw_process.start('sh', ['-c', self.gaw_command])
             logger.info(f"Started GAW with command: {self.gaw_command}")
         except Exception as e:
@@ -310,17 +375,53 @@ class NgspiceWidget(QtWidgets.QWidget):
 
         if os.name == 'nt':
             try:
-                parser_nghdl = ConfigParser()
-                config_path = os.path.join('library', 'config', '.nghdl', 'config.ini')
-                parser_nghdl.read(config_path)
-                msys_home = parser_nghdl.get('COMPILER', 'MSYS_HOME')
-                mintty_exe = os.path.join(msys_home, 'usr', 'bin', 'mintty.exe')
+                # MSYS_HOME comes from the same per-user ~/.nghdl/config.ini
+                # every other flow reads (CosimConfig), NOT the legacy
+                # CWD-relative library/config path the old code probed.
+                msys_home = CosimConfig.nghdl_cfg('COMPILER', 'MSYS_HOME')
+                mintty_exe = (os.path.join(msys_home, 'usr', 'bin',
+                                           'mintty.exe') if msys_home else '')
+                if not mintty_exe or not os.path.isfile(mintty_exe):
+                    Dialogs.warning(
+                        self, "Interactive plots unavailable",
+                        "The MSYS2 terminal (mintty) was not found, so the "
+                        "interactive ngspice plot window cannot open.\n\n"
+                        "Probed: " + (mintty_exe or
+                                      "~/.nghdl/config.ini [COMPILER] "
+                                      "MSYS_HOME (unset)") + "\n\n"
+                        "Reinstall eSim with the \"HDL toolchain (MSYS2)\" "
+                        "component. The plot data itself is available via "
+                        "eSim's own plotting window.")
+                    logger.warning("mintty not found; skipping nt plots.")
+                    return
+                if not os.path.isfile(self.ngspice_bin):
+                    Dialogs.warning(
+                        self, "ngspice not found",
+                        "ngspice was not found at:\n" + self.ngspice_bin +
+                        "\n\nReinstall eSim (Full).")
+                    return
 
                 self.mintty_process = QtCore.QProcess(self)
                 self.mintty_process.setWorkingDirectory(self.project_dir)
+                self.mintty_process.errorOccurred.connect(
+                    lambda err: logger.error(f"mintty plot error: {err}"))
+                # d_cosim re-runs need libvvp on the loader path (PATH on nt)
+                # for ngspice's ivlng adapter, exactly like the batch run.
+                env = QtCore.QProcessEnvironment.systemEnvironment()
+                if self.uses_dcosim:
+                    iv_lib = CosimConfig.iverilog_libdir()
+                    if iv_lib:
+                        env.insert('PATH', iv_lib + os.pathsep +
+                                   env.value('PATH', ''))
+                # mintty/bash for any NGHDL testbench relaunched by the model.
+                env.insert('PATH', os.path.join(msys_home, 'usr', 'bin') +
+                           os.pathsep + env.value('PATH', ''))
+                self.mintty_process.setProcessEnvironment(env)
                 # Pass program + args directly — Qt handles quoting internally
                 self.mintty_process.start(
-                    mintty_exe, [self.ngspice_bin, '-p', self.command])
+                    mintty_exe, ['-h', 'always', self.ngspice_bin,
+                                 '-p', self.command])
+                self._register_process(self.mintty_process)
                 logger.info(
                     f"Started mintty: {mintty_exe} "
                     f"{self.ngspice_bin} -p {self.command}")
@@ -352,10 +453,23 @@ class NgspiceWidget(QtWidgets.QWidget):
                     f"{ld_prefix}{shlex.quote(self.ngspice_bin)} "
                     f"-r {shlex.quote(self.raw_file)} {shlex.quote(self.command)}"
                 )
+                terminal = self._resolve_terminal()
+                if terminal is None:
+                    Dialogs.warning(
+                        self, "Terminal emulator not found",
+                        "Interactive ngspice plots need a terminal emulator "
+                        "(e.g. xterm). None was found on this system.\n\n"
+                        "Install one — for example: sudo apt install xterm")
+                    logger.warning(
+                        "No terminal emulator found; skipping ngspice plots.")
+                    return
+                terminal_bin, template = terminal
                 self.xterm_process = QtCore.QProcess(self)
-                self.xterm_process.start('xterm', ['-hold', '-e', 'sh', '-c', xterm_command])
+                self.xterm_process.errorOccurred.connect(
+                    lambda err: logger.error(f"Plot terminal error: {err}"))
+                self.xterm_process.start(terminal_bin, template + [xterm_command])
                 self._register_process(self.xterm_process)
-                logger.info(f"Started xterm: {xterm_command}")
+                logger.info(f"Started {terminal_bin}: {xterm_command}")
 
                 # Launch the GTK analog wave viewer now that the rawfile exists.
                 self._start_gaw_process()

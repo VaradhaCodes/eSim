@@ -54,6 +54,8 @@ echo ">>> Snapshotting working tree -> $name"
 rsync -a \
     --exclude='.git' \
     --exclude='dist' \
+    --exclude='windows/build' \
+    --exclude='windows/downloads' \
     --exclude='__pycache__' \
     --exclude='*.py[co]' \
     --exclude='*.egg-info' \

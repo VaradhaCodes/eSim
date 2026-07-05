@@ -211,11 +211,10 @@ def motion_enabled():
     prefs file to keep this module free of an Appconfig import; an
     absent/unreadable file falls back to the default (on).
     """
-    import os
     import json
+    from configuration import paths
     try:
-        path = os.path.join(
-            os.path.expanduser("~"), ".esim", "preferences.json")
+        path = paths.esim_config_path("preferences.json")
         with open(path) as fh:
             return bool(json.load(fh).get("enable_motion", True))
     except Exception:

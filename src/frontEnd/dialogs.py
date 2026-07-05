@@ -56,6 +56,53 @@ def ask_question(parent, title, message):
     return msg.exec() == QtWidgets.QMessageBox.StandardButton.Yes
 
 
+# Persisted across runs in the shared QSettings store. When the user ticks
+# "Remember my choice" the popup is skipped on every later simulation and the
+# saved answer is reused. It can be re-enabled from Preferences ▸ Simulation
+# ("Ask before generating Ngspice plots").
+NGSPICE_REMEMBER_KEY = "ngspicePlots/remember"
+NGSPICE_FLAG_KEY = "ngspicePlots/flag"
+
+
+def ask_ngspice_plots(parent):
+    """Return whether to also generate native ngspice plots for this run.
+
+    If the user previously chose "Remember my choice", reuse the stored answer
+    silently. Otherwise show the Yes/No popup (with a remember checkbox) and
+    persist the decision when the box is ticked. Shared by
+    Application.plotFlagPopBox and TerminalUi's redo path so the popup and its
+    QSettings keys live in exactly one place.
+    """
+    settings = QtCore.QSettings('eSim', 'eSim')
+    if settings.value(NGSPICE_REMEMBER_KEY, False, type=bool):
+        return settings.value(NGSPICE_FLAG_KEY, False, type=bool)
+
+    msg_box = QtWidgets.QMessageBox(parent)
+    msg_box.setWindowTitle("Ngspice Plots")
+    msg_box.setText("Do you want Ngspice plots?")
+    # Widen the message label so the window title is not clipped behind the
+    # close/minimise/maximise buttons on tight window managers. QMessageBox
+    # ignores setMinimumWidth, so size via the label.
+    msg_box.setStyleSheet("QLabel { min-width: 360px; }")
+
+    remember_cb = QtWidgets.QCheckBox(
+        "Remember my choice (re-enable in Preferences ▸ Simulation)")
+    msg_box.setCheckBox(remember_cb)
+
+    yes_button = msg_box.addButton(
+        "Yes", QtWidgets.QMessageBox.ButtonRole.YesRole)
+    msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
+
+    msg_box.exec()
+    flag = msg_box.clickedButton() == yes_button
+
+    if remember_cb.isChecked():
+        settings.setValue(NGSPICE_REMEMBER_KEY, True)
+        settings.setValue(NGSPICE_FLAG_KEY, flag)
+
+    return flag
+
+
 ESIM_VERSION = "2.5.0"
 
 

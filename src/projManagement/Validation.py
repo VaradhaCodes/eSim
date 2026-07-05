@@ -133,9 +133,10 @@ class Validation:
                 validation
 
         @return
-            True
-            PORT
-            DIREC
+            "True"     => a matching .subckt with the expected port count
+            "PORT"     => .subckt found but port count differs
+            "DIREC"    => no .sub file in the directory
+            "NOSUBCKT" => .sub file exists but contains no .subckt line
         """
         # Resolve the subcircuit stem from its .sub anchor, not the folder name.
         subName, _status = resolve_stem(str(subDir), 'sub')
@@ -162,6 +163,10 @@ class Validation:
                         return "PORT"
                     else:
                         return "True"
+            # .sub file exists but no ".subckt" line was found — an explicit
+            # terminal value beats falling off the end returning None (which
+            # callers string-compare into a confusing wrong-branch message).
+            return "NOSUBCKT"
         else:
             return "DIREC"
 
@@ -210,7 +215,8 @@ class Validation:
                 if len(word) == 0 or word[0][0] == "*":
                     continue
                 if first:
-                    if word[0] == ".subckt" and word[1] == fileName:
+                    if (len(word) >= 2 and word[0] == ".subckt"
+                            and word[1] == fileName):
                         first = False
                     else:
                         print("First line not found:", word)

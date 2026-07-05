@@ -1,16 +1,14 @@
 import os.path
 from configparser import ConfigParser
+from configuration import paths
 
 
 class Appconfig:
-    if os.name == 'nt':
-        home = os.path.join('library', 'config')
-    else:
-        home = os.path.expanduser('~')
+    home = paths.user_home()
 
     # Reading all variables from eSim config.ini
     parser_esim = ConfigParser()
-    parser_esim.read(os.path.join(home, os.path.join('.esim', 'config.ini')))
+    parser_esim.read(paths.esim_config_path('config.ini'))
     try:
         src_home = parser_esim.get('eSim', 'eSim_HOME')
         xml_loc = os.path.join(src_home, 'library/modelParamXML')

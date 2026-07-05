@@ -132,9 +132,14 @@ def test_safe_model_subdir_accepts_plain_name(tmp_path):
     assert got == os.path.join(os.path.abspath(base), "mux")
 
 
-def test_nghdl_sym_path_posix():
+def test_nghdl_sym_path_posix(tmp_path, monkeypatch):
+    # HOME redirected so we never create/touch the real ~/.esim.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(os.path, "expanduser",
+                        lambda p: p.replace("~", str(tmp_path), 1))
     p = mt._nghdl_sym_path("")
     assert p.endswith("eSim_Nghdl.kicad_sym")
+    assert os.path.join(".esim", "kicad_symbols") in p
 
 
 # ── end-to-end: add -> remove -> add -> remove stays clean ──────────────────

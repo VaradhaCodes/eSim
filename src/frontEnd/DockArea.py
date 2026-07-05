@@ -18,9 +18,6 @@ from converter.ltspiceToKicad import LTspiceConverter
 from converter.LtspiceLibConverter import LTspiceLibConverter
 from converter.libConverter import PspiceLibConverter
 from converter.browseSchematic import browse_path
-dockList = ['Welcome']
-count = 1
-dock = {}
 
 
 class WaveformDock(QtWidgets.QDockWidget):
@@ -63,32 +60,43 @@ class DockArea(QtWidgets.QMainWindow):
         self.obj_appconfig = Appconfig()
         # Track plotting docks
         self.active_plotting_docks = set()
+        # Wire the tab-activation slot exactly once. Connecting it per plot
+        # (the old plottingEditor path) stacked duplicate connections -- Qt does
+        # not dedupe them -- so after N plots the slot fired N times per switch.
+        self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
         # Verilog waveform tab per Model Creation dock (source dock -> wave
         # dock), so a re-simulate reuses one viewer instead of stacking tabs.
         self._wave_docks = {}
 
-        for dockName in dockList:
-            dock[dockName] = QtWidgets.QDockWidget(dockName)
+        # Per-instance dock registry + naming counter. These were module-level
+        # globals (dock / count / dockList) that only worked because exactly
+        # one DockArea exists; as instance state they no longer leak across
+        # tests or instances and are visible to readers of this class.
+        self._docks = {}
+        self._count = 1
+
+        for dockName in ['Welcome']:
+            self._docks[dockName] = QtWidgets.QDockWidget(dockName)
             self.welcomeWidget = QtWidgets.QWidget()
             self.welcomeLayout = QtWidgets.QVBoxLayout()
             self.welcomeLayout.addWidget(Welcome())  # Call browser
 
             # Adding to main Layout
             self.welcomeWidget.setLayout(self.welcomeLayout)
-            dock[dockName].setWidget(self.welcomeWidget)
+            self._docks[dockName].setWidget(self.welcomeWidget)
             # No title strip here either -- the bottom tab already labels it, so
             # the home tab matches the title-less tool docks (see
             # apply_fullscreen_feature).
-            dock[dockName].setTitleBarWidget(QtWidgets.QWidget())
+            self._docks[dockName].setTitleBarWidget(QtWidgets.QWidget())
             # Welcome is the permanent "home" tab: keep it movable/floatable but
             # drop the Closable feature so its title bar has no close button.
             # The tab-strip X is stripped separately in enable_tab_close_buttons.
-            dock[dockName].setFeatures(
+            self._docks[dockName].setFeatures(
                 QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
                 QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-            self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName])
+            self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, self._docks[dockName])
 
-        # self.tabifyDockWidget(dock['Notes'],dock['Blank'])
+        # self.tabifyDockWidget(self._docks['Notes'],self._docks['Blank'])
         self.show()
 
     def tabifyDockWidget(self, first, second):
@@ -107,6 +115,11 @@ class DockArea(QtWidgets.QMainWindow):
             if isinstance(tb.parent(), QtWidgets.QTabWidget):
                 continue
             tb.setTabsClosable(True)
+            # Never elide tab text: dock titles are made unique by their
+            # ``-<count>`` suffix, and handle_tab_close matches a tab to its
+            # dock by *exact* windowTitle. An elided ("Simulation-RLC-2...")
+            # tab would break that identity and could close the wrong dock.
+            tb.setElideMode(QtCore.Qt.TextElideMode.ElideNone)
             try:
                 tb.tabCloseRequested.disconnect()
             except Exception:
@@ -126,9 +139,9 @@ class DockArea(QtWidgets.QMainWindow):
     def _forget_dock(self, child):
         """Drop every reference eSim keeps to a dock so closing a tab cannot
         leave a zombie member behind (which would corrupt the saved layout)."""
-        keys_to_delete = [k for k, v in dock.items() if v is child]
+        keys_to_delete = [k for k, v in self._docks.items() if v is child]
         for k in keys_to_delete:
-            del dock[k]
+            del self._docks[k]
         try:
             self.active_plotting_docks.discard(child)
         except Exception:
@@ -145,21 +158,32 @@ class DockArea(QtWidgets.QMainWindow):
                 docks.remove(child)
 
     def _destroy_dock(self, child):
-        """Close, unparent and schedule deletion of a dock + forget it."""
-        child.close()
+        """Close, unparent and schedule deletion of a dock + forget it.
+
+        Honours a vetoed close: an editor window with unsaved changes can
+        reject its ``closeEvent``, and such a widget is left intact rather than
+        force-deleted out from under the user. Returns True when the dock was
+        actually torn down."""
+        if not child.close():
+            return False
         try:
             self.removeDockWidget(child)
         except Exception:
             pass
         self._forget_dock(child)
         child.deleteLater()
+        return True
 
     def handle_tab_close(self, index, tab_bar):
-        """Close the dock behind the clicked tab (matched by title), tearing it
-        fully down rather than just hiding it."""
+        """Close the dock behind the clicked tab, tearing it fully down rather
+        than just hiding it.
+
+        The tab is matched to its dock by an *exact* windowTitle compare. Tab
+        text is never elided (see enable_tab_close_buttons) and dock titles are
+        unique by their ``-<self._count>`` suffix, so a prefix/startswith match --
+        which could close ``Simulation-RLC-21`` when the user clicked
+        ``Simulation-RLC-2`` -- is neither needed nor safe."""
         tab_text = tab_bar.tabText(index).replace('&', '').strip()
-        if tab_text.endswith('...'):
-            tab_text = tab_text[:-3].strip()
 
         # Welcome is the permanent home tab -- never destroy it.
         if tab_text == 'Welcome':
@@ -169,15 +193,9 @@ class DockArea(QtWidgets.QMainWindow):
             if not child.isVisible():
                 continue
             title = child.windowTitle().replace('&', '').strip()
-            if title == tab_text or (tab_text and title.startswith(tab_text)):
+            if title == tab_text:
                 self._destroy_dock(child)
                 return
-
-        # Fallback: close by visible-index when the title match fails.
-        visible = [d for d in self.findChildren(QtWidgets.QDockWidget)
-                   if d.isVisible()]
-        if index < len(visible):
-            self._destroy_dock(visible[index])
 
     def get_main_view_reference(self):
         """Get reference to the MainView widget."""
@@ -250,7 +268,6 @@ class DockArea(QtWidgets.QMainWindow):
 
     def createTestEditor(self):
         """This function create widget for Library Editor"""
-        global count
 
         self.testWidget = QtWidgets.QWidget()
         self.testArea = QtWidgets.QTextEdit()
@@ -259,26 +276,26 @@ class DockArea(QtWidgets.QMainWindow):
 
         # Adding to main Layout
         self.testWidget.setLayout(self.testLayout)
-        dock['Tips-' + str(count)] = \
-            QtWidgets.QDockWidget('Tips-' + str(count))
+        self._docks['Tips-' + str(self._count)] = \
+            QtWidgets.QDockWidget('Tips-' + str(self._count))
         self.apply_fullscreen_feature(
-            dock['Tips-' + str(count)], self.testWidget)
+            self._docks['Tips-' + str(self._count)], self.testWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock['Tips-' + str(count)])
+                           self._docks['Tips-' + str(self._count)])
         self.tabifyDockWidget(
-            dock['Welcome'], dock['Tips-' + str(count)])
+            self._docks['Welcome'], self._docks['Tips-' + str(self._count)])
 
-        dock['Tips-' + str(count)].setVisible(True)
-        dock['Tips-' + str(count)].setFocus()
+        self._docks['Tips-' + str(self._count)].setVisible(True)
+        self._docks['Tips-' + str(self._count)].setFocus()
 
-        dock['Tips-' + str(count)].raise_()
+        self._docks['Tips-' + str(self._count)].raise_()
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
-            self.obj_appconfig.dock_dict[temp].append(
-                dock['Tips-' + str(count)]
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks['Tips-' + str(self._count)]
             )
-        count = count + 1
+        self._count = self._count + 1
 
     def plottingEditor(self):
         """This function create widget for interactive PythonPlotting."""
@@ -288,7 +305,6 @@ class DockArea(QtWidgets.QMainWindow):
         dockName = f'Plotting-{self.projName}-'
         # self.project = os.path.join(self.projDir, self.projName)
 
-        global count
         self.plottingWidget = QtWidgets.QWidget()
 
         self.plottingLayout = QtWidgets.QVBoxLayout()
@@ -296,28 +312,23 @@ class DockArea(QtWidgets.QMainWindow):
 
         # Adding to main Layout
         self.plottingWidget.setLayout(self.plottingLayout)
-        dock[dockName + str(count)
+        self._docks[dockName + str(self._count)
              ] = QtWidgets.QDockWidget(dockName
-                                       + str(count))
+                                       + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.plottingWidget)
+            self._docks[dockName + str(self._count)], self.plottingWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock[dockName + str(count)])
-        self.tabifyDockWidget(dock['Welcome'],
-                              dock[dockName + str(count)])
+                           self._docks[dockName + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'],
+                              self._docks[dockName + str(self._count)])
         
-        # Track this as a plotting dock
-        self.active_plotting_docks.add(dock[dockName + str(count)])
-        
-        # Connect to tab change signal
-        try:
-            self.tabifiedDockWidgetActivated.connect(self.on_dock_activated)
-        except (RuntimeError, TypeError):
-            pass  # In case signal is already connected
+        # Track this as a plotting dock (the activation slot is wired once in
+        # __init__, not per plot).
+        self.active_plotting_docks.add(self._docks[dockName + str(self._count)])
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
 
         # Collapse console immediately
         main_view = self.get_main_view_reference()
@@ -326,14 +337,13 @@ class DockArea(QtWidgets.QMainWindow):
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
-            self.obj_appconfig.dock_dict[temp].append(
-                dock[dockName + str(count)]
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks[dockName + str(self._count)]
             )
-        count = count + 1
+        self._count = self._count + 1
 
     def ngspiceEditor(self, projName, netlist, simEndSignal, plotFlag):
         """ This function creates widget for Ngspice window."""
-        global count
         self.ngspiceWidget = QtWidgets.QWidget()
 
         self.ngspiceLayout = QtWidgets.QVBoxLayout()
@@ -344,32 +354,31 @@ class DockArea(QtWidgets.QMainWindow):
         # Adding to main Layout
         self.ngspiceWidget.setLayout(self.ngspiceLayout)
         dockName = f'Simulation-{projName}-'
-        dock[dockName + str(count)
+        self._docks[dockName + str(self._count)
              ] = QtWidgets.QDockWidget(dockName
-                                       + str(count))
+                                       + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.ngspiceWidget)
+            self._docks[dockName + str(self._count)], self.ngspiceWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock[dockName + str(count)])
-        self.tabifyDockWidget(dock['Welcome'],
-                              dock[dockName
-                                   + str(count)])
+                           self._docks[dockName + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'],
+                              self._docks[dockName
+                                   + str(self._count)])
 
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
-            self.obj_appconfig.dock_dict[temp].append(
-                dock[dockName + str(count)]
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks[dockName + str(self._count)]
             )
-        count = count + 1
+        self._count = self._count + 1
 
     def eSimConverter(self):
         """This function creates a widget for eSimConverter."""
-        global count
 
         dockName = 'Schematic Converter-'
 
@@ -535,23 +544,30 @@ class DockArea(QtWidgets.QMainWindow):
         file_path_text_box.textChanged.connect(_sync_actions)
         _sync_actions("")
 
-        dock[dockName + str(count)] = QtWidgets.QDockWidget(dockName + str(count))
+        self._docks[dockName + str(self._count)] = QtWidgets.QDockWidget(dockName + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.eConWidget)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, dock[dockName + str(count)])
-        self.tabifyDockWidget(dock['Welcome'], dock[dockName + str(count)])
+            self._docks[dockName + str(self._count)], self.eConWidget)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, self._docks[dockName + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'], self._docks[dockName + str(self._count)])
 
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
 
-        count = count + 1
+        # Register with the project so Close Project destroys it too; without
+        # this the Schematic Converter dock (and its four sub-converters) leaked
+        # for the whole session.
+        temp = self.obj_appconfig.current_project['ProjectName']
+        if temp:
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks[dockName + str(self._count)]
+            )
+        self._count = self._count + 1
 
     def modelEditor(self):
         """This function defines UI for model editor."""
         print("in model editor")
-        global count
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
         if projDir is None:
@@ -580,22 +596,28 @@ class DockArea(QtWidgets.QMainWindow):
         # Adding to main Layout
         self.modelwidget.setLayout(self.modellayout)
 
-        dock[dockName +
-             str(count)] = QtWidgets.QDockWidget(dockName
-                                                 + str(count))
+        self._docks[dockName +
+             str(self._count)] = QtWidgets.QDockWidget(dockName
+                                                 + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.modelwidget)
+            self._docks[dockName + str(self._count)], self.modelwidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock[dockName + str(count)])
-        self.tabifyDockWidget(dock['Welcome'],
-                              dock[dockName + str(count)])
+                           self._docks[dockName + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'],
+                              self._docks[dockName + str(self._count)])
 
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
 
-        count = count + 1
+        # Register with the project so Close Project reaps the Model Editor dock.
+        temp = self.obj_appconfig.current_project['ProjectName']
+        if temp:
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks[dockName + str(self._count)]
+            )
+        self._count = self._count + 1
 
     def _closeExistingConverters(self):
         """Tear down any open KiCad-to-Ngspice converter dock.
@@ -608,8 +630,8 @@ class DockArea(QtWidgets.QMainWindow):
         opening a new one. Also stops the module `dock` dict from leaking a
         fresh entry on every open.
         """
-        for key in [k for k in dock if k.startswith('Netlist-')]:
-            d = dock.pop(key, None)
+        for key in [k for k in self._docks if k.startswith('Netlist-')]:
+            d = self._docks.pop(key, None)
             if d is None:
                 continue
             # Drop it from per-project bookkeeping so closing the project
@@ -629,7 +651,6 @@ class DockArea(QtWidgets.QMainWindow):
         """
         This function is creating Editor UI for Kicad to Ngspice conversion.
         """
-        global count
 
         # Keep at most one converter live; see _closeExistingConverters.
         self._closeExistingConverters()
@@ -643,31 +664,30 @@ class DockArea(QtWidgets.QMainWindow):
         self.kicadToNgspiceLayout.addWidget(MainWindow(clarg1, clarg2))
 
         self.kicadToNgspiceWidget.setLayout(self.kicadToNgspiceLayout)
-        dock[dockName + str(count)] = \
-            QtWidgets.QDockWidget(dockName + str(count))
+        self._docks[dockName + str(self._count)] = \
+            QtWidgets.QDockWidget(dockName + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.kicadToNgspiceWidget)
+            self._docks[dockName + str(self._count)], self.kicadToNgspiceWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock[dockName + str(count)])
-        self.tabifyDockWidget(dock['Welcome'],
-                              dock[dockName + str(count)])
+                           self._docks[dockName + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'],
+                              self._docks[dockName + str(self._count)])
 
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
-        dock[dockName + str(count)].activateWindow()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
+        self._docks[dockName + str(self._count)].activateWindow()
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
-            self.obj_appconfig.dock_dict[temp].append(
-                dock[dockName + str(count)]
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks[dockName + str(self._count)]
             )
-        count = count + 1
+        self._count = self._count + 1
 
     def subcircuiteditor(self):
         """This function creates a widget for different subcircuit options."""
-        global count
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
 
@@ -683,22 +703,28 @@ class DockArea(QtWidgets.QMainWindow):
             self.subcktLayout.addWidget(Subcircuit(self))
 
             self.subcktWidget.setLayout(self.subcktLayout)
-            dock[dockName +
-                str(count)] = QtWidgets.QDockWidget(dockName
-                                                    + str(count))
+            self._docks[dockName +
+                str(self._count)] = QtWidgets.QDockWidget(dockName
+                                                    + str(self._count))
             self.apply_fullscreen_feature(
-                dock[dockName + str(count)], self.subcktWidget)
+                self._docks[dockName + str(self._count)], self.subcktWidget)
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                            dock[dockName + str(count)])
-            self.tabifyDockWidget(dock['Welcome'],
-                                dock[dockName + str(count)])
+                            self._docks[dockName + str(self._count)])
+            self.tabifyDockWidget(self._docks['Welcome'],
+                                self._docks[dockName + str(self._count)])
 
 
-            dock[dockName + str(count)].setVisible(True)
-            dock[dockName + str(count)].setFocus()
-            dock[dockName + str(count)].raise_()
+            self._docks[dockName + str(self._count)].setVisible(True)
+            self._docks[dockName + str(self._count)].setFocus()
+            self._docks[dockName + str(self._count)].raise_()
 
-            count = count + 1
+            # Register so Close Project reaps the Subcircuit dock too.
+            temp = self.obj_appconfig.current_project['ProjectName']
+            if temp:
+                self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                    self._docks[dockName + str(self._count)]
+                )
+            self._count = self._count + 1
 
         else:
             """ when projDir is None that is clicking on subcircuit icon
@@ -718,7 +744,7 @@ class DockArea(QtWidgets.QMainWindow):
         Backs the top-toolbar Home button: from anywhere in the app the user
         lands back on the Welcome dashboard to navigate out again.
         """
-        welcome = dock.get('Welcome')
+        welcome = self._docks.get('Welcome')
         if welcome is not None:
             welcome.setVisible(True)
             welcome.raise_()
@@ -731,7 +757,6 @@ class DockArea(QtWidgets.QMainWindow):
         path (backs the dedicated NGHDL launcher) instead of the default
         Verilog Author stage.
         """
-        global count
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
         if projDir is None:
@@ -765,21 +790,21 @@ class DockArea(QtWidgets.QMainWindow):
         self.makerLayout.addWidget(maker)
 
         self.makerWidget.setLayout(self.makerLayout)
-        dock[dockName +
-             str(count)] = QtWidgets.QDockWidget(dockName
-                                                 + str(count))
+        self._docks[dockName +
+             str(self._count)] = QtWidgets.QDockWidget(dockName
+                                                 + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.makerWidget)
+            self._docks[dockName + str(self._count)], self.makerWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock[dockName + str(count)])
-        self.tabifyDockWidget(dock['Welcome'],
-                              dock[dockName + str(count)])
+                           self._docks[dockName + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'],
+                              self._docks[dockName + str(self._count)])
 
         # Verify-stage waveforms open as their own full-width eSim tab next to
         # this Model Creation dock. Bind the source dock + its navigator so
         # "Back to Verify" (and tab-close) return to the exact instance that
         # produced the plot, even with several Model Creation docks open.
-        source_dock = dock[dockName + str(count)]
+        source_dock = self._docks[dockName + str(self._count)]
         maker.flow.waveformRequested.connect(
             lambda plot, src=source_dock, flow=maker.flow:
             self._show_waveform_dock(plot, src, flow))
@@ -792,11 +817,11 @@ class DockArea(QtWidgets.QMainWindow):
         self.makerLayout.setContentsMargins(0, 0, 0, 0)
         self.makerLayout.setSpacing(0)
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
 
-        count = count + 1
+        self._count = self._count + 1
 
     def _show_waveform_dock(self, plot, source_dock, flow):
         """Host a Verilog simulation waveform as its own full-width eSim tab.
@@ -854,7 +879,7 @@ class DockArea(QtWidgets.QMainWindow):
         self.apply_fullscreen_feature(wave_dock, container)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
                            wave_dock)
-        self.tabifyDockWidget(dock['Welcome'], wave_dock)
+        self.tabifyDockWidget(self._docks['Welcome'], wave_dock)
 
         self._wave_docks[source_dock] = wave_dock
 
@@ -882,31 +907,29 @@ class DockArea(QtWidgets.QMainWindow):
 
     def usermanual(self):
         """This function creates a widget for user manual."""
-        global count
         self.usermanualWidget = QtWidgets.QWidget()
         self.usermanualLayout = QtWidgets.QVBoxLayout()
         self.usermanualLayout.addWidget(UserManual())
 
         self.usermanualWidget.setLayout(self.usermanualLayout)
-        dock['User Manual-' +
-             str(count)] = QtWidgets.QDockWidget('User Manual-' + str(count))
+        self._docks['User Manual-' +
+             str(self._count)] = QtWidgets.QDockWidget('User Manual-' + str(self._count))
         self.apply_fullscreen_feature(
-            dock['User Manual-' + str(count)], self.usermanualWidget)
+            self._docks['User Manual-' + str(self._count)], self.usermanualWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock['User Manual-' + str(count)])
-        self.tabifyDockWidget(dock['Welcome'],
-                              dock['User Manual-' + str(count)])
+                           self._docks['User Manual-' + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'],
+                              self._docks['User Manual-' + str(self._count)])
 
 
-        dock['User Manual-' + str(count)].setVisible(True)
-        dock['User Manual-' + str(count)].setFocus()
-        dock['User Manual-' + str(count)].raise_()
+        self._docks['User Manual-' + str(self._count)].setVisible(True)
+        self._docks['User Manual-' + str(self._count)].setFocus()
+        self._docks['User Manual-' + str(self._count)].raise_()
 
-        count = count + 1
+        self._count = self._count + 1
 
     def modelicaEditor(self, projDir):
         """This function sets up the UI for ngspice to modelica conversion."""
-        global count
 
         projName = os.path.basename(projDir)
         dockName = f'Modelica-{projName}-'
@@ -916,33 +939,55 @@ class DockArea(QtWidgets.QMainWindow):
         self.modelicaLayout.addWidget(OpenModelicaEditor(projDir))
 
         self.modelicaWidget.setLayout(self.modelicaLayout)
-        dock[dockName + str(count)
-             ] = QtWidgets.QDockWidget(dockName + str(count))
+        self._docks[dockName + str(self._count)
+             ] = QtWidgets.QDockWidget(dockName + str(self._count))
         self.apply_fullscreen_feature(
-            dock[dockName + str(count)], self.modelicaWidget)
+            self._docks[dockName + str(self._count)], self.modelicaWidget)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           dock[dockName
-                                + str(count)])
-        self.tabifyDockWidget(dock['Welcome'], dock[dockName
-                                                    + str(count)])
+                           self._docks[dockName
+                                + str(self._count)])
+        self.tabifyDockWidget(self._docks['Welcome'], self._docks[dockName
+                                                    + str(self._count)])
 
-        dock[dockName + str(count)].setVisible(True)
-        dock[dockName + str(count)].setFocus()
-        dock[dockName + str(count)].raise_()
+        self._docks[dockName + str(self._count)].setVisible(True)
+        self._docks[dockName + str(self._count)].setFocus()
+        self._docks[dockName + str(self._count)].raise_()
 
         temp = self.obj_appconfig.current_project['ProjectName']
         if temp:
-            self.obj_appconfig.dock_dict[temp].append(
-                dock[dockName + str(count)]
+            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+                self._docks[dockName + str(self._count)]
             )
 
-        count = count + 1
+        self._count = self._count + 1
 
     def closeDock(self):
         """
-        This function checks for the project in **dock_dict**
-        and closes it.
+        Destroy (not hide) every dock registered to the current project.
+
+        Hiding a dock (the old ``close()``) left its whole widget tree alive
+        for the rest of the session -- plot canvases + refresh timers,
+        QWebEngineViews, QScintilla editors, the verifier's DesignBus watchdog
+        thread -- still parented and still registered in ``dock_dict``. Repeated
+        open/close cycles therefore piled up heavy widgets and leaked OS
+        threads. Each dock is now torn down through ``_destroy_dock`` so its own
+        ``closeEvent`` runs (matplotlib figures/timers closed, watchdog
+        observers stopped, verifier tmpdirs reaped), and the per-project bucket
+        is dropped.
+
+        The list is copied because ``_destroy_dock`` -> ``_forget_dock`` mutates
+        the same bucket as it goes.
         """
         self.temp = self.obj_appconfig.current_project['ProjectName']
-        for dockwidget in self.obj_appconfig.dock_dict[self.temp]:
-            dockwidget.close()
+        for dockwidget in list(
+                self.obj_appconfig.dock_dict.get(self.temp, [])):
+            try:
+                self._destroy_dock(dockwidget)
+            except RuntimeError:
+                # Wrapper already deleted on the Qt side; nothing to do.
+                pass
+        # _forget_dock already removed each torn-down dock from the bucket;
+        # drop the bucket entirely only if nothing survived (e.g. an editor
+        # vetoed its close to protect unsaved changes).
+        if not self.obj_appconfig.dock_dict.get(self.temp):
+            self.obj_appconfig.dock_dict.pop(self.temp, None)

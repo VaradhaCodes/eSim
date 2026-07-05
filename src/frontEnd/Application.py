@@ -25,13 +25,12 @@ import webbrowser
 
 if os.name == 'nt':
     from frontEnd import pathmagic  # noqa:F401
-    init_path = ''
 else:
     import pathmagic    # noqa:F401
-    init_path = '../../'
 
 from PyQt6 import QtGui, QtCore, QtWidgets
 from configuration import Dialogs
+from configuration import paths
 from PyQt6.QtCore import QSize
 from configuration.Appconfig import Appconfig
 from frontEnd import ProjectExplorer
@@ -99,7 +98,6 @@ class _SnapshotWindow(QtWidgets.QWidget):
 
 class Application(QtWidgets.QMainWindow):
     """This class initializes all objects used in this file."""
-    global project_name
     simulationEndSignal = QtCore.pyqtSignal(QtCore.QProcess.ExitStatus, int)
 
     def __init__(self, *args):
@@ -113,6 +111,14 @@ class Application(QtWidgets.QMainWindow):
 
         #the plotFlag
         self.plotFlag = False
+
+        # Seed Appconfig's shared state from disk once, up front. This was
+        # formerly done at import time in Appconfig; doing it here (before any
+        # object below reads the workspace/registry) keeps the module import
+        # side-effect-free while preserving startup behaviour.
+        Appconfig.load_workspace()
+        Appconfig.load_config()
+        Appconfig.load_project_explorer()
 
         # Creating require Object
         self.obj_workspace = Workspace.Workspace()
@@ -133,7 +139,7 @@ class Application(QtWidgets.QMainWindow):
             self.obj_appconfig._APPLICATION + "-" + self.obj_appconfig._VERSION
         )
         self.showMaximized()
-        self.setWindowIcon(QtGui.QIcon(init_path + 'images/logo.png'))
+        self.setWindowIcon(QtGui.QIcon(paths.image_path('logo.png')))
 
         # Aurora micro-interactions: install hover/press glow on the main
         # window's buttons. Gated inside (no-op unless the user enabled motion
@@ -148,7 +154,7 @@ class Application(QtWidgets.QMainWindow):
             pass
 
         self.systemTrayIcon = QtWidgets.QSystemTrayIcon(self)
-        self.systemTrayIcon.setIcon(QtGui.QIcon(init_path + 'images/logo.png'))
+        self.systemTrayIcon.setIcon(QtGui.QIcon(paths.image_path('logo.png')))
         self.systemTrayIcon.setVisible(True)
 
     def initToolBar(self):
@@ -169,7 +175,7 @@ class Application(QtWidgets.QMainWindow):
 
         # Top Tool bar
         self.newproj = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/newProject.png'),
+            create_rounded_icon(paths.image_path('newProject.png')),
             'New Project', self
         )
         self.newproj.setShortcut('Ctrl+N')
@@ -177,7 +183,7 @@ class Application(QtWidgets.QMainWindow):
         self.newproj.triggered.connect(self.new_project)
 
         self.openproj = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/openProject.png'),
+            create_rounded_icon(paths.image_path('openProject.png')),
             'Open Project', self
         )
         self.openproj.setShortcut('Ctrl+O')
@@ -185,7 +191,7 @@ class Application(QtWidgets.QMainWindow):
         self.openproj.triggered.connect(self.open_project)
 
         self.closeproj = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/closeProject.png'),
+            create_rounded_icon(paths.image_path('closeProject.png')),
             'Close Project', self
         )
         self.closeproj.setShortcut('Ctrl+X')
@@ -227,6 +233,16 @@ class Application(QtWidgets.QMainWindow):
         self.devdocs.setShortcut('Shift+F1')
         self.devdocs.setToolTip('Developer Docs (Shift+F1) — Open eSim developer docs')
         self.devdocs.triggered.connect(self.dev_docs)
+
+        # Simulation-toolchain doctor: probes ngspice/iverilog/verilator/
+        # ghdl/make/gcc (+ MSYS2 on Windows) and reports missing pieces with
+        # fix hints. Same report as `esim --doctor`.
+        self.doctor_action = QtGui.QAction(
+            'Check Simulation Toolchain...', self
+        )
+        self.doctor_action.setToolTip(
+            'Verify every simulator/HDL tool eSim needs is installed')
+        self.doctor_action.triggered.connect(self.show_toolchain_doctor)
 
         # Preferences: Aurora theme (Dark/Light/System) + accent picker.
         # Gear icon is theme-aware; theme_utils.apply_theme also refreshes it.
@@ -355,9 +371,7 @@ class Application(QtWidgets.QMainWindow):
 
         # Init zoom label from saved preference.
         from frontEnd.theme_utils import get_preferences
-        u_home = os.path.join('library', 'config') if os.name == 'nt' \
-            else os.path.expanduser('~')
-        zp = get_preferences(u_home).get("zoom_level", 100)
+        zp = get_preferences().get("zoom_level", 100)
         self.zoom_label.setText(f" {zp}% ")
 
         # Divider so the view controls aren't glued to the brand logo.
@@ -365,10 +379,7 @@ class Application(QtWidgets.QMainWindow):
 
         # FOSSEE logo kept top-right of the action bar (eSim brand).
         self.logo = QtWidgets.QLabel()
-        self.logopic = QtGui.QPixmap(
-            os.path.join(
-                os.path.abspath(''), init_path + 'images', 'fosseeLogo.png'
-            ))
+        self.logopic = QtGui.QPixmap(paths.image_path('fosseeLogo.png'))
         self.logopic = self.logopic.scaled(
             QSize(150, 150), QtCore.Qt.AspectRatioMode.KeepAspectRatio,
             QtCore.Qt.TransformationMode.SmoothTransformation)
@@ -378,7 +389,7 @@ class Application(QtWidgets.QMainWindow):
 
         # Left Tool bar Action Widget
         self.kicad = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/kicad.png'),
+            create_rounded_icon(paths.image_path('kicad.png')),
             'Open Schematic', self
         )
         self.kicad.setShortcut("Ctrl+K")
@@ -387,7 +398,7 @@ class Application(QtWidgets.QMainWindow):
         self.kicad.triggered.connect(self.obj_kicad.openSchematic)
 
         self.conversion = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/ki-ng.png'),
+            create_rounded_icon(paths.image_path('ki-ng.png')),
             'Convert to Ngspice', self
         )
         self.conversion.setShortcut("Ctrl+Alt+C")
@@ -396,7 +407,7 @@ class Application(QtWidgets.QMainWindow):
         self.conversion.triggered.connect(self.obj_kicad.openKicadToNgspice)
 
         self.ngspice = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/ngspice.png'),
+            create_rounded_icon(paths.image_path('ngspice.png')),
             'Simulate', self
         )
         self.ngspice.setShortcut("Ctrl+G")
@@ -404,7 +415,7 @@ class Application(QtWidgets.QMainWindow):
         self.ngspice.triggered.connect(self.plotFlagPopBox)
 
         self.model = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/model.png'),
+            create_rounded_icon(paths.image_path('model.png')),
             'Model Editor', self
         )
         self.model.setShortcut("Ctrl+M")
@@ -413,7 +424,7 @@ class Application(QtWidgets.QMainWindow):
         self.model.triggered.connect(self.open_modelEditor)
 
         self.subcircuit = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/subckt.png'),
+            create_rounded_icon(paths.image_path('subckt.png')),
             'Subcircuit', self
         )
         self.subcircuit.setShortcut("Ctrl+B")
@@ -425,7 +436,7 @@ class Application(QtWidgets.QMainWindow):
         # tab inside the Makerchip dock (Makerchip / NgVeri / NGHDL), so model
         # creation for both Verilog and VHDL is in one place.
         self.makerchip = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/makerchip.png'),
+            create_rounded_icon(paths.image_path('makerchip.png')),
             'Model Creation (Verilog / VHDL)', self
         )
         self.makerchip.setToolTip(
@@ -436,7 +447,7 @@ class Application(QtWidgets.QMainWindow):
         # Makerchip straight on the VHDL / NGHDL path so the feature stays
         # discoverable from the launcher even after the merge.
         self.nghdl = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/nghdl.png'),
+            create_rounded_icon(paths.image_path('nghdl.png')),
             'NGHDL', self
         )
         self.nghdl.setToolTip(
@@ -444,7 +455,7 @@ class Application(QtWidgets.QMainWindow):
         self.nghdl.triggered.connect(self.open_nghdl)
 
         self.omedit = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/omedit.png'),
+            create_rounded_icon(paths.image_path('omedit.png')),
             'Modelica Converter', self
         )
         self.omedit.setToolTip(
@@ -452,14 +463,14 @@ class Application(QtWidgets.QMainWindow):
         self.omedit.triggered.connect(self.open_OMedit)
 
         self.omoptim = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/omoptim.png'),
+            create_rounded_icon(paths.image_path('omoptim.png')),
             'OM Optimisation', self
         )
         self.omoptim.setToolTip("OM Optimisation - Run OpenModelica optimizer")
         self.omoptim.triggered.connect(self.open_OMoptim)
 
         self.conToeSim = QtGui.QAction(
-            create_rounded_icon(init_path + 'images/icon.png'),
+            create_rounded_icon(paths.image_path('icon.png')),
             'Schematic Converter', self
         )
         self.conToeSim.setToolTip(
@@ -524,23 +535,31 @@ class Application(QtWidgets.QMainWindow):
         file_menu.addAction(self.exit_action)
 
         # ----- Edit -----
+        # Each action dispatches to the matching slot on whatever widget has
+        # focus (a QLineEdit / QTextEdit / QScintilla editor), so the menu
+        # actually does something instead of being five dead entries.
         edit_menu = bar.addMenu('&Edit')
         undo_action = QtGui.QAction('Undo', self)
         undo_action.setShortcut('Ctrl+Z')
+        undo_action.triggered.connect(lambda: self._edit_dispatch('undo'))
         edit_menu.addAction(undo_action)
         redo_action = QtGui.QAction('Redo', self)
         redo_action.setShortcut('Ctrl+Shift+Z')
+        redo_action.triggered.connect(lambda: self._edit_dispatch('redo'))
         edit_menu.addAction(redo_action)
         edit_menu.addSeparator()
         cut_action = QtGui.QAction('Cut', self)
         # No Ctrl+X here: it belongs to Close Project; a duplicate would make
         # the shortcut ambiguous and break both.
+        cut_action.triggered.connect(lambda: self._edit_dispatch('cut'))
         edit_menu.addAction(cut_action)
         copy_action = QtGui.QAction('Copy', self)
         copy_action.setShortcut('Ctrl+C')
+        copy_action.triggered.connect(lambda: self._edit_dispatch('copy'))
         edit_menu.addAction(copy_action)
         paste_action = QtGui.QAction('Paste', self)
         paste_action.setShortcut('Ctrl+V')
+        paste_action.triggered.connect(lambda: self._edit_dispatch('paste'))
         edit_menu.addAction(paste_action)
         edit_menu.addSeparator()
         edit_menu.addAction(self.preferences_action)
@@ -562,7 +581,7 @@ class Application(QtWidgets.QMainWindow):
             )
         )
         view_menu.addAction(project_explorer_action)
-        console_action = QtGui.QAction('Console', self)
+        self.console_action = console_action = QtGui.QAction('Console', self)
         console_action.setCheckable(True)
         console_action.setChecked(False)
         console_action.triggered.connect(
@@ -599,6 +618,8 @@ class Application(QtWidgets.QMainWindow):
         help_menu = bar.addMenu('&Help')
         help_menu.addAction(self.helpfile)
         help_menu.addAction(self.devdocs)
+        help_menu.addSeparator()
+        help_menu.addAction(self.doctor_action)
         help_menu.addSeparator()
         help_menu.addAction(self.about_action)
 
@@ -655,13 +676,20 @@ class Application(QtWidgets.QMainWindow):
         else:
             self.showFullScreen()
 
+    def _edit_dispatch(self, method):
+        """Route an Edit-menu action (undo/redo/cut/copy/paste) to the
+        matching slot on the currently focused widget, if it has one. Keeps
+        the menu honest without owning any clipboard state itself."""
+        widget = QtWidgets.QApplication.focusWidget()
+        slot = getattr(widget, method, None)
+        if callable(slot):
+            slot()
+
     def _toggle_theme(self):
         """Flip between forced Light and Dark and persist the choice."""
         import json
         from frontEnd.theme_utils import get_preferences
-        user_home = os.path.join('library', 'config') if os.name == 'nt' \
-            else os.path.expanduser('~')
-        prefs = get_preferences(user_home)
+        prefs = get_preferences()
         cur = prefs.get("theme_mode", "System")
         if cur == "Dark":
             new_mode = "Light"
@@ -672,7 +700,7 @@ class Application(QtWidgets.QMainWindow):
             new_mode = "Light" \
                 if scheme == QtCore.Qt.ColorScheme.Dark else "Dark"
         prefs["theme_mode"] = new_mode
-        path = os.path.join(user_home, ".esim", "preferences.json")
+        path = paths.esim_config_path("preferences.json")
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
@@ -688,14 +716,12 @@ class Application(QtWidgets.QMainWindow):
         """Adjust the global UI zoom (50–300%); persists + re-applies theme."""
         import json
         from frontEnd.theme_utils import get_preferences, apply_theme
-        user_home = os.path.join('library', 'config') if os.name == 'nt' \
-            else os.path.expanduser('~')
-        prefs = get_preferences(user_home)
+        prefs = get_preferences()
         current_zoom = prefs.get("zoom_level", 100)
         new_zoom = max(50, min(300, current_zoom + delta))
         if new_zoom != current_zoom:
             prefs["zoom_level"] = new_zoom
-            path = os.path.join(user_home, ".esim", "preferences.json")
+            path = paths.esim_config_path("preferences.json")
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as f:
@@ -755,6 +781,11 @@ class Application(QtWidgets.QMainWindow):
         self.btn_log.setAutoRaise(True)
         self.btn_log.setToolTip('Show / hide the full console log')
         self.btn_log.toggled.connect(self._toggle_console_btn)
+        # Keep the View ▸ Console menu checkbox in sync when the console is
+        # toggled from this status-bar button (otherwise the menu tick went
+        # stale). setChecked emits `toggled`, not `triggered`, so this does not
+        # re-fire the menu action's handler -- no feedback loop.
+        self.btn_log.toggled.connect(self.console_action.setChecked)
         bar.addPermanentWidget(self.btn_log)
 
         # Right-zone simulation-status dot: a tiny premium affordance —
@@ -783,7 +814,7 @@ class Application(QtWidgets.QMainWindow):
         if win is None:
             win = _SnapshotWindow()
             win.setWindowTitle('Project Snapshots')
-            win.setWindowIcon(QtGui.QIcon(init_path + 'images/logo.png'))
+            win.setWindowIcon(QtGui.QIcon(paths.image_path('logo.png')))
             lay = QtWidgets.QVBoxLayout(win)
             lay.setContentsMargins(0, 0, 0, 0)
             lay.addWidget(te)
@@ -815,37 +846,13 @@ class Application(QtWidgets.QMainWindow):
         win.close()
 
     def plotFlagPopBox(self):
-        """This function displays a pop-up box with message- Do you want Ngspice plots? and oprions Yes and NO.
-        
-        If the user clicks on Yes, both the NgSpice and python plots are displayed and if No is clicked then only the python plots."""
+        """Ask whether the user wants native Ngspice plots, then run.
 
-        settings = QtCore.QSettings('eSim', 'eSim')
-        if settings.value('ngspicePlots/remember', False, type=bool):
-            self.plotFlag = settings.value('ngspicePlots/flag', False, type=bool)
-            self.open_ngspice()
-            return
-
-        msg_box = QtWidgets.QMessageBox(self)
-        msg_box.setWindowTitle("Ngspice Plots")
-        msg_box.setText("Do you want Ngspice plots?")
-        # Widen the message label so the window title is not clipped behind the
-        # close/minimise/maximise buttons. QMessageBox ignores setMinimumWidth.
-        msg_box.setStyleSheet("QLabel { min-width: 360px; }")
-
-        remember_cb = QtWidgets.QCheckBox(
-            "Remember my choice (re-enable in Preferences ▸ Simulation)")
-        msg_box.setCheckBox(remember_cb)
-
-        yes_button = msg_box.addButton("Yes", QtWidgets.QMessageBox.ButtonRole.YesRole)
-        msg_box.addButton("No", QtWidgets.QMessageBox.ButtonRole.NoRole)
-
-        msg_box.exec()
-        self.plotFlag = msg_box.clickedButton() == yes_button
-
-        if remember_cb.isChecked():
-            settings.setValue('ngspicePlots/remember', True)
-            settings.setValue('ngspicePlots/flag', self.plotFlag)
-
+        If Yes, both the NgSpice and python plots are displayed; if No, only the
+        python plots. The popup + its "remember my choice" persistence live in
+        ``dialogs.ask_ngspice_plots`` (shared with TerminalUi's redo path)."""
+        from frontEnd.dialogs import ask_ngspice_plots
+        self.plotFlag = ask_ngspice_plots(self)
         self.open_ngspice()
 
     def closeEvent(self, event):
@@ -877,19 +884,14 @@ class Application(QtWidgets.QMainWindow):
 
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             self._save_snapshot_dock_state()
-            for proc in self.obj_appconfig.procThread_list:
-                try:
-                    proc.terminate()
-                except BaseException:
-                    pass
-            try:
-                for process_object in self.obj_appconfig.process_obj:
-                    try:
-                        process_object.close()
-                    except BaseException:
-                        pass
-            except BaseException:
-                pass
+            # Terminate every tracked child through its handle. Copy the lists:
+            # WorkerThreads may be reaping them concurrently as children exit.
+            # (QProcess.close() only shuts I/O channels, it does NOT stop the
+            # process -- terminate_handle actually kills it.)
+            for proc in list(self.obj_appconfig.procThread_list):
+                Worker.terminate_handle(proc)
+            for process_object in list(self.obj_appconfig.process_obj):
+                Worker.terminate_handle(process_object)
 
             # Check if "Open project" and "New project" window is open.
             # If yes, just close it when application is closed.
@@ -936,7 +938,7 @@ class Application(QtWidgets.QMainWindow):
                     'Current project is : ' +
                     self.obj_appconfig.current_project["ProjectName"]
                 )
-            except BaseException:
+            except Exception:
                 pass
 
     def open_project(self):
@@ -953,8 +955,14 @@ class Application(QtWidgets.QMainWindow):
             project_name = self.obj_appconfig.get_proj_stem()
             self.obj_Mainview.obj_timeExplorer.load_snapshots(project_name)
             self.obj_appconfig.save_current_project()
-        except BaseException:
-            pass
+        except Exception as e:
+            # Never swallow a real open failure: log it and tell the user
+            # instead of a silent no-op that reads as "nothing happened".
+            traceback.print_exc()
+            from frontEnd.dialogs import show_error
+            show_error(self, "Open Project",
+                       f"Could not open the project:\n{e}")
+            self.obj_appconfig.print_error(f"Open project failed: {e}")
 
     def close_project(self):
         """
@@ -974,11 +982,12 @@ class Application(QtWidgets.QMainWindow):
             pass
         else:
             temp = self.obj_appconfig.current_project['ProjectName']
-            for pid in self.obj_appconfig.proc_dict.get(temp, []):
-                try:
-                    os.kill(pid, 9)
-                except BaseException:
-                    pass
+            # Terminate each tracked child through its handle (copy the list:
+            # a WorkerThread may be reaping the same list as its child exits).
+            # Graceful terminate, never os.kill on a bare recycled pid.
+            for handle in list(self.obj_appconfig.proc_dict.get(temp, [])):
+                Worker.terminate_handle(handle)
+            self.obj_appconfig.proc_dict[temp] = []
             self.obj_Mainview.obj_dockarea.closeDock()
             closed_stem = self.obj_appconfig.get_proj_stem() \
                 or os.path.basename(current_project)
@@ -1028,6 +1037,12 @@ class Application(QtWidgets.QMainWindow):
         self.obj_appconfig.print_info('DevDocs is called')
         print("Current Project is : ", self.obj_appconfig.current_project)
         webbrowser.open("https://esim.readthedocs.io/en/latest/index.html")
+
+    def show_toolchain_doctor(self):
+        """Help menu -> Check Simulation Toolchain: the doctor dialog."""
+        self.obj_appconfig.print_info('Toolchain doctor is called')
+        from maker import ToolchainCheck
+        ToolchainCheck.show_dialog(self)
 
     def open_preferences(self):
         """Open the Aurora Preferences dialog (theme + accent picker). The
@@ -1364,7 +1379,12 @@ class MainView(QtWidgets.QWidget):
 
         # Adding to main Layout
         self.mainLayout.addWidget(self.leftSplit)
-        self.leftSplit.setSizes([int(self.width() / 4.5), self.height()])
+        # leftSplit is horizontal, so both sizes are widths: give the explorer
+        # ~1/4.5 of the width and the rest to the work area. (The old second
+        # value was self.height() -- a height passed as a width; Qt normalised
+        # it so it was harmless, but the intent is now explicit.)
+        left = int(self.width() / 4.5)
+        self.leftSplit.setSizes([left, self.width() - left])
         # Console starts collapsed: the dock area owns the full work height and
         # the status bar carries the latest message. Expand on demand via the
         # View menu / status-bar log button (toggle_console).
@@ -1400,6 +1420,14 @@ def main(args):
     The splash screen opened at the starting of screen is performed
     by this function.
     """
+    # Headless doctor mode: report the simulation-toolchain state and exit
+    # BEFORE any QApplication/GUI work, so `esim --doctor` works over ssh and
+    # in installer self-checks.
+    if '--doctor' in args:
+        from maker import ToolchainCheck
+        print(ToolchainCheck.report())
+        sys.exit(0 if not ToolchainCheck.failures() else 1)
+
     print("Starting eSim......")
     # Set non-native dialogs globally
     # NOTE: AA_DontUseNativeDialogs removed in Qt6.
@@ -1447,21 +1475,14 @@ def main(args):
     except Exception:
         pass
 
-    appView = Application()
-    last_project_path = appView.obj_appconfig.load_last_project()
-    if last_project_path:
-        try:
-            open_proj = OpenProjectInfo()
-            directory, filelist = open_proj.body(last_project_path)
-            if directory:
-                appView.obj_Mainview.obj_projectExplorer.addTreeNode(
-                    directory, filelist)
-        except Exception as e:
-            print("Could not restore last project:", str(e))
-    appView.obj_Mainview.obj_timeExplorer.load_last_snapshots()
-    appView.hide()
-
-    splash_pix = QtGui.QPixmap(init_path + 'images/splash_screen_esim.png')
+    # Show the splash FIRST -- before the slow Application() construction and
+    # last-project restore -- so the user sees it *during* the wait instead of
+    # after it. The old sequence built the whole window first (blank screen
+    # while that ran), then spent 1500ms fading the splash in inside a nested
+    # QEventLoop: the animation was the only thing the user watched, and it ran
+    # after the slow part was already done. Both are gone: the splash appears
+    # instantly and closes the moment the workspace/main window shows.
+    splash_pix = QtGui.QPixmap(paths.image_path('splash_screen_esim.png'))
     splash_pix = splash_pix.scaledToWidth(
         int(splash_pix.width() * 0.8),
         QtCore.Qt.TransformationMode.SmoothTransformation)
@@ -1487,7 +1508,7 @@ def main(args):
                 transparent_base, QtCore.Qt.WindowType.WindowStaysOnTopHint)
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
             self.base_pixmap = pixmap
-            self.opacity = 0.0
+            self.opacity = 1.0
 
         def setOpacity(self, opacity):
             self.opacity = opacity
@@ -1502,31 +1523,31 @@ def main(args):
     splash = FadingSplash(rounded_splash)
     splash.setDisabled(True)
     splash.show()
+    # Force one paint now so the splash is actually on screen before we block
+    # the event loop building the main window.
+    app.processEvents()
 
-    # Prolonged fade-in (1500ms) that manually fades the pixmap.
-    splash._fade_anim = QtCore.QVariantAnimation(splash)
-    splash._fade_anim.setDuration(1500)
-    splash._fade_anim.setStartValue(0.0)
-    splash._fade_anim.setEndValue(1.0)
-    splash._fade_anim.setEasingCurve(QtCore.QEasingCurve.Type.InOutQuad)
-    splash._fade_anim.valueChanged.connect(splash.setOpacity)
-
-    loop = QtCore.QEventLoop()
-    splash._fade_anim.finished.connect(loop.quit)
-    splash._fade_anim.start()
-    loop.exec()
+    # The slow part -- window construction + last-project restore -- now runs
+    # with the splash already visible.
+    appView = Application()
+    last_project_path = appView.obj_appconfig.load_last_project()
+    if last_project_path:
+        try:
+            open_proj = OpenProjectInfo()
+            directory, filelist = open_proj.body(last_project_path)
+            if directory:
+                appView.obj_Mainview.obj_projectExplorer.addTreeNode(
+                    directory, filelist)
+        except Exception as e:
+            print("Could not restore last project:", str(e))
+    appView.obj_Mainview.obj_timeExplorer.load_last_snapshots()
+    appView.hide()
 
     appView.splash = splash
     appView.obj_workspace.returnWhetherClickedOrNot(appView)
 
     try:
-        if os.name == 'nt':
-            user_home = os.path.join('library', 'config')
-        else:
-            user_home = os.path.expanduser('~')
-
-        with open(os.path.join(user_home, ".esim/workspace.txt"), 'r') as file:
-            work = int(file.read(1))
+        work = int(paths.read_workspace()[0])
     # ValueError: an empty/truncated workspace.txt makes int('') fail; treat it
     # the same as a missing file and fall back to the workspace picker, rather
     # than letting the exception abort startup.
@@ -1548,3 +1569,5 @@ if __name__ == '__main__':
         main(sys.argv)
     except Exception as err:
         print("Error: ", err)
+        # Full traceback so a startup crash is diagnosable, not a bare message.
+        traceback.print_exc()

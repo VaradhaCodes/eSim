@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 from PyQt6.QtWidgets import QMessageBox
 from configuration import Dialogs
@@ -28,11 +29,12 @@ class PspiceLibConverter:
             # Prepare the command as a list
             output_dir = os.path.dirname(file_path)
 
-            command = ["python3", "libparser.py", file_path, output_dir]
+            command = [sys.executable, "libparser.py", file_path, output_dir]
             print(f"Running command: {' '.join(command)} in directory: {parser_path}")
 
             try:
-                subprocess.run(command, check=True, cwd=parser_path)
+                subprocess.run(command, check=True, cwd=parser_path,
+                               capture_output=True, text=True)
                 # Message box with the conversion success message
                 msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Information)
@@ -42,7 +44,12 @@ class PspiceLibConverter:
                 print("Conversion of Pspice library is Successful")
 
             except subprocess.CalledProcessError as e:
-                print("Error:", e)
+                detail = (e.stderr or e.stdout or str(e)).strip()
+                print("Error:", detail)
+                Dialogs.critical(
+                    self.parent, "Conversion failed",
+                    "PSpice library conversion failed:\n\n"
+                    + "\n".join(detail.splitlines()[:15]))
         else:
             print("File is empty. Cannot perform conversion.")
             # A message box indicating that the file is empty

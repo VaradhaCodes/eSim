@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 from PyQt6.QtWidgets import QMessageBox
 from configuration import Dialogs
@@ -32,10 +33,11 @@ class LTspiceLibConverter:
             print(parser_path)
             # Strip the .asy extension
             file_path_no_ext = os.path.splitext(file_path)[0]
-            command = ["python3", "lib_LTspice2Kicad.py", file_path_no_ext]
+            command = [sys.executable, "lib_LTspice2Kicad.py", file_path_no_ext]
             print("Running command:", " ".join(command), "in", parser_path)
             try:
-                subprocess.run(command, check=True, cwd=parser_path)
+                subprocess.run(command, check=True, cwd=parser_path,
+                               capture_output=True, text=True)
 
                 # Message box with the conversion success message
                 msg_box = Dialogs.make_message_box(self.parent)
@@ -46,7 +48,12 @@ class LTspiceLibConverter:
                 print("Conversion of LTspice library is Successful")
 
             except subprocess.CalledProcessError as e:
-                print("Error:", e)
+                detail = (e.stderr or e.stdout or str(e)).strip()
+                print("Error:", detail)
+                Dialogs.critical(
+                    self.parent, "Conversion failed",
+                    "LTspice library conversion failed:\n\n"
+                    + "\n".join(detail.splitlines()[:15]))
         else:
             print("File is empty. Cannot perform conversion.")
             # A message box indicating that the file is empty

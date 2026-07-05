@@ -39,6 +39,17 @@ def test_unconfigured_returns_path_or_none(fake_home, monkeypatch):
     monkeypatch.setenv("PATH", "")
     assert fake_home.iverilog_binary() is None
     assert fake_home.vvp_binary() is None
+    assert fake_home.nghdl_cfg("NGHDL", "NGHDL_HOME") == ""
+    assert fake_home.nghdl_cfg("NGHDL", "NGHDL_HOME", "fallback") == \
+        "fallback"
+
+
+def test_unconfigured_digital_models_use_safe_user_default(fake_home):
+    expected = os.path.join(
+        os.path.expanduser("~"), ".nghdl", "DigitalModelLibrary")
+    assert fake_home.digital_model_root() == expected
+    assert fake_home.cosim_vvp_path("counter") == os.path.join(
+        expected, "Ngveri", "counter", "counter")
 
 
 def test_set_manual_paths_roundtrip(fake_home, tmp_path):

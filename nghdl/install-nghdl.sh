@@ -91,6 +91,42 @@ detect_profile() {
     log "NGHDL profile: Ubuntu $UBUNTU_VER | CFLAGS='$NGHDL_CFLAGS'"
 }
 
+# Fail fast on the classic fresh-VM traps (no disk, no network, no apt)
+# BEFORE an hour of compiling, with messages that say exactly what to fix.
+preflight() {
+    log "Preflight checks"
+
+    # ~6 GB: ngspice source tree + build objects + iverilog build. df -P for
+    # portable output; check the filesystem $HOME lives on (build target).
+    local free_kb need_kb=6000000
+    free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
+    if [ -n "$free_kb" ] && [ "$free_kb" -lt "$need_kb" ]; then
+        echo "ERROR: less than 6 GB free on $HOME ($((free_kb / 1024)) MB)."
+        echo "       The nghdl-simulator + Icarus builds need ~6 GB. Free up"
+        echo "       space and re-run."
+        exit 1
+    fi
+
+    if ! command -v apt-get &>/dev/null; then
+        echo "ERROR: apt-get not found - this installer supports Ubuntu only."
+        exit 1
+    fi
+
+    # apt must be able to fetch package lists (proxy/offline detection).
+    # Non-fatal only if the cache is already primed; a hard failure here
+    # otherwise surfaces as cryptic per-package errors later.
+    if ! sudo apt-get update -qq 2>/dev/null; then
+        warn "apt-get update failed - check network/proxy. Continuing with"
+        warn "the existing package cache; installs below may fail."
+    fi
+
+    if [ ! -f "$src_dir/${nghdl}-source.tar.xz" ]; then
+        echo "ERROR: $src_dir/${nghdl}-source.tar.xz not found."
+        echo "       The nghdl simulator source tarball must ship with eSim."
+        exit 1
+    fi
+}
+
 installDependency() {
     log "Installing build dependencies"
     sudo apt-get install -y \
@@ -281,6 +317,50 @@ createConfigFile() {
     fi
 }
 
+# Post-install self-check: prove the pieces THIS script owns actually landed
+# (the full app-level doctor runs from install-eSim.sh afterwards).
+selfCheck() {
+    log "NGHDL post-install self-check"
+    local bad=0
+
+    if [ -x "$HOME/$nghdl/install_dir/bin/ngspice" ]; then
+        log "ngspice: $HOME/$nghdl/install_dir/bin/ngspice"
+    else
+        warn "ngspice binary missing at $HOME/$nghdl/install_dir/bin/ngspice"
+        bad=1
+    fi
+
+    local cmdir="$HOME/$nghdl/install_dir/lib/ngspice"
+    for cm in ghdl.cm ivlng; do
+        if ls "$cmdir"/${cm}* >/dev/null 2>&1; then
+            log "code model present: ${cm}*"
+        else
+            warn "code model MISSING: $cmdir/${cm}* (VHDL/d_cosim will fail)"
+            bad=1
+        fi
+    done
+
+    if ghdl --version 2>/dev/null | grep -qi 'mcode'; then
+        warn "GHDL backend is mcode - nghdl simulation will fail (see"
+        warn "install-nghdl-scripts/GHDL-BACKEND-26.04.md)"
+        bad=1
+    fi
+
+    if [ "$ICARUS_OK" -eq 1 ]; then
+        log "Icarus Verilog with libvvp: $ICARUS_PREFIX"
+    else
+        warn "Icarus libvvp build fell back to apt iverilog - the Verilog"
+        warn "Verifier works, d_cosim does not. Re-run --install to retry."
+    fi
+
+    if [ $bad -ne 0 ]; then
+        warn "Self-check found problems (above). Run 'esim --doctor' after"
+        warn "the eSim install finishes for the full actionable report."
+    else
+        log "Self-check passed."
+    fi
+}
+
 createSoftLink() {
     sudo chmod 755 "$src_dir/src/ngspice_ghdl.py"
     cd /usr/local/bin
@@ -303,11 +383,13 @@ detect_profile
 case "$option" in
     --install)
         set -e; set -E; trap error_exit ERR
+        preflight
         installDependency
         installNGHDL
         installIcarus
         createConfigFile
         createSoftLink
+        selfCheck
         log "NGHDL installed successfully on Ubuntu $UBUNTU_VER"
         ;;
 

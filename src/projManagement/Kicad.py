@@ -42,28 +42,6 @@ class Kicad:
         self.obj_validation = Validation.Validation()
         self.obj_appconfig = Appconfig()
         self.obj_dockarea = dockarea
-        self.obj_workThread = Worker.WorkerThread(None)
-
-    def check_open_schematic(self):
-        """
-        This function checks if any of the project's schematic is open or not
-
-        @params
-
-        @return
-            True        => If the project's schematic is not open
-            False       => If the project's schematic is open
-        """
-        if self.obj_workThread:
-            procList = self.obj_workThread.get_proc_threads()[:]
-            if procList:
-                for proc in procList:
-                    if proc.poll() is None:
-                        return True
-                    else:
-                        self.obj_workThread.get_proc_threads().remove(proc)
-
-        return False
 
     def openSchematic(self):
         """
@@ -91,19 +69,15 @@ class Kicad:
             # .kicad_sch and kicad4 .sch, independent of the folder name).
             schematic_file = main_schematic(self.projDir, self.projName)
 
-            # When running as Flatpak, use flatpak run to launch KiCad
-            # (install: flatpak install flathub org.kicad.KiCad). Paths are
-            # quoted so workspaces containing spaces still launch (Worker runs
-            # the command through shlex.split).
-            if os.environ.get('ESIM_FLATPAK') == '1':
-                self.cmd = (
-                    "flatpak run --command=eeschema org.kicad.KiCad " +
-                    shlex.quote(schematic_file)
-                )
-            else:
-                self.cmd = "eeschema " + shlex.quote(schematic_file)
+            # Path is quoted so workspaces containing spaces still launch
+            # (Worker runs the command through shlex.split).
+            self.cmd = "eeschema " + shlex.quote(schematic_file)
 
-            self.obj_workThread.args = self.cmd
+            # Fresh thread per launch: the thread now babysits eeschema with a
+            # blocking wait(), so a reused thread would silently refuse a second
+            # launch while the first schematic is still open. WorkerThread
+            # retains itself (Appconfig.worker_threads) until its child exits.
+            self.obj_workThread = Worker.WorkerThread(self.cmd)
             self.obj_workThread.start()
 
         else:

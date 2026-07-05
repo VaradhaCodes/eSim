@@ -23,7 +23,7 @@ for _p in (SRC, PKG):
         sys.path.insert(0, _p)
 
 from PyQt6 import QtWidgets                                    # noqa: E402
-from kicadtoNgspice import DeviceModel, SubcircuitTab, TrackWidget  # noqa: E402
+from kicadtoNgspice import DeviceModel, SubcircuitTab         # noqa: E402
 from kicadtoNgspice.ModelGroupWidget import ModelGroupWidget   # noqa: E402
 from projManagement import modelCache                          # noqa: E402
 from projManagement.projectPaths import previous_values_path   # noqa: E402
@@ -53,7 +53,6 @@ def _real_lib():
 
 
 def _build_dm(schematic, cir):
-    TrackWidget.TrackWidget.reset()
     return DeviceModel.DeviceModel(schematic, cir)
 
 
@@ -77,7 +76,7 @@ def test_cache_hint_prefills_blank_group():
         dm = _build_dm(["q1 a b c eSim_NPN", "q2 a b c eSim_NPN"], _tmp_cir())
         grp = _group_with_ref(dm, "q1")
         assert grp.group_path() == lib
-        track = TrackWidget.TrackWidget.deviceModelTrack
+        track = dm.obj_trac.deviceModelTrack
         assert track["q1"] == lib and track["q2"] == lib
     finally:
         os.remove(lib)
@@ -139,7 +138,6 @@ def test_subcircuit_hint_applied_when_ports_match():
     sub_dir = _make_sub_dir(3)
     try:
         modelCache.remember("foo", sub_dir)
-        TrackWidget.TrackWidget.reset()
         tab = SubcircuitTab.SubcircuitTab(
             [_line("x1", 3, "foo"), _line("x2", 3, "foo")], _tmp_cir())
         grp = _group_with_ref(tab, "x1")
@@ -153,7 +151,6 @@ def test_subcircuit_hint_skipped_when_ports_mismatch():
     sub_dir = _make_sub_dir(3)           # subckt declares 3 ports
     try:
         modelCache.remember("foo", sub_dir)
-        TrackWidget.TrackWidget.reset()
         # Instance uses 4 ports -> hint must NOT be applied.
         tab = SubcircuitTab.SubcircuitTab([_line("x1", 4, "foo")], _tmp_cir())
         grp = _group_with_ref(tab, "x1")

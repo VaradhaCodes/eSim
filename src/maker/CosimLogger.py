@@ -93,6 +93,12 @@ class CosimLog:
         param termedit: optional QTextEdit whose .append() renders HTML; pass
                         None for non-GUI contexts (netlist staging, sim run)
                         where only terminal+file output is wanted.
+        param sink:     optional callable(html) used INSTEAD of termedit.append
+                        as the GUI sink. Pass a queued-signal emit (e.g. a
+                        pyqtSignal(str).emit connected to the terminal) when the
+                        logger may be driven from a worker thread, so GUI writes
+                        cross back to the GUI thread instead of touching the
+                        QTextEdit off-thread.
     '''
 
     _COLOR = {
@@ -107,15 +113,24 @@ class CosimLog:
         'stderr': '#B00000',
     }
 
-    def __init__(self, termedit=None, name=_ROOT_NAME):
+    def __init__(self, termedit=None, name=_ROOT_NAME, sink=None):
         configure_logging()
         self.termedit = termedit
+        # Prefer an explicit sink (typically a queued signal.emit so the logger
+        # is safe to drive from a worker thread); else fall back to appending
+        # straight to the QTextEdit.
+        if sink is not None:
+            self._sink = sink
+        elif termedit is not None:
+            self._sink = termedit.append
+        else:
+            self._sink = None
         self.logger = logging.getLogger(name)
 
     # -- internal GUI sink --------------------------------------------------
     def _gui(self, html):
-        if self.termedit is not None:
-            self.termedit.append(html)
+        if self._sink is not None:
+            self._sink(html)
 
     def _span(self, msg, color, size=12, weight=500):
         self._gui(

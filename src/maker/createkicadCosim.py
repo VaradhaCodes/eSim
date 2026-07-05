@@ -20,6 +20,7 @@ from PyQt6 import QtWidgets
 from configuration import Dialogs
 
 from . import createkicad
+from . import kicad_symlib
 
 
 class CosimSchematic(createkicad.AutoSchematic):
@@ -38,16 +39,16 @@ class CosimSchematic(createkicad.AutoSchematic):
         # Absolute path of the compiled d_cosim artifact (Icarus vvp). Recorded
         # in the XML so the netlister never has to re-derive it.
         self.sim_lib = sim_lib
-        # Mirror AutoSchematic.init's symbol-library path convention, but target
-        # the separate eSim_NgVeriCosim library.
+        # Mirror AutoSchematic.init's symbol-library path convention (now
+        # ~/.esim/kicad_symbols via kicad_symlib), but target the separate
+        # eSim_NgVeriCosim library. super().init already set this attribute to
+        # the eSim_Ngveri path; override it here.
+        legacy = []
         if os.name == 'nt':
             inst_dir = self.App_obj.src_home.replace('\\eSim', '')
-            self.kicad_ngveri_sym = (
-                inst_dir +
-                '/KiCad/share/kicad/symbols/eSim_NgVeriCosim.kicad_sym')
-        else:
-            self.kicad_ngveri_sym = \
-                '/usr/share/kicad/symbols/eSim_NgVeriCosim.kicad_sym'
+            legacy.append(inst_dir + '/KiCad/share/kicad/symbols')
+        self.kicad_ngveri_sym = kicad_symlib.generated_symlib_path(
+            "eSim_NgVeriCosim", legacy_dirs=legacy)
 
     def createKicadSymbol(self):
         '''
@@ -148,47 +149,18 @@ class CosimSchematic(createkicad.AutoSchematic):
         except FileNotFoundError:
             pass
 
-    @staticmethod
-    def _kicad_config_dir():
-        '''KiCad per-user config root (holds the version dirs with the symbol
-        library tables): %APPDATA%/kicad on Windows, ~/.config/kicad elsewhere.'''
-        if os.name == 'nt':
-            return os.path.join(os.environ.get('APPDATA', ''), 'kicad')
-        return os.path.join(os.path.expanduser('~'), '.config', 'kicad')
-
     def _ensure_lib_registered(self):
         '''
             Make sure eSim_NgVeriCosim is in the user's KiCad symbol library
-            table(s). The installer seeds the table from the repo template at
-            install time, but a library added AFTER install (this one) is absent
-            for existing users, so the symbol never appears in eeschema. Register
-            it idempotently in every version dir that has a table. Best-effort:
-            failures here must never block model creation.
+            table(s), pointing at its ~/.esim path. A library added AFTER
+            install (this one) is absent for existing users, and after the
+            relocation any pre-existing ${KICAD6_SYMBOL_DIR} entry is stale;
+            kicad_symlib.ensure_lib_registered appends when absent and rewrites
+            a stale uri in place. Best-effort: never blocks model creation.
         '''
-        base = self._kicad_config_dir()
-        if not os.path.isdir(base):
-            return
-        lib_line = (
-            '  (lib (name "eSim_NgVeriCosim")(type "KiCad")'
-            '(uri "${KICAD6_SYMBOL_DIR}/eSim_NgVeriCosim.kicad_sym")'
-            '(options "")(descr "eSim NgVeri d_cosim (Icarus Verilog) '
-            'symbols"))\n')
-        for ver in os.listdir(base):
-            table = os.path.join(base, ver, 'sym-lib-table')
-            if not os.path.isfile(table):
-                continue
-            try:
-                with open(table) as fh:
-                    content = fh.read()
-                if 'eSim_NgVeriCosim' in content:
-                    continue
-                idx = content.rstrip().rfind(')')   # final ) closes the table
-                if idx == -1:
-                    continue
-                with open(table, 'w') as fh:
-                    fh.write(content[:idx] + lib_line + content[idx:])
-            except OSError:
-                pass
+        kicad_symlib.ensure_lib_registered(
+            "eSim_NgVeriCosim", self.kicad_ngveri_sym,
+            descr="eSim NgVeri d_cosim (Icarus Verilog) symbols")
 
     def createXML(self):
         '''

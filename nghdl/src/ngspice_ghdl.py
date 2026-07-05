@@ -37,10 +37,11 @@ class Mainwindow(QtWidgets.QWidget):
         self._home_cwd = os.getcwd()
         print("Initializing..........")
 
-        if os.name == 'nt':
-            self.home = os.path.join('library', 'config')
-        else:
-            self.home = os.path.expanduser('~')
+        # Per-user config lives at ~/.nghdl/config.ini on EVERY platform (the
+        # Windows bootstrap writes it there too). The old nt branch read a
+        # CWD-relative 'library/config/.nghdl/config.ini', which only worked
+        # when eSim happened to be launched from its install root.
+        self.home = os.path.expanduser('~')
 
         # Reading all variables from config.ini. A missing/empty config raises
         # here; when embedded the caller catches it and shows a placeholder
@@ -550,23 +551,25 @@ class Mainwindow(QtWidgets.QWidget):
             shutil.copy(os.path.join(self.home, self.src_home) +
                         "/src/ghdlserver/Vhpi_Package.vhdl", path + "/DUTghdl/")
 
-            if os.name == 'nt':
-                shutil.copy(os.path.join(self.home, self.src_home) +
-                            "/src/ghdlserver/libws2_32.a", path + "/DUTghdl/")
+            # (Winsock is linked with -lws2_32 by the generated
+            # start_server.sh; no bundled libws2_32.a copy is needed.)
 
             for file in self.file_list:
                 shutil.copy(str(file), path + "/DUTghdl/")
 
             os.chdir(path + "/DUTghdl")
             if os.name == 'nt':
-                # path to msys bin directory where bash is located
+                # Compile ghdlserver.c with the MSYS2 mingw64 gcc. A bare
+                # (non-login) bash has no /mingw64/bin on PATH, so export it
+                # explicitly; run via cwd + relative script so spaced install
+                # paths cannot split the command (this process chdir'd into
+                # DUTghdl just above). Arg-list form: nothing to re-quote.
                 self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                subprocess.call(self.msys_home + "/usr/bin/bash.exe " +
-                                path + "/DUTghdl/compile.sh", shell=True)
-                subprocess.call(self.msys_home + "/usr/bin/bash.exe -c " +
-                                "'chmod a+x start_server.sh'", shell=True)
-                subprocess.call(self.msys_home + "/usr/bin/bash.exe -c " +
-                                "'chmod a+x sock_pkg_create.sh'", shell=True)
+                bash = os.path.join(self.msys_home, 'usr', 'bin', 'bash.exe')
+                mingw_env = "export PATH=/mingw64/bin:/usr/bin:$PATH && "
+                subprocess.call([bash, '-c', mingw_env + 'sh compile.sh'])
+                subprocess.call([bash, '-c', 'chmod a+x start_server.sh'])
+                subprocess.call([bash, '-c', 'chmod a+x sock_pkg_create.sh'])
             else:
                 subprocess.call("bash " + path + "/DUTghdl/compile.sh",
                                 shell=True)
@@ -592,6 +595,24 @@ class Mainwindow(QtWidgets.QWidget):
             self.errorFlag = True
         self.termedit.append(str(stderror.data(), encoding='utf-8'))
 
+    def _apply_build_env(self, process):
+        """On Windows, prepend the MSYS2 mingw64/usr dirs to the QProcess
+        PATH: mingw32-make itself is started by full path, but its child
+        gcc/g++/ar/sh processes resolve via PATH, which eSim's own process
+        does not have. No-op on POSIX."""
+        if os.name != 'nt':
+            return
+        msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
+        env = QtCore.QProcessEnvironment.systemEnvironment()
+        extra = os.pathsep.join([
+            os.path.join(msys_home, 'mingw64', 'bin'),
+            os.path.join(msys_home, 'usr', 'bin'),
+        ])
+        existing = env.value('PATH', '')
+        env.insert('PATH',
+                   extra + (os.pathsep + existing if existing else ''))
+        process.setProcessEnvironment(env)
+
     def runMake(self, rebuild_only=False):
         print("run Make Called")
         # rebuild_only=True is the post-removal path: build+install the icm
@@ -613,12 +634,14 @@ class Mainwindow(QtWidgets.QWidget):
             print("Running Make command in " + self.path_icm)
             self.process = QtCore.QProcess(self)
             self.process.setWorkingDirectory(self.path_icm)
+            self._apply_build_env(self.process)
             self.process.readyReadStandardOutput.connect(self.readAllStandard)
             self.process.readyReadStandardError.connect(self.readAllStandard)
-            if os.name == "nt":
-                self.process.finished.connect(self.createSchematicLib)
-            else:
-                self.process.finished.connect(self.runMakeInstall)
+            # make install runs on every platform: the Windows nghdl tree is
+            # configured with prefix=install_dir exactly like Ubuntu, so the
+            # rebuilt ghdl.cm lands where ngspice loads code models from
+            # (<install_dir>/lib/ngspice) instead of a hand-copied guess.
+            self.process.finished.connect(self.runMakeInstall)
             self.process.start(cmd)
             print("make command process pid ---------- >", self.process.processId())
 
@@ -643,6 +666,7 @@ class Mainwindow(QtWidgets.QWidget):
 
             self.process = QtCore.QProcess(self)
             self.process.setWorkingDirectory(self.path_icm)
+            self._apply_build_env(self.process)
             self.process.readyReadStandardOutput.connect(self.readAllStandard)
             self.process.readyReadStandardError.connect(self.readAllStandard)
             self.process.finished.connect(self.createSchematicLib)
@@ -669,16 +693,9 @@ class Mainwindow(QtWidgets.QWidget):
             self.exitbtn.setEnabled(True)
 
     def _createSchematicLib(self):
-        if os.name == "nt":
-            # This copy uses paths relative to the icm build dir; run it there
-            # without leaving eSim's CWD changed.
-            _cwd = os.getcwd()
-            try:
-                os.chdir(self.path_icm)
-                shutil.copy("ghdl/ghdl.cm", "../../../../lib/ngspice/")
-            finally:
-                os.chdir(_cwd)
-
+        # (ghdl.cm is installed by `make install` into
+        # <install_dir>/lib/ngspice on every platform now; the old nt-only
+        # hand copy into the release tree pointed where ngspice never looks.)
         os.chdir(self.cur_dir)
         # Post-removal rebuild: ghdl.cm is refreshed (copied on nt / installed
         # on posix); there is no model to draw, so skip symbol creation.

@@ -37,10 +37,15 @@ _dcosim_capable = None
 
 
 def _config_path():
-    """Path to eSim's nghdl config.ini, mirroring ModelGeneration/NgVeri:
-    Windows keeps it under library/config, POSIX under the user home."""
-    home = os.path.join('library', 'config') if _WIN else os.path.expanduser('~')
-    return os.path.join(home, '.nghdl', 'config.ini')
+    """Path to eSim's nghdl config.ini under the per-user ``~/.nghdl`` dir on
+    every platform (see configuration.paths)."""
+    from configuration import paths
+    return paths.nghdl_config_path()
+
+
+def nghdl_config_path():
+    """Public path used by legacy callers that still need a full parser."""
+    return _config_path()
 
 
 def _cfg_get(section, key):
@@ -52,6 +57,22 @@ def _cfg_get(section, key):
         return value or None
     except (ConfigError, OSError):
         return None
+
+
+def nghdl_cfg(section, key, default=""):
+    """Return one NGHDL config value, safely falling back when unavailable."""
+    value = _cfg_get(section, key)
+    return value if value is not None else default
+
+
+def digital_model_root():
+    """Configured model-library root, or the safe per-user default."""
+    return nghdl_cfg(
+        'NGHDL',
+        'DIGITAL_MODEL',
+        os.path.join(os.path.expanduser('~'), '.nghdl',
+                     'DigitalModelLibrary'),
+    )
 
 
 def _prefix_of(binary):
@@ -91,9 +112,7 @@ def cosim_vvp_path(model_name):
     netlister (Convert) agree on ONE path without storing it anywhere. Mirrors
     ModelGeneration's per-model store: <DIGITAL_MODEL>/Ngveri/<model>/<model>.
     Returns None if the config is unavailable."""
-    digital_model = _cfg_get('NGHDL', 'DIGITAL_MODEL')
-    if not digital_model:
-        return None
+    digital_model = digital_model_root()
     return os.path.join(digital_model, 'Ngveri', model_name, model_name)
 
 
@@ -201,8 +220,10 @@ def set_manual_paths(iverilog_path=None, vvp_path=None):
 
 
 def iverilog_libdir():
-    """Resolve the dir containing libvvp (ngspice's ivlng dlopens it), or None.
-    Falls back to <iverilog_prefix>/lib derived from the compiler path."""
+    """Resolve the dir containing the libvvp shared library (ngspice's ivlng
+    dlopens it), or None. Falls back to <iverilog_prefix>/lib derived from the
+    compiler path; on Windows, mingw-built DLLs land in <prefix>/bin instead,
+    so prefer whichever of the two actually holds libvvp."""
     env = os.environ.get('ESIM_IVERILOG_LIB')
     if env and os.path.isdir(env):
         return env
@@ -211,9 +232,17 @@ def iverilog_libdir():
         return cfg
     binary = iverilog_binary()
     if binary:
-        cand = os.path.join(_prefix_of(binary), 'lib')
-        if os.path.isdir(cand):
-            return cand
+        prefix = _prefix_of(binary)
+        candidates = [os.path.join(prefix, 'lib')]
+        if _WIN:
+            candidates.insert(0, os.path.join(prefix, 'bin'))
+        for cand in candidates:
+            if _has_libvvp(cand):
+                return cand
+        # No libvvp anywhere: keep the POSIX-conventional lib dir when it
+        # exists so callers can still report the probed location.
+        if os.path.isdir(candidates[-1]):
+            return candidates[-1]
     return None
 
 

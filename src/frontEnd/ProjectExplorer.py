@@ -1,12 +1,12 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration import Dialogs
 import os
-import json
+import re
 from configuration.Appconfig import Appconfig
 from frontEnd.SnapshotStore import SnapshotStore
 from projManagement.Validation import Validation
 from projManagement.projectPaths import resolve_stem, canonical_path, \
-    same_project
+    same_project, find_anchors, save_project_explorer
 from codeEditor import EditorWindow
 
 
@@ -339,8 +339,9 @@ class ProjectExplorer(QtWidgets.QWidget):
     def _persist(self):
         """Write the project list to disk; tolerate an unwritable workspace."""
         try:
-            with open(self.obj_appconfig.dictPath["path"], 'w') as fh:
-                json.dump(self.obj_appconfig.project_explorer, fh)
+            save_project_explorer(
+                self.obj_appconfig.dictPath["path"],
+                self.obj_appconfig.project_explorer)
         except OSError as err:
             print("Could not save project list:", err)
 
@@ -400,19 +401,12 @@ class ProjectExplorer(QtWidgets.QWidget):
             )
 
             self.obj_appconfig.set_current_project(str(self.filePath))
-            (
-                self.obj_appconfig.
-                proc_dict[self.obj_appconfig.current_project['ProjectName']]
-            ) = []
-            if (
-                self.obj_appconfig.current_project['ProjectName'] not in
-                self.obj_appconfig.dock_dict
-            ):
-                (
-                    self.obj_appconfig.
-                    dock_dict[
-                        self.obj_appconfig.current_project['ProjectName']]
-                ) = []
+            # setdefault, never clobber: re-opening an already-open project
+            # must not drop the PIDs/docks it already has, or its live
+            # KiCad/ngspice windows are orphaned on close (cf. addTreeNode).
+            name = self.obj_appconfig.current_project['ProjectName']
+            self.obj_appconfig.proc_dict.setdefault(name, [])
+            self.obj_appconfig.dock_dict.setdefault(name, [])
 
     def openInEditor(self, filePath):
         """Open a project text file in the eSim code editor.
@@ -427,6 +421,14 @@ class ProjectExplorer(QtWidgets.QWidget):
         project = self.obj_appconfig.current_project.get('ProjectName')
         key = project or '__noproject__'
         window = self.editor_windows.get(key)
+        # closeDock() destroys the editor when its project is closed; a deleted
+        # Qt wrapper raises on any access, so probe the cached window and start
+        # fresh if it's gone (else re-opening the project would crash here).
+        if window is not None:
+            try:
+                window.isVisible()
+            except RuntimeError:
+                window = None
         if window is None:
             window = EditorWindow.EditorWindow()
             self.editor_windows[key] = window
@@ -520,11 +522,8 @@ class ProjectExplorer(QtWidgets.QWidget):
                 self._refreshLabels()
             print("Selected project not found")
             print("==================")
-            msg = QtWidgets.QErrorMessage(self)
-            msg.setModal(True)
-            msg.setWindowTitle("Error Message")
-            msg.showMessage('Selected project does not exist.')
-            msg.exec()
+            Dialogs.critical(
+                self, "Error Message", 'Selected project does not exist.')
             return False
 
     def renameProject(self):
@@ -540,36 +539,43 @@ class ProjectExplorer(QtWidgets.QWidget):
         After project name is changed, it recreates the project explorer tree.
         """
         self.indexItem = self.treewidget.currentIndex()
-        self.baseFileName = str(self.indexItem.data())
+        # Identity, not display text. The tree label may carry a
+        # disambiguation suffix ("(~/parent)" for a stem collision, or
+        # "(missing)" for a stale node) that must never leak into path math;
+        # the STEM_ROLE holds the un-suffixed stem the files are named after.
+        oldStem = self.indexItem.data(self.STEM_ROLE) \
+            or str(self.indexItem.data())
         filePath = str(
                     self.indexItem.sibling(self.indexItem.row(), 1).data()
                 )
 
         newBaseFileName, ok = QtWidgets.QInputDialog.getText(
             self, 'Rename Project', 'Project Name:',
-            QtWidgets.QLineEdit.EchoMode.Normal, self.baseFileName
+            QtWidgets.QLineEdit.EchoMode.Normal, oldStem
         )
 
         if ok and newBaseFileName:
-            newBaseFileName = str(newBaseFileName)
+            newBaseFileName = str(newBaseFileName).strip()
 
-            if not newBaseFileName.strip():
+            if not newBaseFileName:
                 print("Project name cannot be empty")
                 print("==================")
-                msg = QtWidgets.QErrorMessage(self)
-                msg.setModal(True)
-                msg.setWindowTitle("Error Message")
-                msg.showMessage('The project name cannot be empty')
-                msg.exec()
+                Dialogs.critical(
+                    self, "Error Message", 'The project name cannot be empty')
 
-            elif self.baseFileName == newBaseFileName:
+            elif re.search(r"\s", newBaseFileName):
+                print("Name can not contain space between them")
+                print("===========================")
+                Dialogs.critical(
+                    self, "Error Message",
+                    'The project name should not contain space between them')
+
+            elif oldStem == newBaseFileName:
                 print("Project name has to be different")
                 print("==================")
-                msg = QtWidgets.QErrorMessage(self)
-                msg.setModal(True)
-                msg.setWindowTitle("Error Message")
-                msg.showMessage('The project name has to be different')
-                msg.exec()
+                Dialogs.critical(
+                    self, "Error Message",
+                    'The project name has to be different')
 
             elif self.refreshProject(filePath):
 
@@ -583,145 +589,136 @@ class ProjectExplorer(QtWidgets.QWidget):
                             projectPath, projectFiles = parents, children
                         break
 
-                self.workspace = \
-                    self.obj_appconfig.default_workspace['workspace']
-                newBaseFileName = str(newBaseFileName).rstrip().lstrip()
-                projDir = os.path.join(self.workspace, str(newBaseFileName))
-
-                reply = self.obj_validation.validateNewproj(str(projDir))
-
                 if not (projectPath and projectFiles):
                     print("Selected project not found")
                     print("Project Path :", projectPath)
                     print("Project Files :", projectFiles)
                     print("==================")
-                    msg = QtWidgets.QErrorMessage(self)
-                    msg.setModal(True)
-                    msg.setWindowTitle("Error Message")
-                    msg.showMessage('Selected project does not exist.')
-                    msg.exec()
+                    Dialogs.critical(
+                        self, "Error Message",
+                        'Selected project does not exist.')
+                    return
 
-                elif reply == "VALID":
-                    # rename project folder
-                    updatedProjectFiles = []
+                # Rename in place: keep the project wherever it lives (it may
+                # sit outside the workspace) instead of assuming a
+                # workspace-relative target the way validateNewproj does.
+                updatedProjectPath = os.path.join(
+                    os.path.dirname(projectPath), newBaseFileName)
 
-                    # Inner files are named after the project *stem* (resolved
-                    # from the .proj anchor), which may differ from the folder
-                    # name. Match/replace on the stem so files are renamed even
-                    # when the folder was named differently; renaming to the new
-                    # name re-aligns folder and stem.
-                    oldStem = resolve_stem(projectPath, 'proj')[0] \
-                        or self.baseFileName
-
-                    updatedProjectPath = newBaseFileName.join(
-                        projectPath.rsplit(self.baseFileName, 1))
-                    print("Renaming " + projectPath + " to " +
-                          updatedProjectPath)
-
-                    # rename project folder
-                    try:
-                        os.rename(projectPath, updatedProjectPath)
-                    except BaseException as e:
-                        msg = QtWidgets.QErrorMessage(self)
-                        msg.setModal(True)
-                        msg.setWindowTitle("Error Message")
-                        msg.showMessage(str(e))
-                        msg.exec()
-                        return
-
-                    # rename files matching project name
-                    try:
-                        for projectFile in projectFiles:
-                            if oldStem in projectFile:
-                                oldFilePath = os.path.join(updatedProjectPath,
-                                                           projectFile)
-                                projectFile = projectFile.replace(
-                                    oldStem, newBaseFileName, 1)
-                                newFilePath = os.path.join(
-                                    updatedProjectPath, projectFile)
-                                print("Renaming " + oldFilePath + " to " +
-                                      newFilePath)
-                                os.rename(oldFilePath, newFilePath)
-                                updatedProjectFiles.append(projectFile)
-
-                    except BaseException as e:
-                        print("==================")
-                        print("Error! Revert renaming project")
-
-                        # Revert updatedProjectFiles
-                        for projectFile in updatedProjectFiles:
-                            newFilePath = os.path.join(
-                                            updatedProjectPath, projectFile)
-                            projectFile = projectFile.replace(
-                                    newBaseFileName, oldStem, 1)
-                            oldFilePath = os.path.join(
-                                    updatedProjectPath, projectFile)
-                            os.rename(newFilePath, oldFilePath)
-
-                        # Revert project folder name
-                        os.rename(updatedProjectPath, projectPath)
-                        print("==================")
-                        msg = QtWidgets.QErrorMessage(self)
-                        msg.setModal(True)
-                        msg.setWindowTitle("Error Message")
-                        msg.showMessage(str(e))
-                        msg.exec()
-                        return
-
-                    # update project_explorer dictionary (canonical key)
-                    updatedProjectPath = canonical_path(updatedProjectPath)
-                    del self.obj_appconfig.project_explorer[projectPath]
-                    self.obj_appconfig.project_explorer[updatedProjectPath] = \
-                        updatedProjectFiles
-
-                    # Keep current_project pointing at the renamed folder if it
-                    # was the active project, so identity comparisons elsewhere
-                    # don't go stale against the old path.
-                    if same_project(
-                            self.obj_appconfig.current_project["ProjectName"],
-                            projectPath):
-                        self.obj_appconfig.set_current_project(
-                            updatedProjectPath)
-
-                    # remove the old folder from the watcher
-                    if projectPath in self.fs_watcher.directories():
-                        self.fs_watcher.removePath(projectPath)
-
-                    # save project_explorer dictionary on disk
-                    self._persist()
-
-                    # recreate project explorer tree (addTreeNode is idempotent
-                    # and renders missing folders as stale, not dropped)
-                    self.treewidget.clear()
-                    # Snapshot: addTreeNode writes back into project_explorer.
-                    for parent, children in list(
-                            self.obj_appconfig.project_explorer.items()):
-                        self.addTreeNode(parent, children)
-
-                elif reply == "CHECKEXIST":
+                if os.path.exists(updatedProjectPath):
                     print("Project name already exists.")
                     print("==========================")
-                    msg = QtWidgets.QErrorMessage(self)
-                    msg.setModal(True)
-                    msg.setWindowTitle("Error Message")
-                    msg.showMessage(
+                    Dialogs.critical(
+                        self, "Error Message",
                         'The project "' + newBaseFileName +
                         '" already exist. Please select a different name or' +
-                        ' delete existing project'
-                    )
-                    msg.exec()
+                        ' delete existing project')
+                    return
 
-                elif reply == "CHECKNAME":
-                    print("Name can not contain space between them")
-                    print("===========================")
-                    msg = QtWidgets.QErrorMessage(self)
-                    msg.setModal(True)
-                    msg.setWindowTitle("Error Message")
-                    msg.showMessage(
-                        'The project name should not ' +
-                        'contain space between them'
-                    )
-                    msg.exec_()
+                # rename project folder
+                updatedProjectFiles = []
+                print("Renaming " + projectPath + " to " +
+                      updatedProjectPath)
+
+                # rename project folder
+                try:
+                    os.rename(projectPath, updatedProjectPath)
+                except OSError as e:
+                    Dialogs.critical(self, "Error Message", str(e))
+                    return
+
+                # rename files matching project stem
+                try:
+                    for projectFile in projectFiles:
+                        if oldStem in projectFile:
+                            oldFilePath = os.path.join(updatedProjectPath,
+                                                       projectFile)
+                            projectFile = projectFile.replace(
+                                oldStem, newBaseFileName, 1)
+                            newFilePath = os.path.join(
+                                updatedProjectPath, projectFile)
+                            print("Renaming " + oldFilePath + " to " +
+                                  newFilePath)
+                            os.rename(oldFilePath, newFilePath)
+                            updatedProjectFiles.append(projectFile)
+
+                except OSError as e:
+                    print("==================")
+                    print("Error! Revert renaming project")
+
+                    # Revert updatedProjectFiles
+                    for projectFile in updatedProjectFiles:
+                        newFilePath = os.path.join(
+                                        updatedProjectPath, projectFile)
+                        projectFile = projectFile.replace(
+                                newBaseFileName, oldStem, 1)
+                        oldFilePath = os.path.join(
+                                updatedProjectPath, projectFile)
+                        os.rename(newFilePath, oldFilePath)
+
+                    # Revert project folder name
+                    os.rename(updatedProjectPath, projectPath)
+                    print("==================")
+                    Dialogs.critical(self, "Error Message", str(e))
+                    return
+
+                # Re-point the .proj's schematicFile token at the renamed
+                # schematic so resolve_stem / main_schematic don't go stale
+                # (the file was renamed on disk above, but the pointer inside
+                # the .proj still names the old stem).
+                self._repointSchematic(
+                    updatedProjectPath, oldStem, newBaseFileName)
+
+                # update project_explorer dictionary (canonical key)
+                updatedProjectPath = canonical_path(updatedProjectPath)
+                del self.obj_appconfig.project_explorer[projectPath]
+                self.obj_appconfig.project_explorer[updatedProjectPath] = \
+                    updatedProjectFiles
+
+                # Keep current_project pointing at the renamed folder if it
+                # was the active project, so identity comparisons elsewhere
+                # don't go stale against the old path.
+                if same_project(
+                        self.obj_appconfig.current_project["ProjectName"],
+                        projectPath):
+                    self.obj_appconfig.set_current_project(
+                        updatedProjectPath)
+
+                # remove the old folder from the watcher
+                if projectPath in self.fs_watcher.directories():
+                    self.fs_watcher.removePath(projectPath)
+
+                # save project_explorer dictionary on disk
+                self._persist()
+
+                # recreate project explorer tree (addTreeNode is idempotent
+                # and renders missing folders as stale, not dropped)
+                self.treewidget.clear()
+                # Snapshot: addTreeNode writes back into project_explorer.
+                for parent, children in list(
+                        self.obj_appconfig.project_explorer.items()):
+                    self.addTreeNode(parent, children)
+
+    def _repointSchematic(self, proj_dir, oldStem, newStem):
+        """Rewrite the ``schematicFile`` line inside the project's ``.proj``
+        anchor so its pointer follows a renamed schematic file. Best-effort:
+        a failure here only degrades to main_schematic's convention fallback.
+        """
+        try:
+            for proj in find_anchors(proj_dir, 'proj'):
+                with open(proj, 'r') as fh:
+                    lines = fh.readlines()
+                with open(proj, 'w') as fh:
+                    for line in lines:
+                        words = line.split()
+                        if len(words) >= 2 and words[0] == 'schematicFile':
+                            newsch = words[1].replace(oldStem, newStem, 1)
+                            fh.write('schematicFile ' + newsch + '\n')
+                        else:
+                            fh.write(line)
+                break  # only the first/only .proj is the anchor
+        except (IOError, OSError) as e:
+            print("Warning: could not update .proj schematicFile pointer:", e)
 
     def set_time_explorer(self, time_explorer_widget):
         self.time_explorer = time_explorer_widget

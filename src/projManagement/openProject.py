@@ -20,10 +20,9 @@ from PyQt6 import QtWidgets, QtCore
 from configuration import Dialogs
 from .Validation import Validation
 from .projectPaths import find_anchors, resolve_stem, \
-    main_schematic, stem_from_file, canonical_path
+    main_schematic, stem_from_file, canonical_path, save_project_explorer
 from configuration.Appconfig import Appconfig
 import os
-import json
 
 
 class OpenProjectInfo(QtWidgets.QWidget):
@@ -130,8 +129,9 @@ class OpenProjectInfo(QtWidgets.QWidget):
             filelist = []
 
         self.obj_Appconfig.project_explorer[self.projDir] = filelist
-        with open(self.obj_Appconfig.dictPath["path"], 'w') as fh:
-            json.dump(self.obj_Appconfig.project_explorer, fh)
+        save_project_explorer(
+            self.obj_Appconfig.dictPath["path"],
+            self.obj_Appconfig.project_explorer)
         self.obj_Appconfig.print_info('Open Project called')
         self.obj_Appconfig.print_info('Current Project is ' + self.projDir)
         return self.projDir, filelist

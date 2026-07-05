@@ -2,6 +2,7 @@ import os
 import shlex
 from PyQt6 import QtWidgets, QtCore
 from configuration.Appconfig import Appconfig
+from configuration import paths
 from projManagement.Worker import WorkerThread
 from projManagement.projectPaths import resolve_stem
 
@@ -19,13 +20,9 @@ class openSub(QtWidgets.QWidget):
 
     def body(self):
 
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-
         self.editfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
-                self, "Open File", init_path + "library/SubcircuitLibrary"
+                self, "Open File", paths.library_path("SubcircuitLibrary")
             )
         )
 

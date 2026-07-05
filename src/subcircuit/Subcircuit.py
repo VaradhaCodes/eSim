@@ -1,5 +1,6 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration.Appconfig import Appconfig
+from configuration import Dialogs
 from projManagement.Validation import Validation
 from subcircuit.newSub import NewSub
 from subcircuit.openSub import openSub
@@ -226,11 +227,9 @@ class Subcircuit(QtWidgets.QWidget):
             if not text:
                 print("Schematic name cannot be empty")
                 print("==================")
-                msg = QtWidgets.QErrorMessage(self)
-                msg.setModal(True)
-                msg.setWindowTitle("Error Message")
-                msg.showMessage('The schematic name cannot be empty')
-                msg.exec()
+                Dialogs.critical(
+                    self, "Error Message",
+                    'The schematic name cannot be empty')
                 return
 
             self.schematic_name = (str(text))

@@ -23,7 +23,7 @@ for _p in (SRC, PKG):
         sys.path.insert(0, _p)
 
 from PyQt6 import QtWidgets                                    # noqa: E402
-from kicadtoNgspice import DeviceModel, TrackWidget           # noqa: E402
+from kicadtoNgspice import DeviceModel                        # noqa: E402
 from kicadtoNgspice.ModelGroupWidget import ModelGroupWidget  # noqa: E402
 from projManagement.projectPaths import previous_values_path  # noqa: E402
 
@@ -31,7 +31,6 @@ _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
 
 def _build(schematic, kicad_file):
-    TrackWidget.TrackWidget.reset()
     return DeviceModel.DeviceModel(schematic, kicad_file)
 
 
@@ -78,7 +77,7 @@ def test_group_assign_fans_out_to_deviceModelTrack():
     dm = _build(schematic, _tmp_cir())
     grp = _group_with_ref(dm, "q1")
     grp.set_group_path("/lib/bc547.lib")
-    track = TrackWidget.TrackWidget.deviceModelTrack
+    track = dm.obj_trac.deviceModelTrack
     assert track["q1"] == "/lib/bc547.lib"
     assert track["q2"] == "/lib/bc547.lib"
     assert track["q5"] == "/lib/bc547.lib"
@@ -90,7 +89,7 @@ def test_override_one_instance_only():
     grp = _group_with_ref(dm, "q1")
     grp.set_group_path("/lib/a.lib")
     grp.override("q2", "/lib/special.lib")
-    track = TrackWidget.TrackWidget.deviceModelTrack
+    track = dm.obj_trac.deviceModelTrack
     assert track["q1"] == "/lib/a.lib"
     assert track["q2"] == "/lib/special.lib"
 
@@ -102,9 +101,9 @@ def test_empty_path_is_not_tracked():
     dm = _build(schematic, _tmp_cir())
     grp = _group_with_ref(dm, "q1")
     grp.set_group_path("/lib/a.lib")
-    assert "q1" in TrackWidget.TrackWidget.deviceModelTrack
+    assert "q1" in dm.obj_trac.deviceModelTrack
     grp.set_group_path("")
-    assert "q1" not in TrackWidget.TrackWidget.deviceModelTrack
+    assert "q1" not in dm.obj_trac.deviceModelTrack
 
 
 # -- MOSFET keeps W/L/M per instance ------------------------------------------
@@ -117,7 +116,7 @@ def test_mosfet_groups_lib_but_keeps_per_instance_dims():
     # Give m1 a custom width via its per-instance extra widget.
     beg1 = dm.devicemodel_dict_beg["m1"]
     dm.entry_var[beg1 + 1].setText("10u")          # W of m1
-    track = TrackWidget.TrackWidget.deviceModelTrack
+    track = dm.obj_trac.deviceModelTrack
     assert track["m1"] == "/lib/nmos.lib:W=10u L=100u M=1"
     assert track["m2"] == "/lib/nmos.lib:W=100u L=100u M=1"
 
@@ -130,7 +129,7 @@ def test_switch_branch_builds_and_groups():
     grp = _group_with_ref(dm, "s1")
     assert sorted(r.ref for r in grp._rows) == ["s1", "s2"]
     grp.set_group_path("/lib/sw.lib")
-    track = TrackWidget.TrackWidget.deviceModelTrack
+    track = dm.obj_trac.deviceModelTrack
     assert track["s1"] == "/lib/sw.lib"
     assert track["s2"] == "/lib/sw.lib"
 
@@ -164,7 +163,7 @@ def test_restore_keeps_existing_path_blanks_missing():
         b2 = dm.devicemodel_dict_beg["q2"]
         assert dm.entry_var[b1].text() == real_lib       # exists -> kept
         assert dm.entry_var[b2].text() == ""             # missing -> blanked
-        track = TrackWidget.TrackWidget.deviceModelTrack
+        track = dm.obj_trac.deviceModelTrack
         assert track.get("q1") == real_lib
         assert "q2" not in track                          # blanked -> untracked
         # Both share the same restored value? Only q1 has one, so the group is
