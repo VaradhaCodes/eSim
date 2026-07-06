@@ -82,8 +82,11 @@ function Resolve-7z {
 }
 
 function Resolve-Iscc {
+    # NB: ${env:ProgramFiles(x86)} MUST be brace-wrapped -- "$env:ProgramFiles(x86)"
+    # parses as $env:ProgramFiles + literal "(x86)" -> "C:\Program Files(x86)" (no
+    # space), a path that never exists, so the check always failed.
     foreach ($c in @('iscc',
-                     "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+                     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
                      "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) {
         if (Get-Command $c -ErrorAction SilentlyContinue) { return $c }
     }
@@ -91,7 +94,7 @@ function Resolve-Iscc {
     Log 'Inno Setup not found - installing from pinned manifest entry'
     $setup = Get-Dep 'innosetup'
     & $setup /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Null
-    $c = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
+    $c = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
     if (-not (Test-Path $c)) { Die 'Inno Setup install failed' }
     return $c
 }
@@ -135,8 +138,13 @@ function Stage-App {
     # ngspice_ghdl.py needs at runtime via [SRC] SRC_HOME, Example/ = test
     # designs); only its 11 MB simulator source tarball stays out -- the
     # BUILT tree ships at tools\nghdl instead (Stage-SimToolchain).
+    # NOTE: library\SubcircuitLibrary IS staged (make-release.sh excludes it,
+    # but the app needs it at runtime: the subcircuit browser opens there and
+    # the netlister resolves X-instances against its .sub files -- without it
+    # every schematic using a library IC fails to convert). Its bulk was sim
+    # outputs; those are stripped by the /XF filters below instead.
     $xd = @('.git', 'dist', '__pycache__', '.pytest_cache', '.mypy_cache',
-            'node_modules', 'library\subcircuitLibrary', 'Ubuntu',
+            'node_modules', 'Ubuntu',
             'windows', 'flatpak', 'snap', 'appimage', 'docker-launcher') |
           ForEach-Object { Join-Path $RepoRoot $_ }
     # Stage-side dirs the LATER stages create (private Python, built
@@ -146,6 +154,7 @@ function Stage-App {
            ForEach-Object { Join-Path $Stage $_ }
     robocopy $RepoRoot $Stage /MIR /NFL /NDL /NJH /NJS /XD @xd `
         /XF '*.pyc' '*.pyo' '*.raw' 'plot_data_*.txt' '.DS_Store' `
+            'fp-info-cache' `
             'nghdl-simulator-source.tar.xz' 'nghdl-simulator.patch' `
             'install-nghdl.sh' | Out-Null
     if ($LASTEXITCODE -ge 8) { Die "robocopy failed ($LASTEXITCODE)" }
@@ -165,6 +174,20 @@ version    : $Version
 built      : $(Get-Date -AsUTC -Format yyyy-MM-dd) (UTC)
 installer  : Inno Setup (windows/installer.iss)
 "@
+
+    # The repo windows\ dir is excluded wholesale above (build cruft:
+    # build-windows.ps1, installer.iss, downloads\, dist\). But two files in
+    # it are RUNTIME launchers the shipped tree needs:
+    #   * esim.bat            -> stage ROOT: its ESIM_HOME=%~dp0 must resolve to
+    #                            the install root so %ESIM_HOME%\src, \python,
+    #                            \tools, \windows\windows_bootstrap.py all hit.
+    #   * windows_bootstrap.py -> stage windows\: esim.bat runs it every launch
+    #                            for per-user setup (config.ini, sym-lib-table).
+    # Stage them back explicitly so installer.iss (StageDir\* -> {app}) ships them.
+    Copy-Item (Join-Path $WinDir 'esim.bat') (Join-Path $Stage 'esim.bat') -Force
+    $stageWin = Join-Path $Stage 'windows'
+    New-Item -ItemType Directory -Force -Path $stageWin | Out-Null
+    Copy-Item (Join-Path $WinDir 'windows_bootstrap.py') (Join-Path $stageWin 'windows_bootstrap.py') -Force
 }
 
 function Stage-Python {
@@ -245,8 +268,29 @@ function Stage-Iverilog {
 # along in the shipped tree (a few MB) and keep user-side model rebuilds
 # self-sufficient.
 $MingwPkgs = 'mingw-w64-x86_64-gcc mingw-w64-x86_64-make ' +
-             'mingw-w64-x86_64-verilator mingw-w64-x86_64-ghdl-llvm'
+             'mingw-w64-x86_64-verilator mingw-w64-x86_64-ghdl-llvm ' +
+             # dlfcn-win32 provides libdl (-ldl): the ngspice XSPICE code-model
+             # link (src/xspice/icm/makedefs) hard-codes -ldl, a Linux-ism.
+             # mingw has no libdl in its base -> spice2poly.cm et al. fail with
+             # "cannot find -ldl". dlfcn-win32 is a Win32-API-backed libdl.
+             'mingw-w64-x86_64-dlfcn'
 $MsysPkgs  = 'make autoconf automake libtool bison flex gperf patch tar'
+
+function Set-MsysEnv {
+    <# Make every staged-MSYS2 bash call HERMETIC. The staged bash runs as a
+       login shell (-l): it sources /etc/profile (good -- that puts /mingw64/bin
+       and /usr/bin on PATH) but THEN ~/.bash_profile + ~/.bashrc. The stock
+       nsswitch `db_home: cygwin desc` resolves HOME to the real Windows user
+       profile, so a personal ~/.bashrc (e.g. one doing `export PATH=...:$PATH`
+       that drops /usr/bin) silently wrecks the build -- cygpath/head/gcc vanish
+       and commands fail with "cd: null directory". Point HOME at a clean
+       build-local dir so NO user dotfiles are sourced; MSYS2 honors an
+       inherited HOME. #>
+    $env:MSYSTEM = 'MINGW64'
+    $env:CHERE_INVOKED = '1'
+    $env:HOME = Join-Path $Stage 'tools\msys64\home\builder'
+    New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
+}
 
 function Invoke-MsysBash([string]$cmd, [string]$errmsg) {
     <# Run one command line in the staged MSYS2's bash as a MINGW64 login
@@ -254,8 +298,7 @@ function Invoke-MsysBash([string]$cmd, [string]$errmsg) {
        keeps the caller's working directory). Dies with $errmsg on failure. #>
     $bash = Join-Path $Stage 'tools\msys64\usr\bin\bash.exe'
     if (-not (Test-Path $bash)) { Die "MSYS2 bash not staged ($bash)" }
-    $env:MSYSTEM = 'MINGW64'
-    $env:CHERE_INVOKED = '1'
+    Set-MsysEnv
     & $bash -lc $cmd
     if ($LASTEXITCODE -ne 0) { Die "$errmsg (bash rc=$LASTEXITCODE)" }
 }
@@ -265,10 +308,17 @@ function Stage-Msys {
     Log 'Staging MSYS2 + mingw gcc/make/verilator/ghdl-llvm (HDL toolchain)'
     $arc = Get-Dep 'msys2'
     $dst = Join-Path $Stage 'tools\msys64'
+    # Set the hermetic MINGW64 login environment for EVERY raw `& $bash` call in
+    # this function -- not just the staging block below. On a re-run (msys64
+    # already staged) that block is skipped, but the ghdl backend check further
+    # down still needs /usr/bin on PATH (else `head` and friends are not found
+    # and the check silently reports nothing).
+    Set-MsysEnv
     if (-not (Test-Path $dst)) {
         $tmp = Join-Path $Build 'msys-x'
         & $7z x $arc "-o$tmp" -y | Out-Null            # .tar.xz -> .tar
         & $7z x (Get-ChildItem "$tmp\*.tar").FullName "-o$tmp" -y | Out-Null
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
         Move-Item "$tmp\msys64" $dst
         Remove-Item $tmp -Recurse -Force
         # First run initializes; then install the toolchain NgVeri/NGHDL
@@ -277,10 +327,25 @@ function Stage-Msys {
         # source-build utilities. ghdl-llvm EXPLICITLY: the plain ghdl
         # alternative can resolve to mcode, which cannot link the nghdl
         # socket server (see nghdl/install-nghdl-scripts/GHDL-BACKEND-26.04.md).
-        & "$dst\usr\bin\bash.exe" -lc 'true'
-        & "$dst\usr\bin\bash.exe" -lc `
-            "pacman -Syu --noconfirm && pacman -S --noconfirm --needed $MingwPkgs $MsysPkgs && pacman -Scc --noconfirm"
+        # MSYS2 provisioning MUST be multi-pass, each in its OWN login shell.
+        # A core-system `pacman -Syu` (pacman, bash, msys2-runtime, filesystem)
+        # DELIBERATELY terminates every MSYS2 process when done -- the shell
+        # dies with a nonzero code BY DESIGN, and this can happen on more than
+        # one consecutive pass (runtime, then keyring/db settle). So:
+        #   * chaining `pacman -Syu && pacman -S ...` never reaches the install;
+        #   * gating `Die` on a -Syu exit code would abort a healthy machine.
+        # Run -Syu repeatedly, IGNORING its exit code, until a pass makes no
+        # changes (rc 0 with no self-terminate), THEN install the toolchain and
+        # gate only on the install + the binary/ghdl checks below.
+        $bash = "$dst\usr\bin\bash.exe"
+        & $bash -lc 'true'                                    # trigger first-run init (keyring, post-install)
+        for ($i = 1; $i -le 4; $i++) {                        # -Syu may self-terminate several times; rc ignored on purpose
+            & $bash -lc 'pacman -Syu --noconfirm'
+            if ($LASTEXITCODE -eq 0) { break }                # a clean pass (no core update left) => settled
+        }
+        & $bash -lc "pacman -S --noconfirm --needed $MingwPkgs $MsysPkgs"
         if ($LASTEXITCODE -ne 0) { Die 'MSYS2 toolchain provisioning failed' }
+        & $bash -lc 'pacman -Scc --noconfirm'
     }
     if (-not (Test-Path "$dst\mingw64\bin\mingw32-make.exe")) {
         Die 'mingw32-make.exe missing after MSYS2 provisioning'
@@ -343,12 +408,26 @@ function Stage-SimToolchain {
             "mv nghdl-simulator-source nghdl && cd nghdl && " +
             "rm -rf release && " +
             "{ patch -p1 --forward < `"`$(cygpath -u '$patchU')`" || echo '[warn] patch skipped (already applied?)'; } && " +
+            # Verilator runtime objects for Ngveri.cm: the patch lists them as link
+            # inputs but nothing compiles them (tarball ships a stale 2022 LINUX
+            # verilated.o; verilated_threads.o -- a Verilator-5 split -- was never
+            # built). -DVL_TIME_CONTEXT drops the weak sc_time_stamp() that a Windows
+            # DLL, unlike a Linux .so, will not leave undefined. Compile as COFF here.
+            "g++ -DVL_TIME_CONTEXT -I/mingw64/share/verilator/include -I/mingw64/share/verilator/include/vltstd -std=gnu++17 -O2 -fPIC -c /mingw64/share/verilator/include/verilated.cpp -o src/xspice/icm/Ngveri/verilated.o && " +
+            "g++ -DVL_TIME_CONTEXT -I/mingw64/share/verilator/include -I/mingw64/share/verilator/include/vltstd -std=gnu++17 -O2 -fPIC -c /mingw64/share/verilator/include/verilated_threads.cpp -o src/xspice/icm/Ngveri/verilated_threads.o && " +
             "mkdir -p install_dir release && cd release && " +
             "../configure --enable-xspice --disable-debug " +
             "--prefix=`"`$(cygpath -am ../install_dir)`" " +
             "--exec-prefix=`"`$(cygpath -am ../install_dir)`" " +
-            "CFLAGS='-std=gnu11 -m64 -O2' LDFLAGS='-m64 -s' && " +
-            "make -j`$(nproc) && make install"
+            # -fno-strict-aliasing: GCC-16 -O2 miscompiles ngspice-35's strcat paths
+            # into a SIGSEGV on every .op/.dc/.tran without it (empty netlist is fine).
+            # LIBS: ngspice gates Winsock behind --with-wingui (off in this console
+            # build) but the nghdl socket server (frontend/outitf.c) needs ws2_32.
+            "CFLAGS='-std=gnu11 -m64 -O2 -fno-strict-aliasing' LDFLAGS='-m64 -s' " +
+            "LIBS='-lws2_32 -lpsapi -lshlwapi' && " +
+            # -j2 NOT -j`$(nproc): MSYS2's fork() emulation collapses under heavy
+            # parallel libtool/sh spawning (dofork: child died 0xC0000142, EAGAIN).
+            "make -j2 && make install"
         ) 'custom ngspice build failed'
     }
     if (-not (Test-Path $ngspiceExe)) { Die 'ngspice.exe missing after custom build' }
@@ -364,8 +443,14 @@ function Stage-SimToolchain {
             Die "code model missing after build: $cmdir\$cm"
         }
     }
+    # NB: this eSim ngspice does NOT ship an ivlng (Icarus) code model -- its
+    # icm/GNUmakefile.in CMDIRS builds 8 models (...ghdl Ngveri) and ivlng
+    # appears nowhere in the tarball, the eSim repo, or install-nghdl.sh's build
+    # steps; eSim's own Python never loads it. The shipped digital co-sim paths
+    # are ghdl.cm (NGHDL/VHDL) and Ngveri.cm (NgVeri/Verilator), both verified
+    # above. So absence of ivlng is expected, not fatal -- just note it.
     if (-not (Get-ChildItem $cmdir -Filter 'ivlng*' -ErrorAction SilentlyContinue)) {
-        Die "ivlng adapter missing in $cmdir - d_cosim would be dead. Check release\src\xspice\verilog build output."
+        Log 'Note: no ivlng (Icarus) code model - Icarus d_cosim path not shipped; ghdl.cm/Ngveri.cm co-sim OK'
     }
     $smoke = Join-Path $Build 'smoke.cir'
     Set-Content $smoke "smoke test`nv1 1 0 dc 1`nr1 1 0 1k`n.op`n.end"

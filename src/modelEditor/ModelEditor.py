@@ -663,7 +663,15 @@ class ModelEditorclass(QtWidgets.QWidget):
         if self.newflag == 1:
             self.createXML(self.model_name)
         else:
-            self.savethefile(self.editfile)
+            # A cancelled Edit file-picker leaves editfile empty; writing would
+            # produce a nameless ".lib"/".xml" in the process CWD.
+            editfile = getattr(self, 'editfile', '')
+            if not editfile:
+                Dialogs.critical(
+                    self, "Error Message",
+                    'No model file is open. Use New or Edit first.')
+                return
+            self.savethefile(editfile)
 
     def createXML(self, model_name):
         '''

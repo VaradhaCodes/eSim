@@ -80,13 +80,13 @@ Source: "{#StageDir}\tools\nghdl\release\*"; DestDir: "{app}\tools\nghdl\release
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{autoprograms}\eSim"; Filename: "{app}\windows\esim.bat"; \
+Name: "{autoprograms}\eSim"; Filename: "{app}\esim.bat"; \
     IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"
-Name: "{autodesktop}\eSim";  Filename: "{app}\windows\esim.bat"; \
+Name: "{autodesktop}\eSim";  Filename: "{app}\esim.bat"; \
     IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\windows\esim.bat"; Description: "Launch eSim"; \
+Filename: "{app}\esim.bat"; Description: "Launch eSim"; \
     Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]

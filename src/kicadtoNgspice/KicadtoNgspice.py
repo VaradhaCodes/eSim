@@ -471,8 +471,10 @@ class MainWindow(QtWidgets.QWidget):
         check = 1
 
         try:
-            fr = open(previous_values_path(self.kicadFile), 'r')
-            temp_tree = ET.parse(fr)
+            # Close the handle before the os.replace() below: an open reader
+            # on the same file makes the replace fail on Windows (WinError 5).
+            with open(previous_values_path(self.kicadFile), 'r') as fr:
+                temp_tree = ET.parse(fr)
             temp_root = temp_tree.getroot()
         except Exception:
             check = 0

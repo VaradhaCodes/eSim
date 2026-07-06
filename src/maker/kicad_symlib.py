@@ -205,7 +205,20 @@ def ensure_lib_registered(libname, lib_path, descr=""):
     for ver in os.listdir(base):
         table = os.path.join(base, ver, 'sym-lib-table')
         if not os.path.isfile(table):
-            continue
+            # KiCad (>= 6) does not write a per-user sym-lib-table until the
+            # user manually manages libraries once, so on a fresh KiCad
+            # install the file is absent and skipping here would mean eSim's
+            # libraries NEVER get registered. Seed an empty table in every
+            # real version dir (N.M) instead; KiCad merges it with the global
+            # table, so this only ever ADDs the eSim entries.
+            if not re.fullmatch(r'\d+\.\d+', ver) or \
+                    not os.path.isdir(os.path.join(base, ver)):
+                continue
+            try:
+                with open(table, 'w') as fh:
+                    fh.write('(sym_lib_table\n  (version 7)\n)\n')
+            except OSError:
+                continue
         try:
             with open(table) as fh:
                 content = fh.read()

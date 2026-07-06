@@ -23,10 +23,11 @@ import sys
 import traceback
 import webbrowser
 
-if os.name == 'nt':
-    from frontEnd import pathmagic  # noqa:F401
-else:
-    import pathmagic    # noqa:F401
+# Launched as a script (esim.bat / Ubuntu launcher run Application.py by
+# path), so sys.path[0] is this file's dir (src/frontEnd) on every platform
+# -> pathmagic is importable directly, and it puts src/ on the path for the
+# top-level package imports below.
+import pathmagic    # noqa:F401
 
 from PyQt6 import QtGui, QtCore, QtWidgets
 from configuration import Dialogs
