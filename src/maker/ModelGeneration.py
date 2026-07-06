@@ -148,7 +148,18 @@ class ModelGeneration(QtWidgets.QWidget):
                 os.path.join(msys_home, 'mingw64', 'bin'),
                 os.path.join(msys_home, 'usr', 'bin'),
             ]) + os.pathsep + env.get("PATH", "")
-            env["VERILATOR_ROOT"] = msys_home + "/mingw64"
+            # MSYS2's verilator package keeps the runtime tree (include/
+            # verilated.cpp, verilated_std.sv, lint waivers) under
+            # share/verilator, not the mingw64 prefix itself -- pointing
+            # VERILATOR_ROOT at the prefix makes every verilator run fail with
+            # "Cannot find verilated_std_waiver.vlt".
+            # Forward slashes: the value is spliced into verilator's generated
+            # Makefile, where backslashes are escape characters (make eats
+            # them, e.g. C:\FOSSEE\... becomes C:FOSSEE... and the includer
+            # path collapses).
+            env["VERILATOR_ROOT"] = os.path.join(
+                msys_home, 'mingw64', 'share', 'verilator'
+            ).replace('\\', '/')
         return env
 
     def _make_binary(self):
@@ -1218,8 +1229,13 @@ and set the load for input ports */
             return False
 
         model = os.path.splitext(self.fname)[0]
+        # -DVL_TIME_CONTEXT: verilated.o is (re)built by the generated .mk
+        # with these CFLAGS. Without it verilated.cpp leaves the weak
+        # sc_time_stamp() reference undefined, which a Linux .so tolerates but
+        # the Windows Ngveri.cm DLL link rejects (undefined reference).
         cmd = [
-            verilator, "--stats", "-O3", "-CFLAGS", "-O3",
+            verilator, "--stats", "-O3",
+            "-CFLAGS", "-O3", "-CFLAGS", "-DVL_TIME_CONTEXT",
             "-LDFLAGS", "-static", "--x-assign", "fast",
             "--x-initial", "fast", "--noassert", "--bbox-sys", "-Wall",
         ] + wno + [
@@ -1244,6 +1260,17 @@ and set the load for input ports */
             return False
 
         model = os.path.splitext(self.fname)[0]
+        # Purge make-generated aggregates from any earlier (possibly failed)
+        # build of this model: an interrupted verilator_includer leaves an
+        # empty V<model>__ALL.cpp that make then treats as up to date, and the
+        # resulting symbol-less archive only fails much later at the
+        # Ngveri.cm link.
+        for leftover in ("V" + model + "__ALL.cpp",
+                         "V" + model + "__ALL.o",
+                         "V" + model + "__ALL.a"):
+            p = os.path.join(self.modelpath, leftover)
+            if os.path.exists(p):
+                os.remove(p)
         cmd = [make_bin, "-f", "V" + model + ".mk",
                "V" + model + "__ALL.a",
                "sim_main_" + model + ".o",
@@ -1321,7 +1348,24 @@ and set the load for input ports */
         if not make_bin:
             return False
         print("Running Make Install")
-        return self._run([make_bin, "install"],
+        cmd = [make_bin, "install"]
+        if os.name == 'nt':
+            # The configured tree bakes the BUILD machine's absolute prefix
+            # into makedefs (pkglibdir/pkgdatadir), so a stock `make install`
+            # on an end-user PC would write the rebuilt code models into the
+            # packager's path instead of this install's install_dir. Override
+            # both on the command line from ~/.nghdl/config.ini (forward
+            # slashes: these values are make variables).
+            try:
+                nghdl_home = self.parser.get('NGHDL', 'NGHDL_HOME')
+            except Exception:
+                nghdl_home = ''
+            if nghdl_home:
+                inst = os.path.join(nghdl_home, 'install_dir').replace(
+                    '\\', '/')
+                cmd += ["pkglibdir=" + inst + "/lib/ngspice",
+                        "pkgdatadir=" + inst + "/share/ngspice"]
+        return self._run(cmd,
                          "MAKE INSTALL COMMAND", cwd=path_icm,
                          env=self._nt_build_env())
 
