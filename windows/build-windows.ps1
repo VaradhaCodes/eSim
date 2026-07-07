@@ -155,7 +155,7 @@ function Stage-App {
     robocopy $RepoRoot $Stage /MIR /NFL /NDL /NJH /NJS /XD @xd `
         /XF '*.pyc' '*.pyo' '*.raw' 'plot_data_*.txt' '.DS_Store' `
             'fp-info-cache' `
-            'nghdl-simulator-source.tar.xz' 'nghdl-simulator.patch' `
+            'nghdl-simulator-source.tar.xz' `
             'install-nghdl.sh' | Out-Null
     if ($LASTEXITCODE -ge 8) { Die "robocopy failed ($LASTEXITCODE)" }
 
@@ -385,52 +385,63 @@ function Stage-SimToolchain {
     $nghdlDst  = Join-Path $Stage 'tools\nghdl'
     $ngspiceExe = Join-Path $nghdlDst 'install_dir\bin\ngspice.exe'
     $tarball = Join-Path $RepoRoot 'nghdl\nghdl-simulator-source.tar.xz'
-    $patch   = Join-Path $RepoRoot 'nghdl\nghdl-simulator.patch'
     if (-not (Test-Path $tarball)) { Die "missing $tarball" }
+    $toolsU = (Join-Path $Stage 'tools') -replace '\\', '/'
+    $dllShU = (Join-Path $RepoRoot 'windows\msys-dll-closure.sh') -replace '\\', '/'
 
     # --- custom ngspice ----------------------------------------------------
     if (Test-Path $ngspiceExe) {
         Log 'Custom ngspice already staged (delete tools\nghdl to rebuild)'
     }
     else {
-        Log 'Building custom eSim ngspice (nghdl-simulator) in MSYS2 - this takes a while'
-        $toolsU = (Join-Path $Stage 'tools') -replace '\\', '/'
+        Log 'Building custom eSim ngspice (nghdl-simulator, ngspice-45.2 base) in MSYS2 - this takes a while'
         $tarU   = $tarball -replace '\\', '/'
-        $patchU = $patch   -replace '\\', '/'
-        # Fresh tree every time: the tarball carries a PREBUILT LINUX release/
-        # (ELF .o/.so) that would poison a Windows make; wipe it and configure
-        # a clean build dir. Mirrors install-nghdl.sh incl. the C23 'bool'
-        # CFLAGS fix (-std=gnu11) and the Verilator-5/GCC-14 link patch.
+        # Fresh tree every time; configure a clean build dir. The tarball is the
+        # eSim nghdl-simulator: ngspice-45.2 + the nghdl delta (ghdl/Ngveri icm
+        # model dirs, outitf.c ghdlserver close hook, spinit/makedefs wiring,
+        # Verilator-5 link rules) baked in -- no separate patch step anymore.
+        # ngspice >= 42 also brings d_cosim + the ivlng Icarus bridge, which the
+        # old ngspice-35 tarball could never provide.
         Invoke-MsysBash (
             "set -e; cd `"`$(cygpath -u '$toolsU')`" && " +
             "rm -rf nghdl nghdl-simulator-source && " +
             "tar -xJf `"`$(cygpath -u '$tarU')`" && " +
             "mv nghdl-simulator-source nghdl && cd nghdl && " +
             "rm -rf release && " +
-            "{ patch -p1 --forward < `"`$(cygpath -u '$patchU')`" || echo '[warn] patch skipped (already applied?)'; } && " +
-            # Verilator runtime objects for Ngveri.cm: the patch lists them as link
-            # inputs but nothing compiles them (tarball ships a stale 2022 LINUX
-            # verilated.o; verilated_threads.o -- a Verilator-5 split -- was never
-            # built). -DVL_TIME_CONTEXT drops the weak sc_time_stamp() that a Windows
-            # DLL, unlike a Linux .so, will not leave undefined. Compile as COFF here.
+            # Verilator runtime objects for Ngveri.cm: the icm makefile lists them
+            # as link inputs but nothing compiles them (verilated_threads.o is a
+            # Verilator-5 split). -DVL_TIME_CONTEXT drops the weak sc_time_stamp()
+            # that a Windows DLL, unlike a Linux .so, will not leave undefined.
             "g++ -DVL_TIME_CONTEXT -I/mingw64/share/verilator/include -I/mingw64/share/verilator/include/vltstd -std=gnu++17 -O2 -fPIC -c /mingw64/share/verilator/include/verilated.cpp -o src/xspice/icm/Ngveri/verilated.o && " +
             "g++ -DVL_TIME_CONTEXT -I/mingw64/share/verilator/include -I/mingw64/share/verilator/include/vltstd -std=gnu++17 -O2 -fPIC -c /mingw64/share/verilator/include/verilated_threads.cpp -o src/xspice/icm/Ngveri/verilated_threads.o && " +
             "mkdir -p install_dir release && cd release && " +
             "../configure --enable-xspice --disable-debug " +
             "--prefix=`"`$(cygpath -am ../install_dir)`" " +
             "--exec-prefix=`"`$(cygpath -am ../install_dir)`" " +
-            # -fno-strict-aliasing: GCC-16 -O2 miscompiles ngspice-35's strcat paths
-            # into a SIGSEGV on every .op/.dc/.tran without it (empty netlist is fine).
+            # -fno-strict-aliasing: kept from the ngspice-35 era (GCC-16 -O2
+            # miscompiled its strcat paths); semantically safe on 45.2.
             # LIBS: ngspice gates Winsock behind --with-wingui (off in this console
-            # build) but the nghdl socket server (frontend/outitf.c) needs ws2_32.
-            "CFLAGS='-std=gnu11 -m64 -O2 -fno-strict-aliasing' LDFLAGS='-m64 -s' " +
+            # build) but the nghdl socket client (frontend/outitf.c) needs ws2_32.
+            "CFLAGS='-m64 -O2 -fno-strict-aliasing' LDFLAGS='-m64 -s' " +
             "LIBS='-lws2_32 -lpsapi -lshlwapi' && " +
             # -j2 NOT -j`$(nproc): MSYS2's fork() emulation collapses under heavy
             # parallel libtool/sh spawning (dofork: child died 0xC0000142, EAGAIN).
-            "make -j2 && make install"
+            "make -j2 && make install && " +
+            # ngspice.exe (and the .cm/ivlng DLLs it loads) depend on MinGW
+            # runtime DLLs (gomp/readline/termcap/stdc++/gcc_s/winpthread).
+            # Ship the transitive closure next to the exe so the simulator runs
+            # WITHOUT tools\msys64 on PATH (Compact installs, plain sims).
+            "sh `"`$(cygpath -u '$dllShU')`" `"`$(cygpath -u '$toolsU')/nghdl`""
         ) 'custom ngspice build failed'
     }
     if (-not (Test-Path $ngspiceExe)) { Die 'ngspice.exe missing after custom build' }
+
+    # Always ensure the MinGW runtime-DLL closure is present (idempotent, and
+    # the "already staged" fast path must not skip it): without it the
+    # verification below hard-hangs on Windows' missing-DLL error dialog.
+    Invoke-MsysBash (
+        "sh `"`$(cygpath -u '$dllShU')`" `"`$(cygpath -u '$toolsU')/nghdl`""
+    ) 'runtime DLL closure staging failed'
 
     # Hard verification: version answers, the code models d_cosim/NGHDL need
     # exist, and a trivial transient actually simulates.
@@ -438,19 +449,19 @@ function Stage-SimToolchain {
     if (-not $ver) { Die 'staged ngspice does not answer --version' }
     Log "ngspice: $ver"
     $cmdir = Join-Path $nghdlDst 'install_dir\lib\ngspice'
-    foreach ($cm in @('analog.cm', 'digital.cm', 'ghdl.cm', 'Ngveri.cm')) {
+    foreach ($cm in @('analog.cm', 'digital.cm', 'tlines.cm', 'ghdl.cm', 'Ngveri.cm')) {
         if (-not (Test-Path (Join-Path $cmdir $cm))) {
             Die "code model missing after build: $cmdir\$cm"
         }
     }
-    # NB: this eSim ngspice does NOT ship an ivlng (Icarus) code model -- its
-    # icm/GNUmakefile.in CMDIRS builds 8 models (...ghdl Ngveri) and ivlng
-    # appears nowhere in the tarball, the eSim repo, or install-nghdl.sh's build
-    # steps; eSim's own Python never loads it. The shipped digital co-sim paths
-    # are ghdl.cm (NGHDL/VHDL) and Ngveri.cm (NgVeri/Verilator), both verified
-    # above. So absence of ivlng is expected, not fatal -- just note it.
-    if (-not (Get-ChildItem $cmdir -Filter 'ivlng*' -ErrorAction SilentlyContinue)) {
-        Log 'Note: no ivlng (Icarus) code model - Icarus d_cosim path not shipped; ghdl.cm/Ngveri.cm co-sim OK'
+    # ngspice-45.2 ships the d_cosim code model (inside digital.cm's model set)
+    # plus the ivlng Icarus bridge (ivlng.dll + ivlng.vpi, installed by
+    # src/xspice/verilog). eSim's Icarus d_cosim flow and the toolchain doctor
+    # both require it -- hard-fail if the build dropped it.
+    foreach ($f in @('ivlng.dll', 'ivlng.vpi')) {
+        if (-not (Test-Path (Join-Path $cmdir $f))) {
+            Die "ivlng (Icarus d_cosim bridge) missing after build: $cmdir\$f"
+        }
     }
     $smoke = Join-Path $Build 'smoke.cir'
     Set-Content $smoke "smoke test`nv1 1 0 dc 1`nr1 1 0 1k`n.op`n.end"
@@ -485,6 +496,20 @@ function Stage-SimToolchain {
     if (-not (Test-Path (Join-Path $ivDst 'bin\vvp.exe'))) { Die 'vvp.exe missing after build' }
     if (-not (Get-ChildItem "$ivDst\bin", "$ivDst\lib" -Filter 'libvvp*' -ErrorAction SilentlyContinue)) {
         Die "libvvp missing under $ivDst - the whole point of the source build. Check --enable-libvvp support at the pinned ref."
+    }
+    # ngspice's ivlng adapter does LoadLibrary("libvvp") -- the UNVERSIONED
+    # name (eSim netlists pass no lib_args). The MinGW build emits only the
+    # versioned libvvp-1.dll, so d_cosim dies with "Cannot open DLL libvvp"
+    # unless a plain libvvp.dll sits beside it. Keep both.
+    $vvpVersioned = Get-ChildItem "$ivDst\bin" -Filter 'libvvp-*.dll' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $vvpPlain = Join-Path $ivDst 'bin\libvvp.dll'
+    if ($vvpVersioned -and -not (Test-Path $vvpPlain)) {
+        Copy-Item $vvpVersioned.FullName $vvpPlain
+        Log "staged libvvp.dll (copy of $($vvpVersioned.Name)) for ngspice ivlng"
+    }
+    if (-not (Test-Path $vvpPlain)) {
+        Die "libvvp.dll (unversioned, dlopen-ed by ngspice ivlng) missing under $ivDst\bin"
     }
     Log 'Icarus Verilog (with libvvp) staged'
 }

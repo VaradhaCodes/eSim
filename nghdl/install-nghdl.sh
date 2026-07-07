@@ -72,9 +72,10 @@ error_exit() {
 detect_profile() {
     UBUNTU_VER=$(grep '^VERSION_ID=' /etc/os-release | cut -d '"' -f 2)
 
-    # GCC 14/15 (24.04+) default to C23 where 'bool' is a keyword; ngspice has
-    # `typedef int bool`. Force gnu11 to restore pre-C23 compatibility.
-    NGHDL_CFLAGS="-std=gnu11"
+    # ngspice-45.2 (the current nghdl-simulator base) builds clean under the
+    # C23 default of GCC 14/15 -- the gnu11 pin that the old ngspice-35 tarball
+    # needed (`typedef int bool` vs the C23 keyword) is gone.
+    NGHDL_CFLAGS=""
 
     case "$UBUNTU_VER" in
         26.04)
@@ -195,16 +196,24 @@ installNGHDL() {
 
     cd "$HOME/$nghdl"
 
-    # Verilator-5 / GCC-14+ link fixes (verilated_threads.o, V<mod>__ALL.a with
-    # --whole-archive, ghdl.cm/Ngveri.cm in spinit). --forward makes re-runs
-    # idempotent (an already-applied patch is skipped, not re-applied).
-    if [ -f "$src_dir/nghdl-simulator.patch" ]; then
-        log "Applying nghdl-simulator.patch"
-        patch -p1 --forward < "$src_dir/nghdl-simulator.patch" \
-            || warn "patch did not apply cleanly (already applied?) — continuing"
-    else
-        warn "nghdl-simulator.patch not found — Verilator-5/GCC-14+ links may fail"
-    fi
+    # No patch step: the tarball is ngspice-45.2 with the whole nghdl delta
+    # baked in (ghdl/Ngveri icm model dirs, outitf.c ghdlserver close hook,
+    # spinit/makedefs wiring, Verilator-5 link rules) plus d_cosim + the
+    # ivlng Icarus bridge that ngspice >= 42 provides upstream.
+
+    # Verilator runtime objects for Ngveri.cm: the icm makefile links
+    # $(srcdir)/Ngveri/verilated{,_threads}.o but nothing else builds them
+    # (the tarball deliberately ships no platform-specific objects).
+    # -DVL_TIME_CONTEXT avoids the weak sc_time_stamp() link trap.
+    VERILATOR_INC="$(verilator --getenv VERILATOR_ROOT 2>/dev/null)/include"
+    [ -d "$VERILATOR_INC" ] || VERILATOR_INC="/usr/share/verilator/include"
+    log "Compiling Verilator runtime objects from $VERILATOR_INC"
+    g++ -DVL_TIME_CONTEXT -I"$VERILATOR_INC" -I"$VERILATOR_INC/vltstd" \
+        -std=gnu++17 -O2 -fPIC -c "$VERILATOR_INC/verilated.cpp" \
+        -o src/xspice/icm/Ngveri/verilated.o
+    g++ -DVL_TIME_CONTEXT -I"$VERILATOR_INC" -I"$VERILATOR_INC/vltstd" \
+        -std=gnu++17 -O2 -fPIC -c "$VERILATOR_INC/verilated_threads.cpp" \
+        -o src/xspice/icm/Ngveri/verilated_threads.o
 
     mkdir -p install_dir release
     cd release

@@ -447,6 +447,14 @@ class Mainwindow(QtWidgets.QWidget):
         self.digital_home = os.path.join(self.digital_home, "ghdl")
         self.modelname = os.path.basename(str(self.filename)).split('.')[0]
         print("Model to be created :", self.modelname)
+        # An empty model name (no file chosen / odd filename) would make
+        # model_path == the ghdl icm ROOT below -- and the overwrite branch
+        # would rmtree every installed model plus modpath.lst. Refuse it.
+        if not self.modelname:
+            QtWidgets.QMessageBox.critical(
+                self, "Error",
+                "No VHDL file selected - cannot derive a model name.")
+            return False
         # Work with an absolute path so we never have to chdir (chdir would
         # change eSim's process-global CWD).
         model_path = os.path.join(self.digital_home, self.modelname)
@@ -659,6 +667,19 @@ class Mainwindow(QtWidgets.QWidget):
                 self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
                 prog = self.msys_home + "/mingw64/bin/mingw32-make.exe"
                 args = ["install"]
+                # The configured tree bakes the BUILD machine's absolute
+                # prefix into makedefs (pkglibdir/pkgdatadir), so a stock
+                # `make install` on an end-user PC would write the rebuilt
+                # ghdl.cm into the packager's path instead of this install's
+                # install_dir. Override both on the command line (forward
+                # slashes: these are make variables). Same fix as
+                # ModelGeneration.runMakeInstall.
+                nghdl_home = self.parser.get('NGHDL', 'NGHDL_HOME')
+                if nghdl_home:
+                    inst = os.path.join(nghdl_home, 'install_dir').replace(
+                        '\\', '/')
+                    args += ["pkglibdir=" + inst + "/lib/ngspice",
+                             "pkgdatadir=" + inst + "/share/ngspice"]
             else:
                 prog = "make"
                 args = ["install"]

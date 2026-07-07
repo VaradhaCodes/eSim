@@ -196,6 +196,26 @@ def fix_spinit(esim_root):
     return changed
 
 
+def ensure_unversioned_libvvp(esim_root):
+    """Self-heal the libvvp DLL name for ngspice's d_cosim ivlng adapter.
+
+    ivlng does LoadLibrary("libvvp") -- the UNVERSIONED name (eSim netlists
+    pass no lib_args) -- but the MinGW iverilog build ships only
+    libvvp-<N>.dll. Keep a plain libvvp.dll copy beside it. Idempotent;
+    returns True when the plain name exists afterwards."""
+    bindir = os.path.join(esim_root, 'library', 'bin', 'iverilog', 'bin')
+    plain = os.path.join(bindir, 'libvvp.dll')
+    if os.path.isfile(plain):
+        return True
+    if not os.path.isdir(bindir):
+        return False
+    for name in sorted(os.listdir(bindir)):
+        if name.startswith('libvvp-') and name.endswith('.dll'):
+            shutil.copy2(os.path.join(bindir, name), plain)
+            return True
+    return False
+
+
 def _kicad_config_root():
     if os.name == 'nt':
         return os.path.join(os.environ.get('APPDATA', ''), 'kicad')
@@ -254,6 +274,7 @@ def main(argv=None):
     seed_generated_symbols(root)
     write_nghdl_config(root)
     fix_spinit(root)
+    ensure_unversioned_libvvp(root)
     register_kicad_libraries(root)
     return 0
 

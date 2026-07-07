@@ -85,14 +85,18 @@ tarball (bug 3); verify the `-AcceptNewHashes`-recorded sha256s
     `-j2` diag rebuild forked clean start-to-finish. Folded into the script
     (was `-j$(nproc)`).
 
-11. **Verification `Die`d on a missing `ivlng` (Icarus) code model.** Line ~409
-    demanded `ivlng*` in `install_dir\lib\ngspice`, but this eSim ngspice never
-    builds one: `icm/GNUmakefile.in` `CMDIRS` lists 8 models (…`ghdl Ngveri`)
-    with no ivlng, and `ivlng` appears nowhere in the tarball, the eSim repo, or
-    `install-nghdl.sh`'s build steps; eSim's Python never loads it. The shipped
-    digital co-sim paths are `ghdl.cm` (NGHDL/VHDL) + `Ngveri.cm`
-    (NgVeri/Verilator), both already checked. → **downgrade the `Die` to an
-    informational `Log`.** **Fixed.**
+11. **Verification `Die`d on a missing `ivlng` (Icarus) code model.** The old
+    committed tarball was an **ngspice-35** fork, and ivlng/d_cosim only exist
+    upstream from ngspice ≥ 42 — so the check could never pass. Interim fix
+    downgraded the `Die` to a `Log`. **Superseded 2026-07-07:** the tarball was
+    rebuilt on **ngspice-45.2** (official source + the full nghdl delta:
+    ghdl/Ngveri icm model dirs, `outitf.c` ghdlserver close hook,
+    spinit/makedefs wiring, Verilator-5 link rules baked in — the separate
+    `nghdl-simulator.patch` is gone). That base ships `d_cosim` + `ivlng.dll` +
+    `ivlng.vpi`, so the ivlng check is a hard `Die` again, `tlines.cm` joined
+    the verified model list, and the `-std=gnu11` C23 pin (a 35-ism) was
+    dropped from both installers. Notes 9 (`-fno-strict-aliasing`, kept as a
+    harmless safety) and 8/10 still apply.
 
 12. **Official ngspice 45.2 download 404s.** SourceForge moved 45.2 to
     `ng-spice-rework/old-releases/45.2/`; the manifest URL fetched a 404 HTML

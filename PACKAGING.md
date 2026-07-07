@@ -126,13 +126,14 @@ Design decisions:
   into it by design (exactly like the Ubuntu install owns
   `$HOME/nghdl-simulator`).
 * **The custom eSim ngspice is built from source on Windows too.**
-  `Stage-SimToolchain` compiles `nghdl/nghdl-simulator-source.tar.xz` inside
-  the staged MSYS2 (mingw64) with the same flags and patch as
+  `Stage-SimToolchain` compiles `nghdl/nghdl-simulator-source.tar.xz`
+  (ngspice-45.2 + the nghdl delta baked in — no separate patch) inside
+  the staged MSYS2 (mingw64) with the same flags as
   `install-nghdl.sh` on Ubuntu, into `tools\nghdl\{src,release,install_dir}` —
   the exact `$HOME/nghdl-simulator` layout, so every `~/.nghdl/config.ini`
   key means the same thing on both OSes. The official ngspice zip is staged
   at `tools\ngspice` only as the Compact flavour's plain-simulation fallback
-  (it lacks `ivlng`/`ghdl.cm`, so d_cosim and VHDL co-sim need the custom
+  (it lacks `ghdl.cm`/`Ngveri.cm`, so VHDL/NgVeri co-sim need the custom
   build). It is a **console** build (no `--with-wingui`), like Ubuntu: eSim
   drives ngspice through QProcess and parses stdout, which the wingui build
   hijacks into its own window.

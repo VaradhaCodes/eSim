@@ -9,15 +9,11 @@
 #include <sys/types.h>
 #include <string.h>
 
-// added
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
 #if defined(__linux__)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #elif __APPLE__
 #include <sys/socket.h>
 #include <netinet/in.h>

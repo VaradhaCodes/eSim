@@ -377,7 +377,8 @@ class ModelGeneration:
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(sock_port);
             server_addr.sin_addr = *((struct in_addr *)host->h_addr);
-            bzero(&(server_addr.sin_zero),8);
+            /* memset, not bzero: MinGW (Windows) has no bzero */
+            memset(&(server_addr.sin_zero), 0, 8);
 
         '''
 
