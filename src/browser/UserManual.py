@@ -3,6 +3,7 @@ import os
 import subprocess
 import webbrowser
 
+from configuration import Dialogs
 from configuration import paths
 
 
@@ -32,7 +33,7 @@ class UserManual(QtWidgets.QWidget):
                 break
 
         if manual is None:
-            QtWidgets.QMessageBox.warning(
+            Dialogs.warning(
                 self, "User Manual not found",
                 "The bundled user manual could not be found.\n\n"
                 "You can read it online at "

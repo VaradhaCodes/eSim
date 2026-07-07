@@ -1478,6 +1478,55 @@ class MainView(QtWidgets.QWidget):
 
 
 # It is main function of the module and starts the application
+def _install_excepthook():
+    """Keep the app alive when a Qt slot raises.
+
+    PyQt6 calls qFatal() -- killing the whole process, silently under
+    pythonw -- whenever an unhandled Python exception escapes a slot while
+    ``sys.excepthook`` is still the interpreter default. Installing any
+    custom hook disables that abort. The hook records the traceback in
+    ``~/.esim/error.log`` and shows it once per exception site, so a broken
+    button degrades to an error dialog instead of the window vanishing.
+    """
+    from datetime import datetime
+    seen_sites = set()
+
+    def hook(etype, value, tb):
+        if issubclass(etype, KeyboardInterrupt):
+            sys.__excepthook__(etype, value, tb)
+            return
+        text = ''.join(traceback.format_exception(etype, value, tb))
+        sys.stderr.write(text)
+        try:
+            log_path = paths.esim_config_path('error.log')
+            os.makedirs(paths.esim_config_dir(), exist_ok=True)
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write('\n=== %s ===\n%s' % (datetime.now().isoformat(), text))
+        except OSError:
+            log_path = None
+
+        # One dialog per raise site: a failure inside a paint/timer slot must
+        # not queue an endless stack of identical modal boxes.
+        site = (etype.__name__, tb.tb_frame.f_code.co_filename if tb else '',
+                tb.tb_lineno if tb else 0)
+        if site in seen_sites:
+            return
+        seen_sites.add(site)
+        try:
+            if QtWidgets.QApplication.instance() is not None:
+                Dialogs.critical(
+                    None, 'eSim - Unexpected error',
+                    'An internal error occurred; the app will keep running, '
+                    'but the last action may be incomplete.\n\n'
+                    + ''.join(traceback.format_exception_only(etype, value)).strip()
+                    + ('\n\nDetails: %s' % log_path if log_path else '')
+                )
+        except Exception:
+            pass
+
+    sys.excepthook = hook
+
+
 def main(args):
     """
     The splash screen opened at the starting of screen is performed
@@ -1492,6 +1541,27 @@ def main(args):
         sys.exit(0 if not ToolchainCheck.failures() else 1)
 
     print("Starting eSim......")
+    _install_excepthook()
+
+    # Startup breadcrumb trail. Under pythonw there is no console, so a hang
+    # or crash during startup leaves no trace; ~/.esim/startup.log (rewritten
+    # every launch) shows the last stage reached instead.
+    def _stage(msg):
+        try:
+            os.makedirs(paths.esim_config_dir(), exist_ok=True)
+            with open(paths.esim_config_path('startup.log'), 'a',
+                      encoding='utf-8') as f:
+                import time as _time
+                f.write('%.3f %s\n' % (_time.time() - _stage.t0, msg))
+        except OSError:
+            pass
+    import time as _time
+    _stage.t0 = _time.time()
+    try:
+        os.remove(paths.esim_config_path('startup.log'))
+    except OSError:
+        pass
+    _stage('interpreter up, excepthook installed')
     # Set non-native dialogs globally
     # NOTE: AA_DontUseNativeDialogs removed in Qt6.
     # Native dialog behavior is now controlled per-dialog via QFileDialog.Option.
@@ -1592,7 +1662,9 @@ def main(args):
 
     # The slow part -- window construction + last-project restore -- now runs
     # with the splash already visible.
+    _stage('splash shown, building main window')
     appView = Application()
+    _stage('main window built')
     last_project_path = appView.obj_appconfig.load_last_project()
     if last_project_path:
         try:
@@ -1622,6 +1694,7 @@ def main(args):
     else:
         appView.obj_workspace.show()
 
+    _stage('startup complete, entering event loop')
     sys.exit(app.exec())
 
 
