@@ -18,6 +18,14 @@ DIVIDER_HIT_TOLERANCE_PX = 6
 REFRESH_DEBOUNCE_MS = 80
 STACKED_REFRESH_DEBOUNCE_MS = 160
 
+# draw-time decimation: lines longer than DECIMATION_MIN_POINTS are drawn as a
+# per-bin min/max envelope (~4 * DECIMATION_BINS points) and re-decimated from
+# the raw arrays on zoom, so deep zoom-in never loses samples
+DECIMATION_MIN_POINTS = 8000
+DECIMATION_BINS = 2000
+# debounce for zoom/pan-triggered re-decimation of on-screen lines
+REDECIMATE_DEBOUNCE_MS = 150
+
 VIBRANT_COLOR_PALETTE = [
     '#E53935',
     '#1E88E5',

@@ -52,6 +52,25 @@ def test_accent_substitution_still_applies():
     assert len(theme_utils._QSS_CACHE) == 2
 
 
+def test_apply_theme_sets_base_style_only_once(qapp, monkeypatch):
+    """setStyle('Fusion') re-polishes every widget in the app, so calling it
+    on every theme toggle doubles the repolish cost (the 2-3s toggle freeze).
+    apply_theme must install the base style once per QApplication and never
+    again."""
+    calls = []
+    monkeypatch.setattr(
+        qapp, "setStyle", lambda *a, **k: calls.append(a), raising=False)
+    if hasattr(qapp, "_esim_base_style_set"):
+        del qapp._esim_base_style_set
+
+    theme_utils.apply_theme(qapp)
+    assert calls == [("Fusion",)]
+
+    theme_utils.apply_theme(qapp)
+    theme_utils.apply_theme(qapp)
+    assert calls == [("Fusion",)]
+
+
 def test_missing_qss_file_caches_empty():
     _clear()
     out = theme_utils.build_qss('does_not_exist.qss', True, 'default',

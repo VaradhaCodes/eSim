@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple
+import matplotlib
 import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
@@ -7,8 +8,10 @@ from .trace import Trace
 from .constants import (LEGEND_FONT_SIZE, THRESHOLD_ALPHA,
                         TIME_UNIT_THRESHOLD_PS, TIME_UNIT_THRESHOLD_NS,
                         TIME_UNIT_THRESHOLD_US, TIME_UNIT_THRESHOLD_MS,
-                        REFRESH_DEBOUNCE_MS, STACKED_REFRESH_DEBOUNCE_MS)
-from .math_utils import (_format_measurement, _format_frequency, _detect_frequency, _trapz)
+                        REFRESH_DEBOUNCE_MS, STACKED_REFRESH_DEBOUNCE_MS,
+                        DECIMATION_MIN_POINTS, DECIMATION_BINS)
+from .math_utils import (_format_measurement, _format_frequency, _detect_frequency, _trapz,
+                         minmax_decimate)
 
 
 class _RenderMixin:
@@ -21,18 +24,99 @@ class _RenderMixin:
         (view-mode change, autoscale, etc.) cancel any pending tick via the
         stop() at the top of refresh_plot so they never double-rebuild.
 
-        The window is mode-aware: a stacked toggle is a full pane rebuild
-        (tens of ms, growing with pane count), so a wider window is needed to
-        actually collapse a human-paced click burst — otherwise each click
-        (>80ms apart) fires its own rebuild and the view stutters. Normal view
-        toggles take the cheap incremental path, so they stay snappy at 80ms.
-        The list item icon/text update synchronously either way, so clicks
-        always feel instant; only the plot redraw is deferred.
+        The window is mode-aware: a stacked toggle restructures panes and
+        redraws the whole (tall) canvas — cheap since the incremental stacked
+        path, but still the priciest toggle — so a wider window collapses a
+        human-paced click burst into one restructure. Normal view toggles
+        take the cheapest incremental path and stay snappy at 80ms. The list
+        item icon/text update synchronously either way, so clicks always feel
+        instant; only the plot redraw is deferred.
         """
         self._refresh_timer.setInterval(
             STACKED_REFRESH_DEBOUNCE_MS if self.radio_stacked.isChecked()
             else REFRESH_DEBOUNCE_MS)
         self._refresh_timer.start()
+
+    # ── Draw-time decimation ─────────────────────────────────────────────
+    # Long traces are drawn as a per-bin min/max envelope (peak-preserving,
+    # pixel-identical at screen scale) so matplotlib transforms/rasterises a
+    # few thousand points instead of the full array — the dominant per-pane
+    # cost once several long transients are stacked. The raw arrays stay on
+    # the artist and the view is re-sliced+re-decimated after zoom/pan, so
+    # zooming in always recovers full sample resolution.
+
+    def _add_decimated_line(self, ax, x, y, kind: str = 'plot', **kwargs) -> Line2D:
+        """Plot one line, decimated when large. kind: 'plot'|'step'|'semilogx'.
+
+        Only monotonic-x lines are decimated (Lissajous-style function traces
+        plot verbatim — index bins would scramble their path).
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        n = min(len(x), len(y))
+        x, y = x[:n], y[:n]
+        xd, yd = x, y
+        if n > DECIMATION_MIN_POINTS and bool(np.all(np.diff(x) >= 0)):
+            xd, yd = minmax_decimate(x, y, DECIMATION_BINS)
+        if kind == 'step':
+            line, = ax.step(xd, yd, where='post', **kwargs)
+        elif kind == 'semilogx':
+            line, = ax.semilogx(xd, yd, **kwargs)
+        else:
+            line, = ax.plot(xd, yd, **kwargs)
+        if len(xd) < n:
+            line._esim_raw_xy = (x, y)
+            line._esim_decim_span = (0, n)
+            self._decim_registry.append(line)
+        return line
+
+    def _connect_xlim_watch(self) -> None:
+        """Arm xlim_changed → deferred re-decimation on every pane.
+
+        Connected per-pane because matplotlib propagates shared-x limit
+        changes to siblings with emit=False — a zoom on pane 3 never fires
+        pane 0's callback. The single-shot timer coalesces the per-pane burst
+        into one _redecimate_visible pass.
+        """
+        for ax in self.panes:
+            if not getattr(ax, '_esim_xlim_watch', False):
+                ax.callbacks.connect(
+                    'xlim_changed', lambda _ax: self._schedule_redecimate())
+                ax._esim_xlim_watch = True
+
+    def _schedule_redecimate(self) -> None:
+        if self._decim_registry:
+            self._decim_timer.start()
+
+    def _redecimate_visible(self) -> None:
+        """Re-slice each decimated line's raw data to the current x-view.
+
+        Skipped mid-drag: divider drag swaps line data itself, and the cursor
+        blit snapshot would be invalidated by a data change. Both end with a
+        full draw/refresh, and the next zoom re-arms the timer anyway.
+        """
+        if self._divider_drag is not None or self._blit_background is not None:
+            return
+        fig_axes = self.fig.axes
+        live = [ln for ln in self._decim_registry
+                if ln.axes is not None and ln.axes in fig_axes]
+        self._decim_registry = live
+        changed = False
+        for ln in live:
+            x, y = ln._esim_raw_xy
+            xlo, xhi = ln.axes.get_xlim()
+            if xlo > xhi:
+                xlo, xhi = xhi, xlo
+            i0 = max(0, int(np.searchsorted(x, xlo, side='left')) - 1)
+            i1 = min(len(x), int(np.searchsorted(x, xhi, side='right')) + 1)
+            if i1 - i0 < 2 or (i0, i1) == ln._esim_decim_span:
+                continue
+            xd, yd = minmax_decimate(x[i0:i1], y[i0:i1], DECIMATION_BINS)
+            ln.set_data(xd, yd)
+            ln._esim_decim_span = (i0, i1)
+            changed = True
+        if changed:
+            self.canvas.draw_idle()
 
     def _composition_signature(self, mode: str) -> tuple:
         """Fingerprint of everything that determines the pane/artist structure.
@@ -114,6 +198,18 @@ class _RenderMixin:
                 self.canvas.draw_idle()
                 return
 
+        # ── Incremental stacked path ─────────────────────────────────────
+        # A visibility toggle in stacked view only adds/removes panes; the
+        # untouched panes' axes, lines, titles, and user zoom are already
+        # correct. Reusing them turns an O(all panes) fig.clear() rebuild
+        # into O(changed panes) — the difference between stutter and snappy
+        # once many waveforms are stacked.
+        if (not force_full and next_mode == 'stacked'
+                and self._current_view_mode == 'stacked'
+                and self._try_incremental_stacked(new_sig)):
+            self._drawn_signature = new_sig
+            return
+
         # ── Full rebuild ─────────────────────────────────────────────────
         # Preserve zoom when autoscale is off.
         # Capture only when staying in the SAME ylim-meaningful mode: timing
@@ -140,6 +236,10 @@ class _RenderMixin:
         self._drag_cursor_idx = None
         self._blit_background = None
         self.fig.clear()
+        # All artists died with the figure; drop decimation + pane-identity
+        # records so the incremental paths never touch dead objects.
+        self._decim_registry = []
+        self._stacked_pane_keys = []
         # Hover-cache held references to the old Axes; invalidate before
         # _build_panes hands out fresh ones.
         self._last_hover_axes = None
@@ -175,6 +275,7 @@ class _RenderMixin:
             if self.legend_check.isChecked():
                 self.position_legend()
         self._restore_cursors()
+        self._connect_xlim_watch()
         # Record what we just drew so the next refresh can skip the rebuild if
         # nothing structural changed.
         self._drawn_signature = new_sig
@@ -376,8 +477,9 @@ class _RenderMixin:
             logic_offset = logic_normalized + rank * spacing
 
             t = self.traces[idx]
-            line, = self.axes.step(trace_time, logic_offset, where="post",
-                                   linewidth=t.thickness, color=t.color, label=t.name)
+            line = self._add_decimated_line(
+                self.axes, trace_time, logic_offset, kind='step',
+                linewidth=t.thickness, color=t.color, label=t.name)
             t.line_object = line
 
             # y_center is always rank * spacing + 0.5 in normalized space.
@@ -451,8 +553,9 @@ class _RenderMixin:
                                    transform=xform, va='center', ha='left',
                                    color=fcolor, alpha=0.75, clip_on=False,
                                    fontsize=max(7, LEGEND_FONT_SIZE - 1))
-            self.axes.step(fx_arr, logic + rank * spacing, where='post',
-                           color=fcolor, linewidth=fthickness, label=flabel)
+            self._add_decimated_line(
+                self.axes, fx_arr, logic + rank * spacing, kind='step',
+                color=fcolor, linewidth=fthickness, label=flabel)
             yticks.append(y_center)
             ylabels.append(f'ƒ {flabel}')
 
@@ -488,41 +591,18 @@ class _RenderMixin:
             t = self.traces.get(trace_idx)
             if t is None:
                 continue
-            y_arr = np.asarray(self.obj_dataext.y[trace_idx], dtype=float)
-            n_pts = min(len(y_arr), len(x_arr))
-            if n_pts < 2:
-                continue
-            y = y_arr[:n_pts]
-            x = x_arr[:n_pts]
-            unit = 'V' if trace_idx < self.obj_dataext.volts_length else 'A'
-            ymin = float(np.min(y))
-            ymax = float(np.max(y))
-            pp = ymax - ymin
-            # Trapezoid integration is correct for adaptive-timestep ngspice
-            # output where sample spacing is non-uniform (up to 200x ratio).
-            # Simple mean/mean² gives wrong DC and RMS on such data.
-            T = float(x[-1] - x[0])
-            # Degenerate axis (all-equal x) → integration window is zero; skip
-            # the DC/RMS row instead of dividing by zero into inf/nan. Matches
-            # the guard in _render_func_pane_stats.
-            if T <= 0:
-                continue
-            dc = float(_trapz(y, x) / T)
-            rms_total_sq = float(_trapz(y * y, x) / T)
-            # AC RMS = sqrt(RMS² - DC²) — signal amplitude without DC offset.
-            rms_ac = float(np.sqrt(max(0.0, rms_total_sq - dc * dc)))
-            # Drop min/max (already visible from Y-axis ticks) and name
-            # (already the left title). Keep only the high-value stats.
-            parts = [f"p-p={_format_measurement(pp, unit)}",
-                     f"DC={_format_measurement(dc, unit)}",
-                     f"RMS={_format_measurement(rms_ac, unit)}"]
-            if self._current_analysis_type == 'transient' and pp > 1e-12:
-                mid = (ymin + ymax) / 2.0
-                logic = np.where(y > mid, 1.0, 0.0)
-                freq = _detect_frequency(x, logic)
-                if freq is not None:
-                    parts.append(f"f={_format_frequency(freq)}")
-            rows.append("  ".join(parts))
+            # Sim data is static per load, so the stats line for a given
+            # (trace, x-window, analysis) never changes — cache it. This is
+            # O(points) work per trace per rebuild otherwise, and with stats
+            # on it ran on every stacked visibility toggle. '' = computed but
+            # skipped (too few points / degenerate axis).
+            cache_key = (trace_idx, len(x_arr), self._current_analysis_type)
+            row = self._stats_cache.get(cache_key)
+            if row is None:
+                row = self._compute_trace_stats_row(trace_idx, x_arr)
+                self._stats_cache[cache_key] = row
+            if row:
+                rows.append(row)
         if not rows:
             return
         # No bbox — stats are in the title margin above the spine, no waveform
@@ -531,6 +611,45 @@ class _RenderMixin:
         ax.set_title("\n".join(rows), loc='right',
                      fontsize=max(7, LEGEND_FONT_SIZE - 1),
                      color='#444444', pad=4)
+
+    def _compute_trace_stats_row(self, trace_idx: int,
+                                 x_arr: "np.ndarray") -> str:
+        """One trace's p-p/DC/RMS (+freq) stats line; '' when not computable."""
+        y_arr = np.asarray(self.obj_dataext.y[trace_idx], dtype=float)
+        n_pts = min(len(y_arr), len(x_arr))
+        if n_pts < 2:
+            return ''
+        y = y_arr[:n_pts]
+        x = x_arr[:n_pts]
+        unit = 'V' if trace_idx < self.obj_dataext.volts_length else 'A'
+        ymin = float(np.min(y))
+        ymax = float(np.max(y))
+        pp = ymax - ymin
+        # Trapezoid integration is correct for adaptive-timestep ngspice
+        # output where sample spacing is non-uniform (up to 200x ratio).
+        # Simple mean/mean² gives wrong DC and RMS on such data.
+        T = float(x[-1] - x[0])
+        # Degenerate axis (all-equal x) → integration window is zero; skip
+        # the DC/RMS row instead of dividing by zero into inf/nan. Matches
+        # the guard in _render_func_pane_stats.
+        if T <= 0:
+            return ''
+        dc = float(_trapz(y, x) / T)
+        rms_total_sq = float(_trapz(y * y, x) / T)
+        # AC RMS = sqrt(RMS² - DC²) — signal amplitude without DC offset.
+        rms_ac = float(np.sqrt(max(0.0, rms_total_sq - dc * dc)))
+        # Drop min/max (already visible from Y-axis ticks) and name
+        # (already the left title). Keep only the high-value stats.
+        parts = [f"p-p={_format_measurement(pp, unit)}",
+                 f"DC={_format_measurement(dc, unit)}",
+                 f"RMS={_format_measurement(rms_ac, unit)}"]
+        if self._current_analysis_type == 'transient' and pp > 1e-12:
+            mid = (ymin + ymax) / 2.0
+            logic = np.where(y > mid, 1.0, 0.0)
+            freq = _detect_frequency(x, logic)
+            if freq is not None:
+                parts.append(f"f={_format_frequency(freq)}")
+        return "  ".join(parts)
 
     def _render_func_pane_stats(self, ax, fx: "np.ndarray", fy: "np.ndarray") -> None:
         x = np.asarray(fx, dtype=float)
@@ -564,6 +683,111 @@ class _RenderMixin:
                      fontsize=max(7, LEGEND_FONT_SIZE - 1),
                      color='#444444', pad=4)
 
+    def _style_stacked_pane_bottom(self, ax, is_last: bool) -> None:
+        """Bottom-edge treatment for a stacked pane.
+
+        Inner panes hide their x tick labels and paint the bottom spine gray
+        as a row-divider hint; the bottom pane keeps normal labels and the
+        theme's spine. Idempotent both ways so the incremental path can
+        re-style a kept pane whose stack position changed.
+        """
+        if is_last:
+            ax.tick_params(labelbottom=True)
+            ax.spines['bottom'].set_color(matplotlib.rcParams['axes.edgecolor'])
+            ax.spines['bottom'].set_linewidth(matplotlib.rcParams['axes.linewidth'])
+        else:
+            ax.tick_params(labelbottom=False)
+            # Visible separator hint: gray bottom spine reads as a row
+            # divider in the strip chart.
+            ax.spines['bottom'].set_color('#BDBDBD')
+            ax.spines['bottom'].set_linewidth(1.0)
+
+    def _plot_stacked_trace_pane(self, ax, trace_idx: int,
+                                 x_data: "np.ndarray") -> None:
+        """Draw one signal into its stacked pane: line, title, unit axis,
+        fitted ylim, and (when enabled) the stats overlay. Shared by the full
+        rebuild and the incremental add-pane path so both produce identical
+        panes."""
+        t = self.traces[trace_idx]
+        is_transient = self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS
+        is_ac = self.plot_type[0] == DataExtraction.AC_ANALYSIS
+        is_log = is_ac and self.plot_type[1] == 1
+        is_dc = self.plot_type[0] == DataExtraction.DC_ANALYSIS
+
+        raw_y = np.asarray(self.obj_dataext.y[t.index], dtype=float)
+        n_pts = min(len(raw_y), len(x_data))
+        if n_pts == 0:
+            ax.set_ylim(-1, 1)
+            return
+        y = raw_y[:n_pts]
+        trace_x = x_data[:n_pts]
+
+        plot_style = '-' if t.style == 'steps-post' else t.style
+        if is_log:
+            line = self._add_decimated_line(
+                ax, trace_x, y, kind='semilogx', color=t.color,
+                linewidth=t.thickness, linestyle=plot_style)
+        elif t.style == 'steps-post' and (is_transient or is_dc):
+            line = self._add_decimated_line(
+                ax, trace_x, y, kind='step', color=t.color,
+                linewidth=t.thickness)
+        else:
+            line = self._add_decimated_line(
+                ax, trace_x, y, color=t.color,
+                linewidth=t.thickness, linestyle=plot_style)
+        t.line_object = line
+
+        ax.set_title(t.name, loc='left', color=t.color,
+                     fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
+
+        unit = 'V' if t.index < self.obj_dataext.volts_length else 'A'
+        ax.set_ylabel(unit, rotation=0, va='center')
+        # Fixed axes-fraction label position instead of auto labelpad +
+        # fig.align_ylabels(). All panes span the same gridspec column, so a
+        # constant fraction lines the unit labels up by construction — and it
+        # frees every constrained_layout solve from align-group sibling
+        # walks, which made the solve O(panes²) in tick-label layouts (the
+        # dominant cost of adding/removing a pane once ~10 are stacked).
+        ax.yaxis.set_label_coords(-0.075, 0.5)
+        ax.yaxis.set_major_formatter(FuncFormatter(
+            lambda v, _pos, _u=unit: _format_measurement(float(v), _u)))
+
+        ymin = float(np.min(y))
+        ymax = float(np.max(y))
+        if abs(ymax - ymin) < 1e-12:
+            center = (ymin + ymax) / 2.0
+            ax.set_ylim(center - 1.0, center + 1.0)
+        else:
+            margin = 0.1 * (ymax - ymin)
+            ax.set_ylim(ymin - margin, ymax + margin)
+
+        if self.stats_check.isChecked():
+            self._render_pane_stats(ax, [trace_idx], x_data)
+
+    def _plot_stacked_func_pane(self, ax, f_idx: int) -> None:
+        """Draw one function trace into its stacked pane (see trace variant)."""
+        label, fx, fy, color, thickness, style = self._func_traces[f_idx]
+        plot_style = '-' if style == 'steps-post' else style
+        if style == 'steps-post':
+            self._add_decimated_line(ax, fx, fy, kind='step',
+                                     color=color, linewidth=thickness)
+        else:
+            self._add_decimated_line(ax, fx, fy, color=color,
+                                     linewidth=thickness, linestyle=plot_style)
+        ax.set_title(label, loc='left', color=color,
+                     fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
+        if len(fy):
+            ymin = float(np.min(fy))
+            ymax = float(np.max(fy))
+            if abs(ymax - ymin) < 1e-12:
+                center = (ymin + ymax) / 2.0
+                ax.set_ylim(center - 1.0, center + 1.0)
+            else:
+                margin = 0.1 * (ymax - ymin)
+                ax.set_ylim(ymin - margin, ymax + margin)
+        if self.stats_check.isChecked():
+            self._render_func_pane_stats(ax, fx, fy)
+
     def plot_stacked_diagram(self) -> None:
         """Stacked-pane view: one pane per visible trace + one per func trace.
 
@@ -580,6 +804,7 @@ class _RenderMixin:
 
         if not self._pane_groups and not self._func_traces:
             self._build_panes(1)
+            self._stacked_pane_keys = []
             self.axes.text(0.5, 0.5, 'Select a waveform to display',
                            ha='center', va='center',
                            transform=self.axes.transAxes)
@@ -589,8 +814,6 @@ class _RenderMixin:
 
         is_transient = self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS
         is_ac        = self.plot_type[0] == DataExtraction.AC_ANALYSIS
-        is_log       = is_ac and self.plot_type[1] == 1
-        is_dc        = self.plot_type[0] == DataExtraction.DC_ANALYSIS
 
         x_data = np.asarray(self.obj_dataext.x, dtype=float)
         if is_transient:
@@ -602,108 +825,32 @@ class _RenderMixin:
         # Only visible func traces get their own pane.
         _vis_func = [i for i in range(len(self._func_traces))
                      if i < len(self._func_visible) and self._func_visible[i]]
-        n_funcs = len(_vis_func)
-        n = n_groups + n_funcs
+        n = n_groups + len(_vis_func)
         self._build_panes(n)
 
+        keys: List[tuple] = []
         for pane_idx, group in enumerate(self._pane_groups):
             ax = self.panes[pane_idx]
             if not group or group[0] not in self.traces:
                 ax.set_ylim(-1, 1)
-                if pane_idx < n - 1:
-                    ax.tick_params(labelbottom=False)
-                continue
-            t = self.traces[group[0]]
-            raw_y = np.asarray(self.obj_dataext.y[t.index], dtype=float)
-            n_pts = min(len(raw_y), len(x_data))
-            if n_pts == 0:
-                ax.set_ylim(-1, 1)
-                if pane_idx < n - 1:
-                    ax.tick_params(labelbottom=False)
-                continue
-            y = raw_y[:n_pts]
-            trace_x = x_data[:n_pts]
-
-            plot_style = '-' if t.style == 'steps-post' else t.style
-            if is_log:
-                line, = ax.semilogx(trace_x, y, color=t.color,
-                                    linewidth=t.thickness,
-                                    linestyle=plot_style)
-            elif t.style == 'steps-post' and (is_transient or is_dc):
-                line, = ax.step(trace_x, y, where='post', color=t.color,
-                                linewidth=t.thickness)
+                keys.append(('none', pane_idx))
             else:
-                line, = ax.plot(trace_x, y, color=t.color,
-                                linewidth=t.thickness, linestyle=plot_style)
-            t.line_object = line
+                self._plot_stacked_trace_pane(ax, group[0], x_data)
+                keys.append(('t', group[0]))
+            self._style_stacked_pane_bottom(ax, pane_idx == n - 1)
 
-            ax.set_title(t.name, loc='left', color=t.color,
-                         fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
-
-            is_voltage = t.index < self.obj_dataext.volts_length
-            unit = 'V' if is_voltage else 'A'
-            ax.set_ylabel(unit, rotation=0, labelpad=8, va='center')
-            ax.yaxis.set_major_formatter(FuncFormatter(
-                lambda v, _pos, _u=unit: _format_measurement(float(v), _u)))
-
-            ymin = float(np.min(y))
-            ymax = float(np.max(y))
-            if abs(ymax - ymin) < 1e-12:
-                center = (ymin + ymax) / 2.0
-                ax.set_ylim(center - 1.0, center + 1.0)
-            else:
-                margin = 0.1 * (ymax - ymin)
-                ax.set_ylim(ymin - margin, ymax + margin)
-
-            if pane_idx < n - 1:
-                ax.tick_params(labelbottom=False)
-                # Visible separator hint: gray bottom spine reads as a row
-                # divider in the strip chart.
-                ax.spines['bottom'].set_color('#BDBDBD')
-                ax.spines['bottom'].set_linewidth(1.0)
-
-            if self.stats_check.isChecked():
-                self._render_pane_stats(ax, group, x_data)
-
-        # Trailing function-trace panes. Only visible func traces get a pane.
-        # _vis_func holds the original indices into _func_traces so labels
-        # and colours stay correct after partial hide/show.
+        # Trailing function-trace panes. _vis_func holds the original indices
+        # into _func_traces so labels and colours stay correct after partial
+        # hide/show.
         for pane_slot, f_idx in enumerate(_vis_func):
             pane_offset = n_groups + pane_slot
             if pane_offset >= len(self.panes):
                 break
-            label, fx, fy, color, thickness, style = self._func_traces[f_idx]
             ax = self.panes[pane_offset]
-            plot_style = '-' if style == 'steps-post' else style
-            if style == 'steps-post':
-                ax.step(fx, fy, where='post', color=color, linewidth=thickness)
-            else:
-                ax.plot(fx, fy, color=color, linewidth=thickness, linestyle=plot_style)
-            ax.set_title(label, loc='left', color=color,
-                         fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
-            if len(fy):
-                ymin = float(np.min(fy))
-                ymax = float(np.max(fy))
-                if abs(ymax - ymin) < 1e-12:
-                    center = (ymin + ymax) / 2.0
-                    ax.set_ylim(center - 1.0, center + 1.0)
-                else:
-                    margin = 0.1 * (ymax - ymin)
-                    ax.set_ylim(ymin - margin, ymax + margin)
-            if pane_offset < n - 1:
-                ax.tick_params(labelbottom=False)
-                ax.spines['bottom'].set_color('#BDBDBD')
-                ax.spines['bottom'].set_linewidth(1.0)
-
-            if self.stats_check.isChecked():
-                self._render_func_pane_stats(ax, fx, fy)
-
-        # Pin every pane's V/A unit label to one shared x column. Without this,
-        # each pane's label sits labelpad beyond ITS OWN tick labels, whose
-        # widths differ per pane ("2.5 V" vs "-2.5 V" vs "800 mV"), so the
-        # units wobble left/right down the stack. align_ylabels collapses them
-        # to a single column clearing the widest tick label.
-        self.fig.align_ylabels(self.panes)
+            self._plot_stacked_func_pane(ax, f_idx)
+            keys.append(('f', f_idx))
+            self._style_stacked_pane_bottom(ax, pane_offset == n - 1)
+        self._stacked_pane_keys = keys
 
         # Bottom-pane X label / formatter. Existing helpers already target
         # self.panes[-1], so the multi-pane case is free.
@@ -714,6 +861,182 @@ class _RenderMixin:
         else:  # DC sweep
             self._reset_x_axis_scaling()
             self.panes[-1].set_xlabel('Voltage Sweep (V)')
+
+    def _try_incremental_stacked(self, new_sig: tuple) -> bool:
+        """Restructure the stacked view in place after a visibility toggle.
+
+        Reuses every pane whose signal stays visible — axes, plotted line,
+        title, and the user's per-pane zoom survive untouched — deletes the
+        panes of hidden signals, and creates+plots panes only for newly shown
+        ones. Returns False (caller falls back to the fig.clear() rebuild)
+        whenever anything beyond the pane set changed: stats toggle, a kept
+        trace's step-style flag, a placeholder state on either side, or no
+        reusable pane at all.
+        """
+        old_sig = self._drawn_signature
+        if (old_sig is None or old_sig[0] != 'stacked'
+                or not self.panes
+                or len(self._stacked_pane_keys) != len(self.panes)):
+            return False
+        if old_sig[4] != new_sig[4]:  # stats overlay toggled → every pane changes
+            return False
+        # A kept trace whose steps-post flag flipped needs a different artist
+        # type — that pane would have to be re-plotted, so take the full path.
+        old_steps = dict(zip(old_sig[1], old_sig[2]))
+        new_steps = dict(zip(new_sig[1], new_sig[2]))
+        if any(old_steps[i] != new_steps[i]
+               for i in old_steps.keys() & new_steps.keys()):
+            return False
+
+        self._sync_pane_groups_to_visible()
+        if any(not g or g[0] not in self.traces for g in self._pane_groups):
+            return False
+        vis_func = [i for i in range(len(self._func_traces))
+                    if i < len(self._func_visible) and self._func_visible[i]]
+        target = ([('t', g[0]) for g in self._pane_groups]
+                  + [('f', i) for i in vis_func])
+        old_keys = self._stacked_pane_keys
+        if not target or target == old_keys:
+            return False
+        old_map = dict(zip(old_keys, self.panes))
+        kept = [k for k in target if k in old_map]
+        if not kept:
+            return False
+
+        # The bottom pane owns the x label; remember it before panes move.
+        xlabel = self.panes[-1].get_xlabel()
+
+        # Snapshot the frozen-layout envelope (outer extents + inter-pane gap)
+        # while the old panes still hold their solved positions. Re-slotting
+        # the new pane set inside this envelope by height ratio — exactly what
+        # the divider drag does live — skips the constrained_layout solve,
+        # which even after the align-group fix is the single biggest cost of
+        # a toggle (every solve iteration re-lays-out all panes' ticks).
+        envelope = None
+        if len(self.panes) >= 2:
+            pos = [ax.get_position() for ax in self.panes]
+            total_gap = sum(max(0.0, pos[i].y0 - pos[i + 1].y1)
+                            for i in range(len(pos) - 1))
+            envelope = {
+                'top': pos[0].y1, 'bottom': pos[-1].y0,
+                'x0': pos[0].x0, 'width': pos[0].x1 - pos[0].x0,
+                'gap': total_gap / (len(pos) - 1),
+            }
+
+        # Geometry is about to change: hover cache and blit snapshot are stale.
+        self._blit_background = None
+        self._last_hover_axes = None
+        self._last_hover_anchor = None
+
+        target_set = set(target)
+        for k, ax in zip(old_keys, self.panes):
+            if k in target_set:
+                continue
+            self.fig.delaxes(ax)
+            if k[0] == 't' and k[1] in self.traces:
+                self.traces[k[1]].line_object = None
+
+        x_data = np.asarray(self.obj_dataext.x, dtype=float)
+        if self.plot_type[0] == DataExtraction.TRANSIENT_ANALYSIS:
+            start_idx = self._get_transient_start_idx(x_data)
+            if 0 < start_idx < len(x_data):
+                x_data = x_data[start_idx:]
+
+        n = len(target)
+        gridspec_kw = {'hspace': 0.08}
+        if self._pane_heights and all(h > 0 for h in self._pane_heights):
+            heights = list(self._pane_heights)
+            while len(heights) < n:
+                heights.append(1.0)
+            gridspec_kw['height_ratios'] = heights[:n]
+        gs = self.fig.add_gridspec(n, 1, **gridspec_kw)
+
+        anchor_ax = old_map[kept[0]]
+        grid_on = self.grid_check.isChecked()
+        new_panes = []
+        for i, k in enumerate(target):
+            ax = old_map.get(k)
+            if ax is not None:
+                ax.set_subplotspec(gs[i])
+                # The post-draw freeze pinned this pane via set_position,
+                # which excludes it from layout managers; re-admit it so the
+                # constrained solve below can place the new geometry.
+                ax.set_in_layout(True)
+            else:
+                ax = self.fig.add_subplot(gs[i], sharex=anchor_ax)
+                if k[0] == 't':
+                    self._plot_stacked_trace_pane(ax, k[1], x_data)
+                else:
+                    self._plot_stacked_func_pane(ax, k[1])
+                # Match the kept panes' x formatter (raw SI → display scale).
+                if self._x_unit:
+                    ax.xaxis.set_major_formatter(FuncFormatter(
+                        lambda v, _pos, _s=self._x_scale: f"{v * _s:g}"))
+                else:
+                    ax.xaxis.set_major_formatter(ScalarFormatter())
+                ax.grid(grid_on)
+            new_panes.append(ax)
+
+        self.panes = new_panes
+        self.axes = new_panes[0]
+        self._stacked_pane_keys = target
+
+        for i, ax in enumerate(new_panes):
+            self._style_stacked_pane_bottom(ax, i == n - 1)
+            ax.set_xlabel('')
+        new_panes[-1].set_xlabel(xlabel)
+
+        # Locked panes must keep their pinned ylim even on a brand-new axes;
+        # one-shot snapshots are empty on this path so this is lock-only.
+        self._restore_view_state()
+
+        # Cursor axvlines: cheapest correct move is recreate on every pane.
+        for pane_lines in self.cursor_lines:
+            for line in pane_lines:
+                if line is None:
+                    continue
+                try:
+                    line.remove()
+                except (ValueError, NotImplementedError):
+                    pass
+        self.cursor_lines = []
+        self._restore_cursors()
+
+        self._connect_xlim_watch()
+        self._set_canvas_height_for_panes(n)
+
+        # Prune decimation entries whose axes were just deleted.
+        fig_axes = self.fig.axes
+        self._decim_registry = [ln for ln in self._decim_registry
+                                if ln.axes is not None and ln.axes in fig_axes]
+
+        # Position the new pane set. Preferred path: redistribute the frozen
+        # envelope by height ratio with the solver kept off — no constrained
+        # solve at all. New panes inherit the shared left margin; SI-formatted
+        # tick labels are near-constant width, so the fit holds. Fallback
+        # (old view was single-pane → no gap to sample): one constrained
+        # solve, re-frozen by the draw callback like the full rebuild.
+        heights_n = list(gridspec_kw.get('height_ratios', [])) or [1.0] * n
+        placed = False
+        if envelope is not None:
+            usable = ((envelope['top'] - envelope['bottom'])
+                      - envelope['gap'] * (n - 1))
+            if usable > 0.01 * n:
+                ratio_sum = max(1e-9, sum(heights_n))
+                cur = envelope['top']
+                for ax, r in zip(new_panes, heights_n):
+                    h = max(0.005, usable * (r / ratio_sum))
+                    ax.set_position([envelope['x0'], cur - h,
+                                     envelope['width'], h])
+                    cur -= h + envelope['gap']
+                self.fig.set_layout_engine('none')
+                self._pending_freeze = False
+                placed = True
+        if not placed:
+            self.fig.set_layout_engine('constrained')
+            self._pending_freeze = n > 1
+        self.canvas.draw_idle()
+        return True
 
 
     def _reset_x_axis_scaling(self) -> None:
@@ -849,16 +1172,15 @@ class _RenderMixin:
         x_plot, y_plot = x_data[:n_pts], y_data[:n_pts]
         analysis_type = self._current_analysis_type
         plot_style = '-' if t.style == 'steps-post' else t.style
-        plot_kwargs: dict = {}
         if t.style == 'steps-post' and analysis_type in ['transient', 'dc']:
-            plot_func = self.axes.step
-            plot_kwargs['where'] = 'post'
+            kind = 'step'
         elif analysis_type == 'ac_log':
-            plot_func = self.axes.semilogx
+            kind = 'semilogx'
         else:
-            plot_func = self.axes.plot
-        line, = plot_func(x_plot, y_plot, color=t.color, label=t.name,
-                          linewidth=t.thickness, linestyle=plot_style, **plot_kwargs)
+            kind = 'plot'
+        line = self._add_decimated_line(
+            self.axes, x_plot, y_plot, kind=kind, color=t.color, label=t.name,
+            linewidth=t.thickness, linestyle=plot_style)
         t.line_object = line
         return line
 
@@ -900,11 +1222,13 @@ class _RenderMixin:
             if _n > 0:
                 _plot_style = '-' if _style == 'steps-post' else _style
                 if _style == 'steps-post':
-                    self.axes.step(_fx[:_n], _fy[:_n], where='post',
-                                   color=_color, label=_label, linewidth=_thickness)
+                    self._add_decimated_line(
+                        self.axes, _fx[:_n], _fy[:_n], kind='step',
+                        color=_color, label=_label, linewidth=_thickness)
                 else:
-                    self.axes.plot(_fx[:_n], _fy[:_n], color=_color,
-                                   label=_label, linewidth=_thickness, linestyle=_plot_style)
+                    self._add_decimated_line(
+                        self.axes, _fx[:_n], _fy[:_n], color=_color,
+                        label=_label, linewidth=_thickness, linestyle=_plot_style)
 
 
     def on_push_decade(self) -> None:

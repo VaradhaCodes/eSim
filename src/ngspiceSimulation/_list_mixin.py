@@ -39,6 +39,10 @@ class _ListMixin:
     def populate_waveform_list(self) -> None:
         self.waveform_list.clear()
         self.traces.clear()
+        # New dataset: everything keyed to the old traces is stale.
+        self._stats_cache.clear()
+        self._decim_registry.clear()
+        self._stacked_pane_keys = []
         saved_colors = self.config.get('trace_colours', {})
         saved_thickness = self.config.get('trace_thickness', {})
         saved_style = self.config.get('trace_style', {})

@@ -96,7 +96,8 @@ logger = logging.getLogger(__name__)
 
 from .constants import (DEFAULT_DPI, DEFAULT_EXPORT_DPI, DEFAULT_FIGURE_SIZE,
                         DEFAULT_VERTICAL_SPACING, DEFAULT_ZOOM_FACTOR,
-                        REFRESH_DEBOUNCE_MS, VIBRANT_COLOR_PALETTE)
+                        REFRESH_DEBOUNCE_MS, REDECIMATE_DEBOUNCE_MS,
+                        VIBRANT_COLOR_PALETTE)
 from .trace import Trace, CustomListWidget
 from ._pane_mixin import _PaneMixin
 from ._cursor_mixin import _CursorMixin
@@ -156,6 +157,12 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(REFRESH_DEBOUNCE_MS)
         self._refresh_timer.timeout.connect(self.refresh_plot)
+        # zoom/pan re-decimation: xlim_changed callbacks restart this so a
+        # wheel-zoom burst re-slices the decimated lines once, after it settles
+        self._decim_timer: QtCore.QTimer = QtCore.QTimer(self)
+        self._decim_timer.setSingleShot(True)
+        self._decim_timer.setInterval(REDECIMATE_DEBOUNCE_MS)
+        self._decim_timer.timeout.connect(self._redecimate_visible)
         self.traces: Dict[int, Trace] = {}
         # cursor_lines[i]: axvlines per pane; empty inner list = cursor not yet rendered
         self.cursor_lines: List[List[Optional[Line2D]]] = []
@@ -172,6 +179,16 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         # incremental-refresh: skip full rebuild when composition unchanged; _force_full_refresh overrides
         self._drawn_signature: Optional[tuple] = None
         self._force_full_refresh: bool = False
+        # stacked pane identity, parallel to self.panes: ('t', trace_idx) or
+        # ('f', func_idx). Lets a visibility toggle reuse unchanged panes
+        # instead of fig.clear()-rebuilding the whole stack.
+        self._stacked_pane_keys: List[tuple] = []
+        # Line2D artists drawn with a min/max envelope; re-decimated from
+        # their raw arrays (line._esim_raw_xy) when the x-view changes.
+        self._decim_registry: List[Any] = []
+        # per-trace stats-overlay strings; sim data is static per load, so
+        # p-p/DC/RMS/freq never change for a given (trace, x-window)
+        self._stats_cache: Dict[tuple, str] = {}
         # layout freeze: stacked rebuild sets _pending_freeze; draw callback snapshots geometry and drops solver
         self._pending_freeze: bool = False
         # display-only scale: line data stays in raw SI; ticks formatted as raw * _x_scale
@@ -271,6 +288,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._refresh_timer.stop()
         self._controls_timer.stop()
         self._resize_timer.stop()
+        self._decim_timer.stop()
         if hasattr(self, 'canvas'):
             self.canvas.close()
         if hasattr(self, 'fig'):

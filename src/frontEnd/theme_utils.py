@@ -193,8 +193,16 @@ def apply_theme(app):
     qss_content = build_qss(qss_name, is_dark, accent_color, secondary_color,
                             internal_bg_color, zoom_level)
 
-    app.setStyleSheet(qss_content)
-
+    # Install the palette BEFORE the stylesheet. QApplication.setPalette()
+    # propagates unreliably while an app stylesheet is active (documented Qt
+    # caveat: style sheets and setPalette don't mix), so widgets whose QSS
+    # rules leave the background to the palette (e.g. the dock-area backdrop
+    # behind Welcome) kept the *previous* theme's palette when the palette was
+    # set after the sheet — light mode showed a dark dock. Setting the palette
+    # first means the full repolish that setStyleSheet() triggers resolves
+    # every widget against the new palette in one pass. (The old code got away
+    # with sheet-then-palette only because the unconditional setStyle("Fusion")
+    # afterwards forced a second full repolish.)
     if is_dark:
         palette = QtGui.QPalette()
         palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#050812"))
@@ -232,7 +240,20 @@ def apply_theme(app):
         palette.setColor(QtGui.QPalette.ColorRole.PlaceholderText, QtGui.QColor("#6B7F99"))
         app.setPalette(palette)
 
-    app.setStyle("Fusion")
+    app.setStyleSheet(qss_content)
+
+    # Set the base widget style exactly once per application. setStyle() is
+    # not a no-op when the style is already Fusion: every call constructs a
+    # fresh QStyle and re-polishes every widget in the process — a second
+    # full-app repolish on top of the one setStyleSheet() above already did.
+    # On a populated session (docks + editors + plot windows, thousands of
+    # widgets) that redundant pass alone costs ~0.7s of the theme-toggle
+    # freeze. The active style never changes after startup, so gate it.
+    # (Can't compare app.style().objectName(): with an app stylesheet
+    # installed the active style is a QStyleSheetStyle whose name is "".)
+    if not getattr(app, "_esim_base_style_set", False):
+        app.setStyle("Fusion")
+        app._esim_base_style_set = True
 
     # Re-theming (setStyleSheet + setPalette) does NOT invalidate the cached
     # render of a QGraphicsDropShadowEffect, so every widget that carries one
