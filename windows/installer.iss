@@ -65,12 +65,14 @@ Name: "{app}"; Permissions: users-modify
 
 [Files]
 ; Core = everything except the HDL build toolchain. NOTE tools\nghdl\
-; install_dir (the custom eSim ngspice runtime: d_cosim + ivlng + ghdl.cm)
+; install_dir (the custom eSim ngspice runtime: d_cosim + ivlng + ghdl.cm,
+; plus ngspice_gui.exe, the wingui twin that draws the interactive plots)
 ; IS core -- every flavour simulates with it; only the trees used to BUILD
 ; new HDL models (MSYS2, ngspice sources, configured build tree) are the
-; optional 'hdl' component.
+; optional 'hdl' component. release_gui is a throwaway build dir; the build
+; script deletes it, and this excludes an interrupted build's leftovers.
 Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
-    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*"; \
+    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StageDir}\tools\msys64\*"; DestDir: "{app}\tools\msys64"; Components: hdl; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist

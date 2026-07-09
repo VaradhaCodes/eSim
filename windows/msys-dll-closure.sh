@@ -14,7 +14,9 @@ CM="$root/install_dir/lib/ngspice"
 deps() { objdump -p "$@" 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | sort -u; }
 
 seen=""
-queue=$(deps "$BIN/ngspice.exe" "$CM/ivlng.dll" "$CM"/*.cm)
+# Every exe in bin/, not just ngspice.exe: ngspice_gui.exe (the wingui twin
+# used for interactive plots) links the same runtime and must resolve it too.
+queue=$(deps "$BIN"/*.exe "$CM/ivlng.dll" "$CM"/*.cm)
 while [ -n "$queue" ]; do
     next=""
     for d in $queue; do

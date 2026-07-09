@@ -19,7 +19,7 @@ def fake_home(tmp_path, monkeypatch):
     overrides, then hand back a freshly-reloaded CosimConfig module."""
     monkeypatch.setenv("HOME", str(tmp_path))
     for var in ("ESIM_IVERILOG", "ESIM_VVP", "ESIM_NGSPICE",
-                "ESIM_IVERILOG_LIB"):
+                "ESIM_NGSPICE_GUI", "ESIM_IVERILOG_LIB"):
         monkeypatch.delenv(var, raising=False)
     importlib.reload(CosimConfig)
     return CosimConfig
@@ -87,3 +87,47 @@ def test_vvp_falls_back_next_to_iverilog(fake_home, tmp_path, monkeypatch):
     fake_home.set_manual_paths(iverilog_path=iv)
     importlib.reload(fake_home)
     assert fake_home.vvp_binary() == vv
+
+
+def test_ngspice_gui_is_windows_only(fake_home, tmp_path, monkeypatch):
+    # POSIX ngspice plots through X11 from the console binary; there is no
+    # wingui twin to find, even if a stray file of that name sits in bin/.
+    bindir = tmp_path / "install_dir" / "bin"
+    _make_tool(str(bindir), "ngspice")
+    _make_tool(str(bindir), "ngspice_gui.exe")
+    monkeypatch.setenv("ESIM_NGSPICE", str(bindir / "ngspice"))
+    monkeypatch.setattr(fake_home, "_WIN", False)
+    assert fake_home.ngspice_gui_binary() is None
+
+
+def test_ngspice_gui_found_next_to_console_ngspice(fake_home, tmp_path,
+                                                   monkeypatch):
+    bindir = tmp_path / "install_dir" / "bin"
+    ngspice = _make_tool(str(bindir), "ngspice.exe")
+    gui = _make_tool(str(bindir), "ngspice_gui.exe")
+    monkeypatch.setenv("ESIM_NGSPICE", ngspice)
+    monkeypatch.setattr(fake_home, "_WIN", True)
+    assert fake_home.ngspice_gui_binary() == gui
+
+
+def test_ngspice_gui_absent_is_none_not_a_bogus_path(fake_home, tmp_path,
+                                                     monkeypatch):
+    # An install without the wingui twin must report None so the caller can say
+    # so, rather than handing QProcess a path that will fail to start.
+    bindir = tmp_path / "install_dir" / "bin"
+    ngspice = _make_tool(str(bindir), "ngspice.exe")
+    monkeypatch.setenv("ESIM_NGSPICE", ngspice)
+    monkeypatch.setattr(fake_home, "_WIN", True)
+    assert fake_home.ngspice_gui_binary() is None
+
+
+def test_ngspice_gui_env_override_beats_sibling(fake_home, tmp_path,
+                                                monkeypatch):
+    bindir = tmp_path / "install_dir" / "bin"
+    ngspice = _make_tool(str(bindir), "ngspice.exe")
+    _make_tool(str(bindir), "ngspice_gui.exe")
+    override = _make_tool(str(tmp_path / "elsewhere"), "ngspice_gui.exe")
+    monkeypatch.setenv("ESIM_NGSPICE", ngspice)
+    monkeypatch.setenv("ESIM_NGSPICE_GUI", override)
+    monkeypatch.setattr(fake_home, "_WIN", True)
+    assert fake_home.ngspice_gui_binary() == override

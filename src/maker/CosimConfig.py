@@ -99,6 +99,29 @@ def ngspice_binary():
     return shutil.which('ngspice') or 'ngspice'
 
 
+def ngspice_gui_binary():
+    """Windows only: the --with-wingui ngspice, or None.
+
+    The ngspice eSim runs for simulations is a console build (X_DISPLAY_MISSING,
+    no HAS_WINGUI) because eSim drives it through QProcess and parses its stdout,
+    which a wingui binary swallows into its own window. That build has no
+    graphics device at all, so its `plot` command only ever answers "Can't open
+    viewport for graphics". The interactive plot session therefore runs a second,
+    wingui-only binary shipped beside it. On Windows ngspice resolves its lib
+    dir relative to the executable (src/misc/ivars.c: dirname(argv0) +
+    ../share/ngspice), so the twin sitting in the same bin finds spinit --
+    whose absolute codemodel lines then load the *.cm -- exactly like
+    ngspice.exe does.
+    """
+    if not _WIN:
+        return None
+    env = os.environ.get('ESIM_NGSPICE_GUI')
+    if env and os.path.isfile(env):
+        return env
+    cand = os.path.join(_prefix_of(ngspice_binary()), 'bin', 'ngspice_gui.exe')
+    return cand if os.path.isfile(cand) else None
+
+
 def ngspice_codemodel_dir():
     """Directory holding ngspice's *.cm code models + the ivlng adapter
     (<prefix>/lib/ngspice), or None."""

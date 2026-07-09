@@ -376,7 +376,9 @@ function Stage-SimToolchain {
                                  lib\ngspice\*.cm -- what CosimConfig runs)
        Console build (no --with-wingui), exactly like Ubuntu: eSim drives
        ngspice through QProcess and parses stdout; the wingui build hijacks
-       stdout into its own window. Interactive plots run via mintty. #>
+       stdout into its own window. That console binary has no graphics device
+       on Windows, so a second wingui-only exe is built alongside it purely for
+       the interactive plot window (see below). #>
     if ($SkipSimBuild) {
         Log 'Skipping sim-toolchain source builds (-SkipSimBuild)'
         return
@@ -435,6 +437,41 @@ function Stage-SimToolchain {
         ) 'custom ngspice build failed'
     }
     if (-not (Test-Path $ngspiceExe)) { Die 'ngspice.exe missing after custom build' }
+
+    <# --- wingui ngspice, for interactive plots only -------------------------
+       The console build above has no graphics device at all (config.h:
+       X_DISPLAY_MISSING, no HAS_WINGUI), so `plot` in it can only ever answer
+       "Can't open viewport for graphics" -- on Ubuntu the same console build
+       plots because it links X11. Build the source a second time with
+       --with-wingui and keep just the exe: NgspiceWidget.open_ngspice_plots
+       runs it for the plot session while the batch run keeps using the console
+       twin, whose stdout it parses. On Windows ngspice finds its lib dir
+       relative to the exe (src/misc/ivars.c: dirname(argv0)/../share/ngspice),
+       so the exe copied into install_dir\bin picks up the console build's
+       installed spinit and its absolute codemodel paths; no `make install`,
+       so nothing in install_dir is overwritten. #>
+    $ngspiceGuiExe = Join-Path $nghdlDst 'install_dir\bin\ngspice_gui.exe'
+    if (Test-Path $ngspiceGuiExe) {
+        Log 'wingui ngspice already staged (delete tools\nghdl to rebuild)'
+    }
+    else {
+        Log 'Building wingui ngspice (interactive plot window) in MSYS2'
+        Invoke-MsysBash (
+            "set -e; cd `"`$(cygpath -u '$toolsU')/nghdl`" && " +
+            "rm -rf release_gui && mkdir -p release_gui && cd release_gui && " +
+            "../configure --with-wingui --enable-xspice --disable-debug " +
+            "--prefix=`"`$(cygpath -am ../install_dir)`" " +
+            "--exec-prefix=`"`$(cygpath -am ../install_dir)`" " +
+            "CFLAGS='-m64 -O2 -fno-strict-aliasing' LDFLAGS='-m64 -s' " +
+            "LIBS='-lws2_32 -lpsapi -lshlwapi' && " +
+            "make -j2 && " +
+            "cp src/ngspice.exe ../install_dir/bin/ngspice_gui.exe && " +
+            # The build tree is throwaway: only `release` is shipped (runtime
+            # model rebuilds use it) and a second one would near-double it.
+            "cd .. && rm -rf release_gui"
+        ) 'wingui ngspice build failed'
+    }
+    if (-not (Test-Path $ngspiceGuiExe)) { Die 'ngspice_gui.exe missing after wingui build' }
 
     # Always ensure the MinGW runtime-DLL closure is present (idempotent, and
     # the "already staged" fast path must not skip it): without it the

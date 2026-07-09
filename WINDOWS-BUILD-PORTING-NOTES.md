@@ -117,6 +117,20 @@ tarball (bug 3); verify the `-AcceptNewHashes`-recorded sha256s
     `${env:ProgramFiles(x86)}` (both the candidate list and the post-install
     check). **Fixed.**
 
+15. **"Do you want Ngspice plots?" → Yes opened a window that could never draw.**
+    eSim's ngspice is configured without `--with-wingui` on purpose: eSim drives
+    it through `QProcess` and parses its stdout, which a wingui binary swallows
+    into its own window. But that leaves the binary with *no* graphics device on
+    Windows (`config.h`: `X_DISPLAY_MISSING 1`, no `HAS_WINGUI`) — the same
+    console build plots on Ubuntu only because it links X11. So the mintty plot
+    session printed `Warning: no graphics interface!` and answered every `plot`
+    line from the netlist's `.control` block with `Can't open viewport for
+    graphics`. → build the source a **second** time with `--with-wingui`, same
+    `--prefix` and no `make install`, and keep only the exe as
+    `install_dir\bin\ngspice_gui.exe`; `open_ngspice_plots` runs that for the
+    plot session (it owns its console window, so mintty — and therefore the HDL
+    component — is no longer needed for plots). **Fixed.**
+
 ## Also
 - `-AcceptNewHashes` filled blank `deps-manifest.json` sha256s with whatever
   downloaded — **verify against upstream checksums before merge.**

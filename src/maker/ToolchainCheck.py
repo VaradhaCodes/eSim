@@ -359,7 +359,7 @@ def _check_msys():
     mintty = os.path.join(home, 'usr', 'bin', 'mintty.exe') if home else ''
     mintty_ok = bool(mintty) and os.path.isfile(mintty)
     checks.append(Check(
-        key='msys_mintty', label='mintty (terminal for ngspice/ghdlserver)',
+        key='msys_mintty', label='mintty (terminal for ghdlserver)',
         ok=mintty_ok,
         path=mintty or '<MSYS_HOME>/usr/bin/mintty.exe',
         detail='' if not mintty_ok else 'found',

@@ -375,56 +375,48 @@ class NgspiceWidget(QtWidgets.QWidget):
 
         if os.name == 'nt':
             try:
-                # MSYS_HOME comes from the same per-user ~/.nghdl/config.ini
-                # every other flow reads (CosimConfig), NOT the legacy
-                # CWD-relative library/config path the old code probed.
-                msys_home = CosimConfig.nghdl_cfg('COMPILER', 'MSYS_HOME')
-                mintty_exe = (os.path.join(msys_home, 'usr', 'bin',
-                                           'mintty.exe') if msys_home else '')
-                if not mintty_exe or not os.path.isfile(mintty_exe):
+                # self.ngspice_bin is a console build with no graphics device,
+                # so its `plot` only ever answers "Can't open viewport for
+                # graphics". Plots need the wingui twin shipped beside it, which
+                # owns its console window -- no mintty, so this works on Compact
+                # installs that carry no MSYS2 too.
+                gui_bin = CosimConfig.ngspice_gui_binary()
+                if not gui_bin:
                     Dialogs.warning(
                         self, "Interactive plots unavailable",
-                        "The MSYS2 terminal (mintty) was not found, so the "
-                        "interactive ngspice plot window cannot open.\n\n"
-                        "Probed: " + (mintty_exe or
-                                      "~/.nghdl/config.ini [COMPILER] "
-                                      "MSYS_HOME (unset)") + "\n\n"
-                        "Reinstall eSim with the \"HDL toolchain (MSYS2)\" "
-                        "component. The plot data itself is available via "
-                        "eSim's own plotting window.")
-                    logger.warning("mintty not found; skipping nt plots.")
-                    return
-                if not os.path.isfile(self.ngspice_bin):
-                    Dialogs.warning(
-                        self, "ngspice not found",
-                        "ngspice was not found at:\n" + self.ngspice_bin +
-                        "\n\nReinstall eSim (Full).")
+                        "The graphics-capable ngspice (ngspice_gui.exe) was not "
+                        "found next to:\n" + self.ngspice_bin + "\n\n"
+                        "eSim's simulation ngspice is a console build and cannot "
+                        "draw plot windows. Reinstall eSim to get it.\n\n"
+                        "Your waveforms are already available in eSim's own "
+                        "plotting window.")
+                    logger.warning("ngspice_gui.exe not found; skipping nt plots.")
                     return
 
-                self.mintty_process = QtCore.QProcess(self)
-                self.mintty_process.setWorkingDirectory(self.project_dir)
-                self.mintty_process.errorOccurred.connect(
-                    lambda err: logger.error(f"mintty plot error: {err}"))
+                self.plot_process = QtCore.QProcess(self)
+                self.plot_process.setWorkingDirectory(self.project_dir)
+                self.plot_process.errorOccurred.connect(
+                    lambda err: logger.error(f"ngspice_gui plot error: {err}"))
+                env = QtCore.QProcessEnvironment.systemEnvironment()
                 # d_cosim re-runs need libvvp on the loader path (PATH on nt)
                 # for ngspice's ivlng adapter, exactly like the batch run.
-                env = QtCore.QProcessEnvironment.systemEnvironment()
                 if self.uses_dcosim:
                     iv_lib = CosimConfig.iverilog_libdir()
                     if iv_lib:
                         env.insert('PATH', iv_lib + os.pathsep +
                                    env.value('PATH', ''))
                 # mintty/bash for any NGHDL testbench relaunched by the model.
-                env.insert('PATH', os.path.join(msys_home, 'usr', 'bin') +
-                           os.pathsep + env.value('PATH', ''))
-                self.mintty_process.setProcessEnvironment(env)
-                # Pass program + args directly — Qt handles quoting internally
-                self.mintty_process.start(
-                    mintty_exe, ['-h', 'always', self.ngspice_bin,
-                                 '-p', self.command])
-                self._register_process(self.mintty_process)
-                logger.info(
-                    f"Started mintty: {mintty_exe} "
-                    f"{self.ngspice_bin} -p {self.command}")
+                msys_home = CosimConfig.nghdl_cfg('COMPILER', 'MSYS_HOME')
+                if msys_home and os.path.isdir(msys_home):
+                    env.insert('PATH', os.path.join(msys_home, 'usr', 'bin') +
+                               os.pathsep + env.value('PATH', ''))
+                self.plot_process.setProcessEnvironment(env)
+                # The netlist's own .control block re-runs the analysis and
+                # replays its `plot` lines, so no -r/-p is needed: hand over the
+                # netlist and let the window sit at the ngspice prompt.
+                self.plot_process.start(gui_bin, [self.command])
+                self._register_process(self.plot_process)
+                logger.info(f"Started ngspice_gui: {gui_bin} {self.command}")
 
             except Exception as e:
                 logger.error(f"Failed to start Windows NGSpice plots: {e}")
