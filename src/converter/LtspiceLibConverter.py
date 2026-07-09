@@ -37,7 +37,9 @@ class LTspiceLibConverter:
             print("Running command:", " ".join(command), "in", parser_path)
             try:
                 subprocess.run(command, check=True, cwd=parser_path,
-                               capture_output=True, text=True)
+                               capture_output=True, text=True,
+                               creationflags=getattr(
+                                   subprocess, 'CREATE_NO_WINDOW', 0))
 
                 # Message box with the conversion success message
                 msg_box = Dialogs.make_message_box(self.parent)

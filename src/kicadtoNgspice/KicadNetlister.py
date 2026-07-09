@@ -256,7 +256,9 @@ def generate_netlist(proj_dir, proj_name):
         proc = subprocess.run(
             [cli, 'sch', 'export', 'netlist', '--format', 'kicadxml',
              '-o', xml_path, sch],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=120,
+            # No blank console window on Windows (GUI parent has no console).
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if proc.returncode != 0 or not os.path.isfile(xml_path):
             return False, "kicad-cli netlist export failed: " + proc.stderr.strip()
 

@@ -14,6 +14,11 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
+# The eSim GUI process has no console, so console children (iverilog, vvp)
+# would each pop up a blank console window on Windows -- and closing one
+# aborts the run via CTRL_CLOSE_EVENT. 0 on POSIX.
+NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 @dataclass
 class CompileResult:
@@ -85,12 +90,12 @@ def _run_cmd(cmd, cwd, timeout, cancel, env=None):
     if cancel is None:
         proc = subprocess.run(
             cmd, cwd=cwd, env=env, capture_output=True, text=True,
-            timeout=timeout)
+            timeout=timeout, creationflags=NO_WINDOW)
         return proc.returncode, proc.stdout, proc.stderr
 
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True)
+        text=True, creationflags=NO_WINDOW)
     cancel.bind(proc)
     try:
         out, err = proc.communicate(timeout=timeout)

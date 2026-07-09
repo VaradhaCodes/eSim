@@ -575,9 +575,15 @@ class Mainwindow(QtWidgets.QWidget):
                 self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
                 bash = os.path.join(self.msys_home, 'usr', 'bin', 'bash.exe')
                 mingw_env = "export PATH=/mingw64/bin:/usr/bin:$PATH && "
-                subprocess.call([bash, '-c', mingw_env + 'sh compile.sh'])
-                subprocess.call([bash, '-c', 'chmod a+x start_server.sh'])
-                subprocess.call([bash, '-c', 'chmod a+x sock_pkg_create.sh'])
+                # CREATE_NO_WINDOW: this GUI process has no console, so each
+                # bash.exe would otherwise flash its own blank console window.
+                no_window = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                subprocess.call([bash, '-c', mingw_env + 'sh compile.sh'],
+                                creationflags=no_window)
+                subprocess.call([bash, '-c', 'chmod a+x start_server.sh'],
+                                creationflags=no_window)
+                subprocess.call([bash, '-c', 'chmod a+x sock_pkg_create.sh'],
+                                creationflags=no_window)
             else:
                 subprocess.call("bash " + path + "/DUTghdl/compile.sh",
                                 shell=True)

@@ -171,7 +171,12 @@ class WorkerThread(QtCore.QThread):
                 'create a new project or open an existing project.')
             return
 
-        proc = subprocess.Popen(shlex.split(command))
+        # CREATE_NO_WINDOW: console children (python scripts, CLI tools) must
+        # not flash a blank console; GUI children (eeschema, OMEdit) are
+        # unaffected by the flag. 0 on POSIX.
+        proc = subprocess.Popen(
+            shlex.split(command),
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
         if 'nghdl' in command:
             return

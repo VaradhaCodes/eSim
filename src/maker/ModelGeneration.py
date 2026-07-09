@@ -31,6 +31,7 @@ import re
 import os
 import shutil
 import subprocess
+import threading
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
 from configuration import paths
@@ -56,6 +57,13 @@ class ModelGeneration(QtWidgets.QWidget):
     # GUI thread (NgVeri.addverilog), so a slow build no longer freezes eSim;
     # this is only the per-step wall-clock safety net.
     PROCESS_TIMEOUT = 600           # 10 minutes, in seconds (subprocess.run)
+
+    # eSim's GUI process has no console, so every console child (mingw32-make,
+    # verilator, gcc) would otherwise allocate its own visible console window
+    # -- a blank black box, since the output is piped. Worse than cosmetic:
+    # closing that mystery window sends CTRL_CLOSE_EVENT to the child, which
+    # aborts the build mid-link ("mingw32-make: *** Interrupt"). 0 on POSIX.
+    NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
     # Emitted for every line/block of build output. Connected to termedit in
     # __init__; because the connection is auto-typed, calls from the GUI thread
@@ -212,33 +220,75 @@ class ModelGeneration(QtWidgets.QWidget):
             never strand the whole app inside a model sub-directory and no
             longer races the CWD-relative paths elsewhere in eSim.
 
-            Output is captured and streamed into the NgVeri terminal via the
-            ``line`` signal, so this is safe to call from the build worker
-            thread (the signal is queued back onto the GUI thread).
+            stdout is streamed into the NgVeri terminal line-by-line as the
+            tool produces it (via the ``line`` signal, so this is safe to call
+            from the build worker thread -- the signal is queued back onto the
+            GUI thread). A long make no longer looks like a hang: the user
+            watches the compile progress live. stderr is drained on a helper
+            thread (so neither pipe can fill up and deadlock the child) and
+            reported in red once the step finishes.
         '''
         self.termtitle(title)
         self.termtext("Current Directory: " + (cwd or os.getcwd()))
         self.termtext("Command: " + " ".join(cmd))
         try:
-            res = subprocess.run(
-                cmd, cwd=cwd, env=env, capture_output=True, text=True,
-                timeout=self.PROCESS_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            self.termtext("[NgVeri] '" + title +
-                          "' timed out and was stopped.")
-            return False
+            proc = subprocess.Popen(
+                cmd, cwd=cwd, env=env, text=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=self.NO_WINDOW)
         except OSError as err:
             self.termtext("[NgVeri] '" + title + "' could not be started: " +
                           str(err))
             return False
 
-        if res.stdout:
-            self.termtext(res.stdout)
-        if res.stderr:
-            self._emit_error(res.stderr)
-        if res.returncode != 0:
+        err_buf = []
+
+        def _drain_stderr():
+            try:
+                err_buf.append(proc.stderr.read())
+            except Exception:
+                pass
+
+        drainer = threading.Thread(target=_drain_stderr, daemon=True)
+        drainer.start()
+
+        # Wall-clock safety net: unlike subprocess.run(timeout=...), a
+        # streaming read has no built-in deadline, so a watchdog kills a
+        # genuinely hung tool after PROCESS_TIMEOUT seconds.
+        timed_out = threading.Event()
+
+        def _kill_on_timeout():
+            timed_out.set()
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+        watchdog = threading.Timer(self.PROCESS_TIMEOUT, _kill_on_timeout)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            for out_line in proc.stdout:
+                out_line = out_line.rstrip()
+                if out_line:
+                    self.termtext(out_line)
+            proc.stdout.close()
+            returncode = proc.wait()
+        finally:
+            watchdog.cancel()
+            drainer.join(timeout=5)
+
+        stderr = "".join(err_buf)
+        if stderr.strip():
+            self._emit_error(stderr)
+        if timed_out.is_set():
+            self.termtext("[NgVeri] '" + title +
+                          "' timed out and was stopped.")
+            return False
+        if returncode != 0:
             self.termtext("[NgVeri] '" + title + "' failed (exit code " +
-                          str(res.returncode) + ").")
+                          str(returncode) + ").")
             return False
         return True
 
@@ -596,7 +646,8 @@ class ModelGeneration(QtWidgets.QWidget):
         try:
             import subprocess
             res = subprocess.run([binary, "-V"], capture_output=True,
-                                 text=True, timeout=10)
+                                 text=True, timeout=10,
+                                 creationflags=self.NO_WINDOW)
             lines = (res.stdout or res.stderr or "").strip().splitlines()
             return lines[0] if lines and lines[0].strip() else "unknown"
         except Exception:

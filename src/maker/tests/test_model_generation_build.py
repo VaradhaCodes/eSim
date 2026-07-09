@@ -1,14 +1,15 @@
 """Regression tests for the async NgVeri legacy build (audit area-05 P2-1)
 and the ModelGeneration fixes folded into that pass (F3/F6/F7).
 
-None of these need verilator/make/iverilog installed: the subprocess boundary
-is monkeypatched, so we assert on *how* the pipeline drives its tools (argument
-lists, cwd, no os.chdir, real exit-code verdict) and on the pure-Python file
-handling (SV rename, empty-source parse guard).
+None of these need verilator/make/iverilog installed: the _run tests drive the
+real (streaming Popen) subprocess boundary with the Python interpreter itself
+as the child, so they assert on *how* the pipeline drives its tools (argument
+lists, cwd, no os.chdir, live output, real exit-code verdict, timeout kill) --
+and on the pure-Python file handling (SV rename, empty-source parse guard).
 """
 import importlib
 import os
-import subprocess
+import sys
 
 import pytest
 from PyQt6 import QtWidgets
@@ -31,46 +32,50 @@ def model(qapp, tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # _run: subprocess arg-list, cwd, real exit-code verdict (F1/F3)
 # --------------------------------------------------------------------------- #
-def test_run_passes_arglist_and_cwd_no_chdir(model, monkeypatch):
-    calls = {}
+def test_run_passes_arglist_and_cwd_no_chdir(model, tmp_path):
     cwd_before = os.getcwd()
-
-    def fake_run(cmd, cwd=None, env=None, **kw):
-        calls["cmd"] = cmd
-        calls["cwd"] = cwd
-        # Working directory must NOT have been mutated (no os.chdir dance).
-        assert os.getcwd() == cwd_before
-        return subprocess.CompletedProcess(cmd, 0, "out", "")
-
-    monkeypatch.setattr(ModelGeneration.subprocess, "run", fake_run)
-
-    ok = model._run(["make", "install"], "MAKE", cwd="/some/dir")
+    # The child prints its own cwd: proves cwd= was passed to the process
+    # (not achieved via a fragile os.chdir dance in the parent).
+    ok = model._run(
+        [sys.executable, "-c", "import os; print('CHILD_CWD=' + os.getcwd())"],
+        "STEP", cwd=str(tmp_path))
     assert ok is True
-    assert calls["cmd"] == ["make", "install"]      # a list, never "sh -c ..."
-    assert calls["cwd"] == "/some/dir"
-    assert os.getcwd() == cwd_before
+    assert os.getcwd() == cwd_before                 # parent cwd untouched
+    text = model.termedit.toPlainText()
+    assert "CHILD_CWD=" + str(tmp_path) in text      # streamed child stdout
 
 
-def test_run_returns_false_on_nonzero_exit(model, monkeypatch):
-    monkeypatch.setattr(
-        ModelGeneration.subprocess, "run",
-        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 2, "", "boom"))
-    assert model._run(["false"], "STEP") is False
+def test_run_streams_stdout_and_reports_stderr(model):
+    ok = model._run(
+        [sys.executable, "-c",
+         "import sys; print('out-line-1'); print('out-line-2'); "
+         "sys.stderr.write('err-line\\n')"],
+        "STEP")
+    assert ok is True
+    text = model.termedit.toPlainText()
+    assert "out-line-1" in text
+    assert "out-line-2" in text
+    assert "err-line" in text
 
 
-def test_run_returns_false_on_timeout(model, monkeypatch):
-    def boom(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, 1)
-    monkeypatch.setattr(ModelGeneration.subprocess, "run", boom)
-    assert model._run(["sleep"], "STEP") is False
+def test_run_returns_false_on_nonzero_exit(model):
+    assert model._run(
+        [sys.executable, "-c", "import sys; sys.exit(2)"], "STEP") is False
+    assert "exit code 2" in model.termedit.toPlainText()
+
+
+def test_run_returns_false_on_timeout(model):
+    model.PROCESS_TIMEOUT = 1        # instance override; class default is 600
+    assert model._run(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        "STEP") is False
     assert "timed out" in model.termedit.toPlainText()
 
 
-def test_run_returns_false_when_binary_missing(model, monkeypatch):
-    def boom(cmd, **kw):
-        raise FileNotFoundError("no such tool")
-    monkeypatch.setattr(ModelGeneration.subprocess, "run", boom)
-    assert model._run(["nope"], "STEP") is False
+def test_run_returns_false_when_binary_missing(model):
+    assert model._run(
+        ["definitely-not-a-real-binary-xyz"], "STEP") is False
+    assert "could not be started" in model.termedit.toPlainText()
 
 
 # --------------------------------------------------------------------------- #
@@ -78,6 +83,9 @@ def test_run_returns_false_when_binary_missing(model, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_sv_rename_is_word_boundary_only(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Windows expanduser('~') reads USERPROFILE, not HOME -- without this the
+    # test writes into the REAL ~/.nghdl and the tmp_path assert fails.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     importlib.reload(CosimConfig)
     src = tmp_path / "mymod.sv"
     src.write_text(
