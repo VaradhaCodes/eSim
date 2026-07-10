@@ -1,23 +1,28 @@
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
-from ngspiceSimulation import plotWindow
-from ngspiceSimulation.NgspiceWidget import NgspiceWidget
 from configuration.Appconfig import Appconfig
-from modelEditor.ModelEditor import ModelEditorclass
-from subcircuit.Subcircuit import Subcircuit
-from maker.makerchip import makerchip
-from kicadtoNgspice.KicadtoNgspice import MainWindow
 from browser.Welcome import Welcome
-from browser.UserManual import UserManual
-from ngspicetoModelica.ModelicaUI import OpenModelicaEditor
 from PyQt6.QtWidgets import QLineEdit, QLabel, QPushButton, QVBoxLayout, QHBoxLayout
 from PyQt6.QtCore import Qt
 import os
-from converter.pspiceToKicad import PspiceConverter
-from converter.ltspiceToKicad import LTspiceConverter
-from converter.LtspiceLibConverter import LTspiceLibConverter
-from converter.libConverter import PspiceLibConverter
-from converter.browseSchematic import browse_path
+
+# Every tool widget below is imported inside the method that opens its dock,
+# not here: DockArea is on the Application startup path, and these pull the
+# heavy stacks (plotWindow -> matplotlib.pyplot + numpy; makerchip -> Maker/
+# NgVeri/VerilogVerifier -> matplotlib; KicadtoNgspice; the converters). On a
+# cold Windows launch Defender scans every native module on first load, so
+# eagerly importing them all here is what made the splash sit frozen for tens
+# of seconds. Deferring moves that one-time cost onto the first click of the
+# tool that actually needs it:
+#   plottingEditor      -> ngspiceSimulation.plot_window.plotWindow
+#   ngspiceEditor       -> ngspiceSimulation.NgspiceWidget.NgspiceWidget
+#   modelEditor         -> modelEditor.ModelEditor.ModelEditorclass
+#   subcircuiteditor    -> subcircuit.Subcircuit.Subcircuit
+#   makerchip           -> maker.makerchip.makerchip
+#   kicadToNgspiceEditor-> kicadtoNgspice.KicadtoNgspice.MainWindow
+#   usermanual          -> browser.UserManual.UserManual
+#   modelicaEditor      -> ngspicetoModelica.ModelicaUI.OpenModelicaEditor
+#   eSimConverter       -> converter.*
 
 
 class WaveformDock(QtWidgets.QDockWidget):
@@ -298,6 +303,8 @@ class DockArea(QtWidgets.QMainWindow):
 
     def plottingEditor(self):
         """This function create widget for interactive PythonPlotting."""
+        # Deferred: first plot pays the matplotlib import, not app startup.
+        from ngspiceSimulation.plot_window import plotWindow
         self.projDir = self.obj_appconfig.current_project["ProjectName"]
         self.projName = self.obj_appconfig.get_proj_stem() \
             or os.path.basename(self.projDir)
@@ -343,6 +350,7 @@ class DockArea(QtWidgets.QMainWindow):
 
     def ngspiceEditor(self, projName, netlist, simEndSignal, plotFlag):
         """ This function creates widget for Ngspice window."""
+        from ngspiceSimulation.NgspiceWidget import NgspiceWidget
         self.ngspiceWidget = QtWidgets.QWidget()
 
         self.ngspiceLayout = QtWidgets.QVBoxLayout()
@@ -378,6 +386,11 @@ class DockArea(QtWidgets.QMainWindow):
 
     def eSimConverter(self):
         """This function creates a widget for eSimConverter."""
+        from converter.pspiceToKicad import PspiceConverter
+        from converter.ltspiceToKicad import LTspiceConverter
+        from converter.LtspiceLibConverter import LTspiceLibConverter
+        from converter.libConverter import PspiceLibConverter
+        from converter.browseSchematic import browse_path
 
         dockName = 'Schematic Converter-'
 
@@ -581,6 +594,7 @@ class DockArea(QtWidgets.QMainWindow):
             )
             self.msg.exec()
             return
+        from modelEditor.ModelEditor import ModelEditorclass
         projName = os.path.basename(projDir)
         dockName = f'Model Editor-{projName}-'
 
@@ -651,6 +665,7 @@ class DockArea(QtWidgets.QMainWindow):
         This function is creating Editor UI for Kicad to Ngspice conversion.
         """
 
+        from kicadtoNgspice.KicadtoNgspice import MainWindow
         # Keep at most one converter live; see _closeExistingConverters.
         self._closeExistingConverters()
 
@@ -687,6 +702,7 @@ class DockArea(QtWidgets.QMainWindow):
 
     def subcircuiteditor(self):
         """This function creates a widget for different subcircuit options."""
+        from subcircuit.Subcircuit import Subcircuit
 
         projDir = self.obj_appconfig.current_project["ProjectName"]
 
@@ -776,6 +792,8 @@ class DockArea(QtWidgets.QMainWindow):
         # (Simulation-RLC-2, Plotting-RLC-3).
         dockName = f'Model Creation-{projName}-'
 
+        # Local import: shadows this method's name inside its own scope only.
+        from maker.makerchip import makerchip
         self.makerWidget = QtWidgets.QWidget()
         self.makerLayout = QtWidgets.QVBoxLayout()
         maker = makerchip(self)
@@ -906,6 +924,7 @@ class DockArea(QtWidgets.QMainWindow):
 
     def usermanual(self):
         """This function creates a widget for user manual."""
+        from browser.UserManual import UserManual
         self.usermanualWidget = QtWidgets.QWidget()
         self.usermanualLayout = QtWidgets.QVBoxLayout()
         self.usermanualLayout.addWidget(UserManual())
@@ -929,6 +948,7 @@ class DockArea(QtWidgets.QMainWindow):
 
     def modelicaEditor(self, projDir):
         """This function sets up the UI for ngspice to modelica conversion."""
+        from ngspicetoModelica.ModelicaUI import OpenModelicaEditor
 
         projName = os.path.basename(projDir)
         dockName = f'Modelica-{projName}-'

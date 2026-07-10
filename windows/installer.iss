@@ -85,10 +85,14 @@ Source: "{#StageDir}\tools\nghdl\release\*"; DestDir: "{app}\tools\nghdl\release
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 
 [Icons]
+; runminimized: esim.bat runs in a cmd console; minimized keeps it as a
+; taskbar blip instead of flashing a black console window at every launch.
 Name: "{autoprograms}\eSim"; Filename: "{app}\esim.bat"; \
-    IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"
+    IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"; \
+    Flags: runminimized
 Name: "{autodesktop}\eSim";  Filename: "{app}\esim.bat"; \
-    IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"
+    IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"; \
+    Flags: runminimized
 
 [Run]
 Filename: "{app}\esim.bat"; Description: "Launch eSim"; \
