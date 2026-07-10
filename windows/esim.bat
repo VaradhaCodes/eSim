@@ -12,8 +12,7 @@ rem strip trailing backslash
 if "%ESIM_HOME:~-1%"=="\" set "ESIM_HOME=%ESIM_HOME:~0,-1%"
 
 rem Bundled tools first on PATH: the custom eSim ngspice (d_cosim/ivlng/
-rem ghdl.cm) wins over the official fallback copy; KiCad CLI tools if the
-rem official installer put them in the default location (no-op otherwise).
+rem ghdl.cm) wins over the official fallback copy.
 set "PATH=%ESIM_HOME%\tools\ngspice\bin;%PATH%"
 if exist "%ESIM_HOME%\tools\nghdl\install_dir\bin\ngspice.exe" (
     set "PATH=%ESIM_HOME%\tools\nghdl\install_dir\bin;%PATH%"
@@ -21,7 +20,11 @@ if exist "%ESIM_HOME%\tools\nghdl\install_dir\bin\ngspice.exe" (
     rem whose paths windows_bootstrap.py rewrites for this install).
     set "SPICE_LIB_DIR=%ESIM_HOME%\tools\nghdl\install_dir\share\ngspice"
 )
+rem KiCad: a system-wide install (old layout) is the fallback; the bundled
+rem pruned KiCad at tools\kicad is prepended AFTER it so it wins -- eSim
+rem always runs the KiCad version it shipped and was tested with.
 for /d %%K in ("%ProgramFiles%\KiCad\*") do if exist "%%K\bin\eeschema.exe" set "PATH=%%K\bin;%PATH%"
+if exist "%ESIM_HOME%\tools\kicad\bin\eeschema.exe" set "PATH=%ESIM_HOME%\tools\kicad\bin;%PATH%"
 
 rem Per-user setup (config.ini, symbol seeding, sym-lib-table registration).
 rem Idempotent + best-effort: a failure must not stop the GUI from starting.

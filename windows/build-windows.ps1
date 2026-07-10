@@ -7,8 +7,8 @@
 
    DESCRIPTION: Reproducible Windows packaging for eSim. Runs on a Windows
                 build machine (or windows-latest CI runner). Produces:
-                    windows\dist\eSim-<VERSION>-installer.exe   (Inno Setup)
-                    windows\dist\kicad-<ver>-x86_64.exe         (pass-through)
+                    windows\dist\eSim-<VERSION>-installer.exe   (Inno Setup,
+                        single exe: eSim + toolchain + bundled pruned KiCad)
                     windows\dist\*.sha256
 
                 Every third-party download is pinned in deps-manifest.json
@@ -32,7 +32,11 @@
                      run, code models present, a trivial .cir simulates)
                   7. stage tools\ngspice (official build; the Compact
                      flavour's plain-simulation fallback)
-                  8. compile installer.iss with ISCC
+                  8. Stage-Kicad: extract the pinned official KiCad installer
+                     payload, PRUNED for eSim (no 3D models, demos or
+                     translations -- see $KicadPrune), into tools\kicad --
+                     the one KiCad eSim launches; nothing else to download
+                  9. compile installer.iss with ISCC
 
         -SkipMsys        build without the HDL toolchain component (smaller
                          installer; NgVeri/NGHDL builds unavailable).
@@ -150,7 +154,11 @@ function Stage-App {
     # Stage-side dirs the LATER stages create (private Python, built
     # toolchains): excluded so /MIR's purge pass cannot delete them on an
     # incremental re-run -- rebuilding the ngspice toolchain costs ~an hour.
-    $xd += @('python', 'tools', 'library\bin\iverilog') |
+    # NB 'library\bin' not 'library\bin\iverilog': the repo has no
+    # library\bin, so /MIR sees the whole stage-side bin as one EXTRA dir and
+    # deletes it recursively -- /XD on the CHILD never gets consulted, which
+    # silently forced a ~15 min iverilog source rebuild on every re-run.
+    $xd += @('python', 'tools', 'library\bin') |
            ForEach-Object { Join-Path $Stage $_ }
     robocopy $RepoRoot $Stage /MIR /NFL /NDL /NJH /NJS /XD @xd `
         /XF '*.pyc' '*.pyo' '*.raw' 'plot_data_*.txt' '.DS_Store' `
@@ -551,6 +559,99 @@ function Stage-SimToolchain {
     Log 'Icarus Verilog (with libvvp) staged'
 }
 
+# The official KiCad NSIS payload directories that do NOT ship inside the
+# eSim installer. Everything is data KiCad loads lazily (or never, in eSim's
+# flows); no binary in bin\ links against any of it. Compressed weight in the
+# 9.0.3 exe, which is 1057 MB total:
+#   share\kicad\3dmodels    784 MB  3D viewer STEP/WRL models (eSim: unused)
+#   share\kicad\demos        55 MB  example projects
+#   bin\Lib\site-packages\{numpy,PIL,pip,...}
+#                            32 MB  plugin-ecosystem python extras; KiCad's
+#                                   own pcbnew startup imports none of them
+#                                   (wx and _pcbnew.pyd, which it does load,
+#                                   are KEPT)
+#   share\kicad\internat      6 MB  UI translations (English is built in)
+#   bin\Lib\{test,ensurepip,idlelib,lib2to3,__pycache__}
+#                             9 MB  python stdlib cruft
+#   share\locale            ~ 2 MB  wxWidgets translations
+# Keep: bin\ (all exes + DLLs + embedded python runtime), symbols, footprints,
+# templates, resources, COPYRIGHT.txt (GPL notice). Verified functional after
+# pruning: kicad-cli answers version and netlists an eSim example schematic
+# (the smoke test below re-proves both on every build).
+$KicadPrune = @(
+    '$PLUGINSDIR',
+    'share\kicad\3dmodels',
+    'share\kicad\demos',
+    'share\kicad\internat',
+    'share\locale',
+    'bin\Lib\test',
+    'bin\Lib\ensurepip',
+    'bin\Lib\idlelib',
+    'bin\Lib\lib2to3',
+    'bin\Lib\__pycache__',
+    'bin\Lib\site-packages\numpy',
+    'bin\Lib\site-packages\numpy.libs',
+    'bin\Lib\site-packages\PIL',
+    'bin\Lib\site-packages\pip',
+    'bin\Lib\site-packages\setuptools',
+    'bin\Lib\site-packages\wheel',
+    'bin\Lib\site-packages\pkg_resources'
+)
+
+function Stage-Kicad {
+    <# Bundle KiCad INSIDE the eSim installer: extract the pinned official
+       KiCad NSIS installer's payload (7z reads it directly; per-file Deflate,
+       not solid, so exclusions cost nothing), minus $KicadPrune, into
+       tools\kicad. esim.bat puts tools\kicad\bin first on PATH, so the app's
+       bare `eeschema`/`pcbnew` invocations resolve here -- a system-wide
+       KiCad install, if any, is untouched and never fought with (no registry,
+       no file associations, no KICAD9_* env vars).
+
+       This deliberately supersedes the old ship-alongside design: one exe to
+       download was the hard requirement, and the old objection ("a private
+       KiCad copy rots") applied to a HAND-maintained repack. This one is
+       reproducible: bump kicad_installer in deps-manifest.json and rebuild. #>
+    Log 'Staging KiCad (official payload, pruned for eSim)'
+    $setup = Get-Dep 'kicad_installer'
+    $dst = Join-Path $Stage 'tools\kicad'
+    $cli = Join-Path $dst 'bin\kicad-cli.exe'
+    if (Test-Path $cli) {
+        Log 'KiCad already staged (delete tools\kicad to re-stage)'
+    }
+    else {
+        $xargs = $KicadPrune | ForEach-Object { "-x!$_" }
+        # rc 1 = warnings only (NSIS exes carry a signature tail 7z reports as
+        # "data after the end of archive"); rc >= 2 = real extraction failure.
+        & $7z x -tNsis $setup "-o$dst" -y @xargs | Out-Null
+        if ($LASTEXITCODE -ge 2) { Die "KiCad payload extraction failed (7z rc=$LASTEXITCODE)" }
+        # Version stamp: windows_bootstrap.py derives the %APPDATA%\kicad\<N.M>
+        # config dir from this so eSim's symbol libraries are registered
+        # before KiCad's very first launch.
+        Set-Content (Join-Path $dst 'KICAD-VERSION') $Manifest.kicad_installer.version
+    }
+    # Hard verification, mirroring the ngspice smoke test: the pruned tree
+    # must still answer its version AND netlist a real eSim schematic.
+    if (-not (Test-Path (Join-Path $dst 'bin\eeschema.exe'))) { Die 'eeschema.exe missing from staged KiCad' }
+    $ver = (& $cli version 2>&1 | Select-Object -First 1)
+    if ("$ver" -notmatch [regex]::Escape($Manifest.kicad_installer.version)) {
+        Die "staged kicad-cli reports '$ver', expected $($Manifest.kicad_installer.version)"
+    }
+    foreach ($d in @('share\kicad\symbols', 'share\kicad\footprints', 'share\kicad\template')) {
+        if (-not (Test-Path (Join-Path $dst $d))) { Die "staged KiCad is missing $d" }
+    }
+    # The repo's Examples are legacy-format .sch (they predate KiCad 6);
+    # kicad-cli imports that directly, which conveniently ALSO proves the
+    # pruned tree still reads the legacy schematics eSim users have.
+    $sch = Join-Path $Stage 'Examples\BasicGates\BasicGates.sch'
+    $net = Join-Path $Build 'kicad-smoke.net'
+    Remove-Item $net -ErrorAction SilentlyContinue
+    & $cli sch export netlist --output $net $sch | Out-Null
+    if (-not (Test-Path $net) -or (Get-Item $net).Length -eq 0) {
+        Die 'staged KiCad failed to netlist Examples\BasicGates (smoke test)'
+    }
+    Log "KiCad $($Manifest.kicad_installer.version) staged (pruned) + netlist smoke OK"
+}
+
 # ----------------------------------------------------------------- main ----
 if ($Clean) { Remove-Item $Build, $Dist -Recurse -Force -ErrorAction SilentlyContinue }
 $7z = Resolve-7z
@@ -562,15 +663,13 @@ Stage-Msys           # must precede Stage-SimToolchain (it builds inside MSYS2)
 Stage-SimToolchain   # custom ngspice + libvvp iverilog (Full flavour)
 Stage-Ngspice        # official build: Compact fallback (+ shim on -SkipSimBuild)
 Stage-Iverilog       # Bleyer fallback, only on -SkipSimBuild
+Stage-Kicad          # pruned official KiCad payload -> tools\kicad (bundled)
 
 Log 'Compiling installer (Inno Setup)'
 $Iscc = Resolve-Iscc
 & $Iscc /Qp "/DAppVersion=$Version" "/DStageDir=$Stage" "/DOutDir=$Dist" `
     (Join-Path $WinDir 'installer.iss')
 if ($LASTEXITCODE -ne 0) { Die 'ISCC failed' }
-
-# KiCad ships alongside (never repacked); the eSim installer offers to run it.
-Copy-Item (Get-Dep 'kicad_installer') $Dist -Force
 
 Get-ChildItem $Dist -File | Where-Object Extension -ne '.sha256' | ForEach-Object {
     "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" |

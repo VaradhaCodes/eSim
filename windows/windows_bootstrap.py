@@ -222,6 +222,34 @@ def _kicad_config_root():
     return _user_dir('.config', 'kicad')
 
 
+def ensure_kicad_config_dir(esim_root):
+    """Pre-create the per-user KiCad config version dir for the BUNDLED KiCad
+    (tools/kicad), e.g. %APPDATA%/kicad/9.0.
+
+    KiCad only creates this dir on its own first launch, and
+    register_kicad_libraries() can only register eSim's symbol libraries into
+    version dirs that exist -- without this, a fresh user's first schematic
+    opens with no eSim symbols at all. The bundled KiCad's exact version is
+    stamped into tools/kicad/KICAD-VERSION by Stage-Kicad; its config dir is
+    <major>.<minor>. Creating the dir (and letting ensure_lib_registered seed
+    a minimal sym-lib-table in it) is safe: KiCad treats both as its own on
+    first launch and merges, never clobbers. No-op when there is no bundled
+    KiCad (dev tree) or the stamp is unreadable."""
+    stamp = os.path.join(esim_root, 'tools', 'kicad', 'KICAD-VERSION')
+    try:
+        with open(stamp) as fh:
+            version = fh.read().strip()
+    except OSError:
+        return None
+    m = re.match(r'(\d+)\.(\d+)', version)
+    if not m:
+        return None
+    cfg_dir = os.path.join(_kicad_config_root(),
+                           '%s.%s' % (m.group(1), m.group(2)))
+    os.makedirs(cfg_dir, exist_ok=True)
+    return cfg_dir
+
+
 def register_kicad_libraries(esim_root):
     """Register every eSim library in the user's KiCad sym-lib-table(s):
     static libs -> <install>/library/kicadLibrary/eSim-symbols, generated
@@ -275,7 +303,8 @@ def main(argv=None):
     write_nghdl_config(root)
     fix_spinit(root)
     ensure_unversioned_libvvp(root)
-    register_kicad_libraries(root)
+    ensure_kicad_config_dir(root)   # bundled KiCad: make registration
+    register_kicad_libraries(root)  # possible before its first launch
     return 0
 
 

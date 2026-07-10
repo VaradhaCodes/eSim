@@ -8,10 +8,12 @@
     "committing. Rationale for each source lives in PACKAGING.md's dependency",
     "matrix.",
     "",
-    "kicad: NOT bundled. The official KiCad Windows installer is downloaded by",
-    "build-windows.ps1 only to be shipped ALONGSIDE the eSim installer (the",
-    "eSim installer offers to run it). Bundling a private KiCad copy is what",
-    "made the old off-repo installer unmaintainable."
+    "kicad: BUNDLED, pruned. Stage-Kicad extracts this official installer's",
+    "payload minus $KicadPrune (3D models, demos, translations, python plugin",
+    "extras) into tools\\kicad, so one eSim exe carries everything. Unlike the",
+    "old off-repo hand-maintained repack (which rotted), this is reproducible:",
+    "bump this entry, rebuild, and the smoke test re-proves the pruned tree",
+    "still netlists a real schematic."
   ],
   "python": {
     "version": "3.12.10",
@@ -53,7 +55,7 @@
     "url": "https://downloads.kicad.org/kicad/windows/explore/stable/download/kicad-9.0.3-x86_64.exe",
     "filename": "kicad-9.0.3-x86_64.exe",
     "sha256": "582635ced8552c07e043ce9f2eba01dc0c42c96dcb87ce12ba85db1530da593f",
-    "notes": "Shipped next to the eSim installer as a prerequisite; eSim's installer launches it if KiCad is absent. Never repacked."
+    "notes": "Source payload for Stage-Kicad: extracted (7z -tNsis), pruned per $KicadPrune, staged at tools/kicad inside the ONE eSim installer. The installer exe itself never ships or runs."
   },
   "innosetup": {
     "version": "6.3.3",

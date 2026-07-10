@@ -113,10 +113,19 @@ Design decisions:
 * **Private bundled Python** (nuget full CPython) + pip wheels. On Windows
   there is no system Qt to stay consistent with — the PyQt6 wheel carries its
   own Qt — so wheels are the right source there, unlike Ubuntu.
-* **KiCad is not repacked.** The official KiCad installer ships next to
-  eSim's; eSim's installer detects a missing KiCad and offers to run it.
-  Bundling a private KiCad copy is a large part of what made the old blob
-  rot.
+* **KiCad is bundled, pruned, reproducibly.** Stage-Kicad extracts the
+  pinned official KiCad installer's payload (7z reads the NSIS exe directly),
+  drops what eSim never touches -- 3D models (784 of the 1057 MB!), demos,
+  translations, python plugin extras -- and stages it at `tools\kicad`. One
+  eSim exe therefore carries the whole tool; nothing else to download.
+  This supersedes the earlier ship-alongside design. The old objection
+  ("a private KiCad copy is what made the pre-2026 blob rot") indicted a
+  HAND-maintained off-repo repack; this one is a manifest bump + rebuild,
+  and the build hard-verifies the pruned tree (kicad-cli version + a real
+  netlist export) every time. The bundled copy is private to eSim:
+  esim.bat prepends `tools\kicad\bin` to PATH, no registry / file
+  associations / global env vars, so a user's own KiCad install coexists
+  untouched.
 * **Per-user state happens at launch, not install** (`windows_bootstrap.py`
   runs from `esim.bat` every start, idempotently). Multi-user machines and
   upgrades self-heal, and the logic is testable.
@@ -173,8 +182,8 @@ powershell -ExecutionPolicy Bypass -File windows\build-windows.ps1
 #   -Clean              rebuild staging from scratch
 ```
 
-Artifacts land in `windows\dist\`: the eSim installer, the pass-through
-KiCad installer, and `.sha256` files for both.
+Artifacts land in `windows\dist\`: ONE eSim installer exe (with the pruned
+KiCad bundled inside at `tools\kicad`) and its `.sha256`.
 
 ### What works / what doesn't on Windows
 
@@ -222,7 +231,7 @@ and send the zip it drops on the Desktop.
 | PyQt6 + QScintilla | apt `python3-pyqt6`, `python3-pyqt6.qsci` | pip wheels `PyQt6`, `PyQt6-QScintilla` | Apt keeps Qt ABI-consistent on Ubuntu; wheels bundle their own Qt on Windows. |
 | matplotlib / numpy / scipy / psutil | apt | pip wheels | Same reasoning as Qt. |
 | watchdog, hdlparse, makerchip-app, sandpiper-saas, volare | pip (venv) | pip (bundled Python) | Pure-python / not packaged by distros. |
-| KiCad 8/9 | apt (PPA on 24.04, universe on 26.04) | official KiCad installer, shipped alongside | Never repack KiCad; never touch its libraries. |
+| KiCad 8/9 | apt (PPA on 24.04, universe on 26.04) | official installer payload, pruned by Stage-Kicad, bundled at `tools\kicad` | Ubuntu: never touch KiCad's packages. Windows: reproducible prune of the pinned official payload (no 3D models/demos/translations); KiCad's own libraries inside it stay untouched. |
 | ngspice (d_cosim + ivlng + ghdl.cm) | source-built by `nghdl/install-nghdl.sh` | source-built by `Stage-SimToolchain` inside MSYS2 (same tarball, same patch, same flags) → `tools\nghdl` | The ONLY ngspice with the eSim co-sim bridges; both OSes now run the identical custom build. Official Windows zip ships at `tools\ngspice` purely as the Compact fallback. |
 | Icarus Verilog (`libvvp`) | source-built by `nghdl/install-nghdl.sh` (apt's lacks `libvvp`) | source-built by `Stage-SimToolchain` at the SAME pinned commit, `--enable-libvvp`, staged under `library/bin/iverilog/` | `ivlng` dlopens `libvvp` at runtime on both OSes; no prebuilt Windows Icarus ships it (Bleyer = `-SkipSimBuild` fallback only). |
 | Verilator 5 | apt | MSYS2 `mingw-w64-x86_64-verilator` (Full flavour) | NgVeri model builds. |

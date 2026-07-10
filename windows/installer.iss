@@ -11,8 +11,11 @@
 ;  * Everything per-user (~/.esim, ~/.nghdl, KiCad sym-lib-table) is done by
 ;    windows\windows_bootstrap.py on every launch, NOT here -- so multi-user
 ;    machines and upgrades self-heal, and the logic is unit-tested.
-;  * KiCad is NOT bundled. If it's missing we offer to run the official
-;    KiCad installer that build-windows.ps1 places next to this .exe.
+;  * KiCad IS bundled, at tools\kicad: the official installer's payload,
+;    pruned for eSim by build-windows.ps1's Stage-Kicad (no 3D models/demos/
+;    translations). Private to eSim: esim.bat prepends tools\kicad\bin to
+;    PATH; no registry entries, file associations or global env vars, so a
+;    system-wide KiCad install coexists untouched. One exe = the whole tool.
 ; =============================================================================
 
 #ifndef AppVersion
@@ -100,53 +103,13 @@ Type: filesandordirs; Name: "{app}\library\modelParamXML\Nghdl"
 ; (src\xspice\icm\{Ngveri,ghdl}\<model>, release tree .o) on top of the
 ; installed files; sweep the whole thing so an uninstall is clean.
 Type: filesandordirs; Name: "{app}\tools\nghdl"
+; Bundled KiCad writes caches inside its own tree at runtime (fp-info-cache,
+; regenerated .pyc under bin\Lib); sweep it too.
+Type: filesandordirs; Name: "{app}\tools\kicad"
 ; NOTE: per-user state (~/.esim, ~/.nghdl) is deliberately NOT deleted here:
 ; the uninstaller runs as one user but state exists per user; and models the
 ; user built (kicad_symbols) may be wanted across reinstalls.
 
-[Code]
-function KicadPresent(): Boolean;
-var
-  FindRec: TFindRec;
-begin
-  Result := False;
-  if FindFirst(ExpandConstant('{commonpf64}\KiCad\*'), FindRec) then
-  begin
-    try
-      repeat
-        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0) and
-           FileExists(ExpandConstant('{commonpf64}\KiCad\') + FindRec.Name + '\bin\eeschema.exe') then
-        begin
-          Result := True;
-          exit;
-        end;
-      until not FindNext(FindRec);
-    finally
-      FindClose(FindRec);
-    end;
-  end;
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  KicadSetup: String;
-  ResultCode: Integer;
-begin
-  if CurStep = ssPostInstall then
-  begin
-    if not KicadPresent() then
-    begin
-      { build-windows.ps1 drops the official KiCad installer next to ours. }
-      KicadSetup := ExpandConstant('{src}\') + 'kicad-9.0.3-x86_64.exe';
-      if FileExists(KicadSetup) then
-      begin
-        if MsgBox('eSim needs KiCad for schematic capture, and it was not found.'#13#10 +
-                  'Run the official KiCad installer now?', mbConfirmation, MB_YESNO) = IDYES then
-          Exec(KicadSetup, '', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-      end
-      else
-        MsgBox('KiCad was not detected. Install it from https://www.kicad.org/download/windows/ ' +
-               'before using schematic capture in eSim.', mbInformation, MB_OK);
-    end;
-  end;
-end;
+; No [Code] KiCad detection anymore: KiCad ships inside this installer at
+; tools\kicad (see the design notes above), so there is nothing to detect,
+; offer or download after this exe finishes.

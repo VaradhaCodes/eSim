@@ -26,6 +26,12 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(h))
     monkeypatch.setattr(os.path, "expanduser",
                         lambda p: p.replace("~", str(h), 1))
+    # On Windows _kicad_config_root() resolves via APPDATA; without this the
+    # KiCad-table tests read -- and WRITE -- the developer's real
+    # %APPDATA%\kicad. Redirect it so every test is hermetic on both OSes.
+    appdata = h / "AppData"
+    appdata.mkdir()
+    monkeypatch.setenv("APPDATA", str(appdata))
     return h
 
 
@@ -143,9 +149,9 @@ def test_fix_spinit_absent_tree_is_noop(home, root):
     assert wb.fix_spinit(str(root)) == 0
 
 
-def test_register_appends_and_repoints(home, root):
+def test_register_appends_and_repoints(home, root, kicad_config_root):
     # A KiCad user table with one stale eSim entry.
-    kdir = home / ".config" / "kicad" / "9.0"
+    kdir = kicad_config_root / "9.0"
     kdir.mkdir(parents=True)
     table = kdir / "sym-lib-table"
     table.write_text(
@@ -171,6 +177,35 @@ def test_register_appends_and_repoints(home, root):
 
 def test_register_no_kicad_config_is_noop(home, root):
     assert wb.register_kicad_libraries(str(root)) is False
+
+
+@pytest.fixture
+def kicad_config_root(home):
+    """Where _kicad_config_root() resolves under the hermetic `home` fixture:
+    APPDATA drives it on Windows, HOME/.config elsewhere."""
+    if os.name == "nt":
+        return home / "AppData" / "kicad"
+    return home / ".config" / "kicad"
+
+
+def test_kicad_config_dir_from_bundled_stamp(home, root, kicad_config_root):
+    # No bundled KiCad (dev tree): no-op.
+    assert wb.ensure_kicad_config_dir(str(root)) is None
+    # Stamped bundled KiCad: %APPDATA%/kicad/<major.minor> gets created...
+    kdir = root / "tools" / "kicad"
+    kdir.mkdir(parents=True)
+    (kdir / "KICAD-VERSION").write_text("9.0.3\n")
+    made = wb.ensure_kicad_config_dir(str(root))
+    assert made == str(kicad_config_root / "9.0")
+    assert os.path.isdir(made)
+    # ...so first-launch registration now has a version dir to seed.
+    wb.seed_generated_symbols(str(root))
+    assert wb.register_kicad_libraries(str(root)) is True
+    table = kicad_config_root / "9.0" / "sym-lib-table"
+    assert "eSim_Devices" in table.read_text()
+    # Garbage stamp: no-op, never a crash at launch.
+    (kdir / "KICAD-VERSION").write_text("not-a-version")
+    assert wb.ensure_kicad_config_dir(str(root)) is None
 
 
 def test_main_runs_everything(home, root):
