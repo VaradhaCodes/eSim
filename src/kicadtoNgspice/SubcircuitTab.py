@@ -101,7 +101,6 @@ class SubcircuitTab(QtWidgets.QWidget):
             self.grid.addWidget(group)
             self._groups.append((model, group))
 
-        self.show()
 
     def _apply_cache_hint(self, model, group, rows):
         """Pre-fill a blank group default from the cross-project model_cache,

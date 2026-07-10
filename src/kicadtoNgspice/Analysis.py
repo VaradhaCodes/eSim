@@ -145,7 +145,6 @@ class Analysis(QtWidgets.QWidget):
             self.checkTRAN.setChecked(True)
             self.track_obj.set_CheckBox["ITEMS"] = "TRAN"
 
-        self.show()
 
     def createCheckBox(self):
         """

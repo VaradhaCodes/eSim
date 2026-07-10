@@ -49,4 +49,3 @@ class UserManual(QtWidgets.QWidget):
             )
 
         self.setLayout(self.vlayout)
-        self.show()

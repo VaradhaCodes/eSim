@@ -256,7 +256,6 @@ class DeviceModel(QtWidgets.QWidget):
                 self.devicemodel_dict_end[words[0]] = self.count
                 self.count = self.count + 1
 
-            self.show()
 
     def eSim_ihp(self, schematicInfo):
         """
@@ -481,7 +480,6 @@ class DeviceModel(QtWidgets.QWidget):
             self.devicemodel_dict_end[device_ref] = self.count
             self.count += 1
             
-        self.show()
 
     def trackDefaultIHPDeviceLib(self):
         """Set default IHP PDK library path for a specific device."""
@@ -624,7 +622,6 @@ class DeviceModel(QtWidgets.QWidget):
             self.grid.addWidget(group)
             self._groups.append((model, group))
 
-        self.show()
 
     def _apply_cache_hint(self, model, group, rows):
         """Pre-fill a blank group default from the cross-project model_cache.

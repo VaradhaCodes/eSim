@@ -298,7 +298,6 @@ class MainWindow(QtWidgets.QWidget):
 
         self.setLayout(self.vbox)
         self.setWindowTitle("Kicad To NgSpice Converter")
-        self.show()
 
     def createcreateConvertWidget(self):
         """

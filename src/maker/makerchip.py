@@ -67,7 +67,6 @@ class makerchip(QtWidgets.QWidget):
         self.vbox.addWidget(self.createWidget())
         self.setLayout(self.vbox)
         self.setWindowTitle("Makerchip and Verilog to Ngspice Converter")
-        self.show()
 
     def createWidget(self):
         global filecount

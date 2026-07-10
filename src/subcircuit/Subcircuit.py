@@ -217,7 +217,6 @@ class Subcircuit(QtWidgets.QWidget):
         col.addLayout(body)
         col.addStretch(1)
 
-        self.show()
 
     def newsch(self):
         text, ok = QtWidgets.QInputDialog.getText(

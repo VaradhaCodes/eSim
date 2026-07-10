@@ -97,7 +97,6 @@ class NgVeri(QtWidgets.QWidget):
         self.grid.setRowStretch(0, 0)
         self.grid.setRowStretch(1, 1)
 
-        self.show()
 
     def addverilog(self):
         '''

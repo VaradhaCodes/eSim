@@ -347,4 +347,3 @@ class Source(QtWidgets.QWidget):
         # This is used to keep the track of dynamically created widget
         self.obj_track.sourcelisttrack["ITEMS"] = sourcelisttrack
         self.obj_track.source_entry_var["ITEMS"] = self.entry_var
-        self.show()

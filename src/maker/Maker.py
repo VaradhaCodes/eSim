@@ -100,7 +100,6 @@ class Maker(QtWidgets.QWidget):
         self.grid.addWidget(self.createoptionsBox(), 0, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
-        self.show()
 
     def set_design_bus(self, bus, take_ownership=False):
         """Bind this Author view to a shared design. Disconnects any previous

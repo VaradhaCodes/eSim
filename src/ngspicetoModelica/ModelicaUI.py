@@ -184,7 +184,6 @@ class OpenModelicaEditor(QtWidgets.QWidget):
         outer.addLayout(body)
         outer.addStretch(1)
 
-        self.show()
 
     def OMPathbrowseFile(self):
         temp = QtCore.QDir.toNativeSeparators(

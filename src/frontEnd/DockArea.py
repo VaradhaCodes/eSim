@@ -97,7 +97,6 @@ class DockArea(QtWidgets.QMainWindow):
             self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, self._docks[dockName])
 
         # self.tabifyDockWidget(self._docks['Notes'],self._docks['Blank'])
-        self.show()
 
     def tabifyDockWidget(self, first, second):
         """Tabify two docks, then (re)arm the close-X on the bottom tab bar so

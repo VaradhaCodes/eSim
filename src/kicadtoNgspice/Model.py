@@ -164,7 +164,6 @@ class Model(QtWidgets.QWidget):
             if check == 0:
                 self.obj_trac.modelTrack.append(lst)
 
-        self.show()
 
     def add_hex_btn(self, modelgrid, modelbox):
         self.addbtn = QtWidgets.QPushButton("Add Hex File")

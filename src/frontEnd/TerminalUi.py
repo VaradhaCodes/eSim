@@ -77,7 +77,6 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.redoSimulationButton.clicked.connect(self.redoSimulation)
 
         self.simulationCancelled = False
-        self.show()
 
     @staticmethod
     def _cycle_theme():

@@ -121,7 +121,6 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.treewidget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.treewidget.customContextMenuRequested.connect(self.openMenu)
         self.setLayout(self._vbox)
-        self.show()
 
     def loadProjects(self):
         """

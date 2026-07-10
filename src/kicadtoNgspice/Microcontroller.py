@@ -278,4 +278,3 @@ class Microcontroller(QtWidgets.QWidget):
             if check == 0:
                 self.obj_trac.microcontrollerTrack.append(lst)
 
-        self.show()
