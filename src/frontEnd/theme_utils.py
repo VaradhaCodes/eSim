@@ -1,6 +1,6 @@
 import os
 import json
-from PyQt6 import QtGui, QtCore
+from PyQt6 import QtGui, QtCore, QtWidgets
 from configuration import paths
 
 ACCENT_TOKENS = {
@@ -23,6 +23,58 @@ def replace_tokens(qss, tokens, value):
     for token in tokens:
         qss = qss.replace(token, value)
     return qss
+
+
+class ComboPopupStyle(QtWidgets.QProxyStyle):
+    """Fusion with the macOS-flavoured combo popup turned off.
+
+    Fusion answers SH_ComboBox_Popup = 1, which makes QComboBox treat its
+    popup as a *menu*: QComboBoxPrivateContainer paints PE_PanelMenu (an
+    opaque square panel with a 1px border) behind the item view, insets the
+    view by the menu's vertical margins, and positions the popup so the
+    current item lands on top of the combo instead of dropping below it. Our
+    sheet then draws its own rounded border on the view inside all that, so
+    every dropdown reads as a rounded card floating in a square one, opening
+    in the wrong place.
+
+    Answering 0 puts QComboBox back on the plain drop-down path: no menu
+    panel, no margins, popup anchored under the combo. The container is still
+    an opaque top-level window, so it would show square corners behind the
+    view's border-radius -- polish() makes it translucent and frameless, which
+    leaves the item view as the only thing that paints.
+    """
+
+    _POLISH_FLAG = "_esim_combo_popup_polished"
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QtWidgets.QStyle.StyleHint.SH_ComboBox_Popup:
+            return 0
+        if hint == QtWidgets.QStyle.StyleHint.SH_ComboBox_PopupFrameStyle:
+            return int(QtWidgets.QFrame.Shape.NoFrame)
+        return super().styleHint(hint, option, widget, returnData)
+
+    def polish(self, target):
+        # QStyle::polish is overloaded on QWidget/QApplication/QPalette and
+        # PyQt routes all three here; the QPalette one has to return its
+        # argument or Qt reads a null palette back.
+        if isinstance(target, QtGui.QPalette):
+            return super().polish(target)
+
+        # setWindowFlag() reparents the container, which re-polishes it, so
+        # this would recurse without the flag.
+        if (isinstance(target, QtWidgets.QWidget)
+                and target.metaObject().className()
+                == "QComboBoxPrivateContainer"
+                and not target.property(self._POLISH_FLAG)):
+            target.setProperty(self._POLISH_FLAG, True)
+            target.setWindowFlag(
+                QtCore.Qt.WindowType.FramelessWindowHint, True)
+            target.setWindowFlag(
+                QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
+            target.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        super().polish(target)
 
 
 # Process-lifetime cache of fully-resolved stylesheets, keyed by everything
@@ -251,8 +303,12 @@ def apply_theme(app):
     # freeze. The active style never changes after startup, so gate it.
     # (Can't compare app.style().objectName(): with an app stylesheet
     # installed the active style is a QStyleSheetStyle whose name is "".)
+    #
+    # setStyle() takes ownership and deletes the outgoing style, so the proxy
+    # has to be constructed at the call rather than cached and reused; the
+    # gate makes that a single instance living as long as the QApplication.
     if not getattr(app, "_esim_base_style_set", False):
-        app.setStyle("Fusion")
+        app.setStyle(ComboPopupStyle("Fusion"))
         app._esim_base_style_set = True
 
     # Re-theming (setStyleSheet + setPalette) does NOT invalidate the cached

@@ -53,10 +53,13 @@ def test_accent_substitution_still_applies():
 
 
 def test_apply_theme_sets_base_style_only_once(qapp, monkeypatch):
-    """setStyle('Fusion') re-polishes every widget in the app, so calling it
-    on every theme toggle doubles the repolish cost (the 2-3s toggle freeze).
-    apply_theme must install the base style once per QApplication and never
-    again."""
+    """setStyle() re-polishes every widget in the app, so calling it on every
+    theme toggle doubles the repolish cost (the 2-3s toggle freeze). apply_theme
+    must install the base style once per QApplication and never again.
+
+    The style it installs is ComboPopupStyle rather than the bare "Fusion" key:
+    a QProxyStyle over Fusion that turns off the menu-flavoured combo popup.
+    """
     calls = []
     monkeypatch.setattr(
         qapp, "setStyle", lambda *a, **k: calls.append(a), raising=False)
@@ -64,11 +67,14 @@ def test_apply_theme_sets_base_style_only_once(qapp, monkeypatch):
         del qapp._esim_base_style_set
 
     theme_utils.apply_theme(qapp)
-    assert calls == [("Fusion",)]
+    assert len(calls) == 1
+    (installed,) = calls[0]
+    assert isinstance(installed, theme_utils.ComboPopupStyle)
+    assert installed.baseStyle().objectName() == "fusion"
 
     theme_utils.apply_theme(qapp)
     theme_utils.apply_theme(qapp)
-    assert calls == [("Fusion",)]
+    assert len(calls) == 1
 
 
 def test_missing_qss_file_caches_empty():
