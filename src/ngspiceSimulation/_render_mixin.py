@@ -229,6 +229,7 @@ class _RenderMixin:
         self.fig.set_layout_engine('constrained')
 
         self._func_line = None  # fig.clear() below wipes all artists
+        self._empty_placeholder = None
         self.timing_annotations.clear()
         # Any in-progress cursor drag and the blit snapshot become invalid
         # once fig.clear() tears down the figure.  Reset them here so the
@@ -277,8 +278,11 @@ class _RenderMixin:
         self._restore_cursors()
         self._connect_xlim_watch()
         # Record what we just drew so the next refresh can skip the rebuild if
-        # nothing structural changed.
-        self._drawn_signature = new_sig
+        # nothing structural changed. Recomputed rather than reusing new_sig:
+        # the normal-mode signature reads _current_analysis_type, which the
+        # plot path above sets. Storing the pre-plot value would mismatch on
+        # the next refresh and force one spurious full rebuild.
+        self._drawn_signature = self._composition_signature(next_mode)
         # Arm the free post-draw freeze for multi-pane stacked: the draw below
         # solves CL once, then _on_draw_event pins the result and drops the
         # engine so later draws skip the solver. Doing this inline (an extra
@@ -298,6 +302,14 @@ class _RenderMixin:
         switched off), then re-fits/legends/cursors exactly as a full rebuild
         would, all without tearing the figure down.
         """
+        # The empty-state text was drawn by a rebuild that saw zero visible
+        # traces. This path is only entered with ≥1 visible (refresh_plot falls
+        # through to a full rebuild otherwise), so it is always stale here —
+        # and nothing else clears it, since there is no fig.clear() on this path.
+        if self._empty_placeholder is not None:
+            self._empty_placeholder.remove()
+            self._empty_placeholder = None
+
         for idx, t in self.traces.items():
             if t.visible:
                 if t.line_object is None:
@@ -1206,9 +1218,6 @@ class _RenderMixin:
         if first_visible is not None:
             self.axes.set_ylabel('Voltage (V)' if first_visible < self.volts_length else 'Current (A)')
 
-        if traces_plotted == 0:
-            self.axes.text(0.5, 0.5, 'Please select a waveform to plot', ha='center', va='center', transform=self.axes.transAxes)
-
         if analysis_type == 'transient':
             self.set_time_axis_label()
 
@@ -1220,6 +1229,7 @@ class _RenderMixin:
                 continue
             _n = min(len(_fx), len(_fy))
             if _n > 0:
+                traces_plotted += 1
                 _plot_style = '-' if _style == 'steps-post' else _style
                 if _style == 'steps-post':
                     self._add_decimated_line(
@@ -1229,6 +1239,13 @@ class _RenderMixin:
                     self._add_decimated_line(
                         self.axes, _fx[:_n], _fy[:_n], color=_color,
                         label=_label, linewidth=_thickness, linestyle=_plot_style)
+
+        # After the func overlay: a visible function trace alone is enough to
+        # make the axes non-empty, so the placeholder must not appear then.
+        if traces_plotted == 0:
+            self._empty_placeholder = self.axes.text(
+                0.5, 0.5, 'Please select a waveform to plot',
+                ha='center', va='center', transform=self.axes.transAxes)
 
 
     def on_push_decade(self) -> None:

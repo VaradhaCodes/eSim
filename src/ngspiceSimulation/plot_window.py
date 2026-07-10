@@ -173,6 +173,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.logic_thresholds: Dict[int, float] = {}
         self.vertical_spacing = DEFAULT_VERTICAL_SPACING
         self._func_line: Optional[Line2D] = None
+        self._empty_placeholder = None
         self._drag_cursor_idx: Optional[int] = None
         self._current_view_mode: str = 'normal'  # 'normal' | 'timing' | 'stacked'
         self.panes: List[Any] = []
