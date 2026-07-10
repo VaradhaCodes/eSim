@@ -170,7 +170,8 @@ class Application(QtWidgets.QMainWindow):
         """
         from frontEnd.icon_paths import (
             timeline_icon, workspace_icon,
-            help_icon, dev_docs_icon, settings_icon, home_icon
+            help_icon, dev_docs_icon, settings_icon, home_icon,
+            theme_toggle_icon
         )
 
         # Top Tool bar
@@ -325,11 +326,13 @@ class Application(QtWidgets.QMainWindow):
         # Zoom box rendered as one segmented pill: [ − ] 100% [ + ].
         # The pill (objectName zoomPill) paints the border/background; the
         # inner buttons are flat so the group reads as a single control that
-        # visually matches the weight of the left-rail buttons.
+        # visually matches the weight of the left-rail buttons. Every size
+        # here is a 100%-zoom baseline -- _apply_view_control_metrics() is what
+        # actually sizes the pill, and it re-runs on every zoom change.
         self.zoom_container = QtWidgets.QWidget()
         self.zoom_container.setObjectName("zoomPill")
-        self.zoom_container.setMinimumWidth(132)
-        zoom_layout = QtWidgets.QHBoxLayout(self.zoom_container)
+        self.zoom_layout = QtWidgets.QHBoxLayout(self.zoom_container)
+        zoom_layout = self.zoom_layout
         zoom_layout.setContentsMargins(3, 2, 3, 2)
         zoom_layout.setSpacing(0)
 
@@ -343,7 +346,6 @@ class Application(QtWidgets.QMainWindow):
         self.zoom_label = QtWidgets.QLabel(" 100% ")
         self.zoom_label.setObjectName("zoomLabel")
         self.zoom_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.zoom_label.setMinimumWidth(50)
         self.zoom_label.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Minimum,
             QtWidgets.QSizePolicy.Policy.Fixed)
@@ -358,12 +360,12 @@ class Application(QtWidgets.QMainWindow):
 
         self.topToolbar.addWidget(self.zoom_container)
 
-        # Quick light/dark toggle on the right of the action bar. Sized to
-        # match the zoom pill (styled by objectName in the QSS) so the two
-        # view controls read as a matched pair.
+        # Quick light/dark toggle on the right of the action bar. It carries a
+        # real icon rather than the "◐" glyph so it scales off the toolbar's
+        # icon size, exactly like the File / Workspace buttons on the left.
         self.theme_toggle_btn = QtWidgets.QToolButton()
         self.theme_toggle_btn.setObjectName("themeToggleBtn")
-        self.theme_toggle_btn.setText("◐")
+        self.theme_toggle_btn.setIcon(theme_toggle_icon())
         self.theme_toggle_btn.setToolTip("Toggle light / dark theme")
         self.theme_toggle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.theme_toggle_btn.clicked.connect(self._toggle_theme)
@@ -511,7 +513,11 @@ class Application(QtWidgets.QMainWindow):
         self.lefttoolbar.addAction(self.omoptim)
         self.lefttoolbar.addAction(self.conToeSim)
         self.lefttoolbar.setOrientation(QtCore.Qt.Orientation.Vertical)
-        self.lefttoolbar.setIconSize(QSize(40, 40))
+
+        # Both toolbars exist now, so size everything for the saved zoom.
+        from frontEnd.theme_utils import get_preferences
+        self._apply_view_control_metrics(
+            get_preferences().get("zoom_level", 100))
 
         # Build the menu bar now that every toolbar action exists.
         self._build_menu_bar()
@@ -711,6 +717,7 @@ class Application(QtWidgets.QMainWindow):
         fn = getattr(app, "apply_theme", None)
         if callable(fn):
             fn()
+        self._refresh_toolbar_icons()
 
     def change_zoom(self, delta):
         """Adjust the global UI zoom (50–300%); persists + re-applies theme."""
@@ -731,12 +738,67 @@ class Application(QtWidgets.QMainWindow):
             if hasattr(self, 'zoom_label'):
                 self.zoom_label.setText(f" {new_zoom}% ")
             apply_theme(QtWidgets.QApplication.instance())
-            if hasattr(self, 'topToolbar'):
-                s = int(28 * (new_zoom / 100.0))
-                self.topToolbar.setIconSize(QtCore.QSize(s, s))
-            if hasattr(self, 'lefttoolbar'):
-                s = int(40 * (new_zoom / 100.0))
-                self.lefttoolbar.setIconSize(QtCore.QSize(s, s))
+            self._apply_view_control_metrics(new_zoom)
+
+    def _apply_view_control_metrics(self, zoom_level):
+        """Scale every toolbar size that the QSS cannot reach.
+
+        build_qss() multiplies the px metrics inside the stylesheet, but sizes
+        set from Python (icon sizes, the zoom pill's width, the toggle's box)
+        are invisible to it -- which is why the pill used to keep its 132px
+        width while the text inside it shrank. Both toolbars' icon boxes are
+        derived from the same numbers here so the zoom pill and the theme
+        toggle stay the exact height of a top-toolbar icon button.
+        """
+        scale = zoom_level / 100.0
+        top_icon = int(round(28 * scale))
+
+        if hasattr(self, 'topToolbar'):
+            self.topToolbar.setIconSize(QtCore.QSize(top_icon, top_icon))
+
+        # Measure a real icon button rather than re-deriving its box from the
+        # QSS metrics: Qt adds a few px of its own frame on top of the
+        # padding/border/margin, and the pill has to land on the same height.
+        btn_box = top_icon + 2 * int(round(7 * scale)) + 4
+        if hasattr(self, 'topToolbar') and hasattr(self, 'home_action'):
+            probe = self.topToolbar.widgetForAction(self.home_action)
+            if probe is not None:
+                probe.ensurePolished()
+                btn_box = max(btn_box, probe.sizeHint().height())
+        if hasattr(self, 'lefttoolbar'):
+            s = int(round(40 * scale))
+            self.lefttoolbar.setIconSize(QtCore.QSize(s, s))
+        if hasattr(self, 'zoom_container'):
+            self.zoom_container.setFixedHeight(btn_box)
+            self.zoom_container.setMinimumWidth(int(round(132 * scale)))
+            pad_h, pad_v = int(round(3 * scale)), int(round(2 * scale))
+            self.zoom_layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+        if hasattr(self, 'zoom_label'):
+            self.zoom_label.setMinimumWidth(int(round(50 * scale)))
+        if hasattr(self, 'theme_toggle_btn'):
+            self.theme_toggle_btn.setFixedSize(btn_box, btn_box)
+            self.theme_toggle_btn.setIconSize(
+                QtCore.QSize(top_icon, top_icon))
+
+    def _refresh_toolbar_icons(self):
+        """Re-render the inline-SVG icons: they bake in the theme's foreground
+        colour at build time, so a light/dark flip leaves them the old colour
+        until they are rebuilt."""
+        from frontEnd.icon_paths import (
+            timeline_icon, workspace_icon, help_icon, dev_docs_icon,
+            settings_icon, home_icon, theme_toggle_icon
+        )
+        for attr, factory in (
+                ('home_action', home_icon),
+                ('wrkspce', workspace_icon),
+                ('timeline_action', timeline_icon),
+                ('helpfile', help_icon),
+                ('devdocs', dev_docs_icon),
+                ('preferences_action', settings_icon)):
+            if hasattr(self, attr):
+                getattr(self, attr).setIcon(factory())
+        if hasattr(self, 'theme_toggle_btn'):
+            self.theme_toggle_btn.setIcon(theme_toggle_icon())
 
     def show_about(self):
         """Show the About eSim dialog with gradient-rich premium styling."""

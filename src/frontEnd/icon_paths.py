@@ -1,8 +1,8 @@
 """Inline SVG icons used across eSim's UI.
 
-Qt can render SVGs natively via QPixmap.loadFromData. We expose them
-as QIcon() factories so the same icons work in both QSS and toolbar
-slots, on light and dark backgrounds.
+Qt rasterises SVGs via QSvgRenderer. We expose them as QIcon()
+factories so the same icons work in both QSS and toolbar slots, on
+light and dark backgrounds.
 """
 from PyQt6 import QtCore, QtGui, QtSvg, QtWidgets
 
@@ -20,12 +20,26 @@ def _theme_icon_color(role="text"):
 
 
 def _svg_icon(svg: str, size: int = 16, role="text") -> QtGui.QIcon:
-    """Build a QIcon from inline SVG markup with theme-aware coloring."""
-    svg_colored = svg.replace("currentColor", _theme_icon_color(role))
+    """Build a QIcon from inline SVG markup with theme-aware coloring.
 
-    pixmap = QtGui.QPixmap()
-    pixmap.loadFromData(svg_colored.encode('utf-8'))
-    if pixmap.isNull():
+    The SVG is rasterised at 256px rather than at its 24px viewBox: the
+    toolbars ask for icons at ``28 * zoom`` px, which at 300% zoom is 84px --
+    upscaling a 24px pixmap to that is visibly mushy, while downscaling a
+    256px one stays crisp at every zoom level.
+    """
+    svg_colored = svg.replace("currentColor", _theme_icon_color(role))
+    data = QtCore.QByteArray(svg_colored.encode('utf-8'))
+
+    px = 256
+    pixmap = QtGui.QPixmap(px, px)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+    renderer = QtSvg.QSvgRenderer(data)
+    if renderer.isValid():
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        renderer.render(painter)
+        painter.end()
+    else:
         pixmap = QtGui.QPixmap(size, size)
         pixmap.fill(QtCore.Qt.GlobalColor.transparent)
     icon = QtGui.QIcon()
@@ -220,3 +234,17 @@ _HOME_SVG = """
 
 def home_icon(size: int = 16) -> QtGui.QIcon:
     return _svg_icon(_HOME_SVG, size)
+
+
+_THEME_TOGGLE_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+  <path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/>
+</svg>
+""".strip()
+
+
+def theme_toggle_icon(size: int = 16) -> QtGui.QIcon:
+    return _svg_icon(_THEME_TOGGLE_SVG, size)

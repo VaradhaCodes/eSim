@@ -161,24 +161,30 @@ QWidget#zoomPill {
     border-radius: 11px;
 }
 
-QToolButton[cssClass="toolbarZoom"] {
+/* Scoped under #zoomPill so these out-specify the generic
+   `QToolBar#topToolbar QToolButton` rule above, which would otherwise win on
+   specificity and impose its 7px padding / 12px radius on the pill's guts. */
+QWidget#zoomPill QToolButton[cssClass="toolbarZoom"] {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 8px;
     color: #D3DEEF;
     min-width: 26px;
     padding: 5px 10px;
+    margin: 0px;
     font-size: 16px;
     font-weight: 800;
 }
 
-QToolButton[cssClass="toolbarZoom"]:hover {
+QWidget#zoomPill QToolButton[cssClass="toolbarZoom"]:hover {
     background: rgba(83,215,255,0.16);
+    border-color: transparent;
     color: #F8FBFF;
 }
 
-QToolButton[cssClass="toolbarZoom"]:pressed {
+QWidget#zoomPill QToolButton[cssClass="toolbarZoom"]:pressed {
     background: rgba(83,215,255,0.26);
+    border-color: transparent;
     color: #F8FBFF;
 }
 
@@ -189,23 +195,26 @@ QLabel#zoomLabel {
     background: transparent;
 }
 
-QToolButton#themeToggleBtn {
+/* The box size and icon size come from _apply_view_control_metrics() so the
+   toggle is exactly one top-toolbar icon button tall at every zoom level;
+   this rule only paints it. Scoped under the toolbar to out-specify the
+   generic `QToolBar#topToolbar QToolButton` rule. */
+QToolBar#topToolbar QToolButton#themeToggleBtn {
     background: rgba(13,23,40,0.70);
     border: 1px solid rgba(83,215,255,0.20);
     border-radius: 11px;
     color: #D3DEEF;
-    min-width: 32px;
-    min-height: 32px;
-    font-size: 17px;
+    padding: 0px;
+    margin: 0px;
 }
 
-QToolButton#themeToggleBtn:hover {
+QToolBar#topToolbar QToolButton#themeToggleBtn:hover {
     background: rgba(83,215,255,0.16);
     border-color: rgba(83,215,255,0.40);
     color: #F8FBFF;
 }
 
-QToolButton#themeToggleBtn:pressed {
+QToolBar#topToolbar QToolButton#themeToggleBtn:pressed {
     background: rgba(83,215,255,0.26);
     border-color: #53D7FF;
     color: #F8FBFF;

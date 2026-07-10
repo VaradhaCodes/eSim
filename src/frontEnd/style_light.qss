@@ -162,24 +162,30 @@ QWidget#zoomPill {
     border-radius: 11px;
 }
 
-QToolButton[cssClass="toolbarZoom"] {
+/* Scoped under #zoomPill so these out-specify the generic
+   `QToolBar#topToolbar QToolButton` rule above, which would otherwise win on
+   specificity and impose its 7px padding / 12px radius on the pill's guts. */
+QWidget#zoomPill QToolButton[cssClass="toolbarZoom"] {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 8px;
     color: #405168;
     min-width: 26px;
     padding: 5px 10px;
+    margin: 0px;
     font-size: 16px;
     font-weight: 800;
 }
 
-QToolButton[cssClass="toolbarZoom"]:hover {
+QWidget#zoomPill QToolButton[cssClass="toolbarZoom"]:hover {
     background: rgba(0,119,168,0.10);
+    border-color: transparent;
     color: #0077A8;
 }
 
-QToolButton[cssClass="toolbarZoom"]:pressed {
+QWidget#zoomPill QToolButton[cssClass="toolbarZoom"]:pressed {
     background: rgba(0,119,168,0.18);
+    border-color: transparent;
     color: #0077A8;
 }
 
@@ -190,23 +196,26 @@ QLabel#zoomLabel {
     background: transparent;
 }
 
-QToolButton#themeToggleBtn {
+/* The box size and icon size come from _apply_view_control_metrics() so the
+   toggle is exactly one top-toolbar icon button tall at every zoom level;
+   this rule only paints it. Scoped under the toolbar to out-specify the
+   generic `QToolBar#topToolbar QToolButton` rule. */
+QToolBar#topToolbar QToolButton#themeToggleBtn {
     background: rgba(255,255,255,0.82);
     border: 1px solid rgba(0,119,168,0.16);
     border-radius: 11px;
     color: #405168;
-    min-width: 32px;
-    min-height: 32px;
-    font-size: 17px;
+    padding: 0px;
+    margin: 0px;
 }
 
-QToolButton#themeToggleBtn:hover {
+QToolBar#topToolbar QToolButton#themeToggleBtn:hover {
     background: rgba(0,119,168,0.10);
     border-color: rgba(0,119,168,0.30);
     color: #0077A8;
 }
 
-QToolButton#themeToggleBtn:pressed {
+QToolBar#topToolbar QToolButton#themeToggleBtn:pressed {
     background: rgba(0,119,168,0.18);
     border-color: #0077A8;
     color: #0077A8;
