@@ -44,7 +44,7 @@ UBUNTU_VER=""
 KICAD_SOURCE=""     # ppa | universe
 KICAD_PPA=""
 KICAD_MIN_MAJOR=""
-QT_PKGS="python3-pyqt6 pyqt6-dev-tools"
+QT_PKGS="python3-pyqt6 python3-pyqt6.qtsvg pyqt6-dev-tools"
 QSCI_PKG="python3-pyqt6.qsci"
 
 #-----------------------------------------------------------------------------
@@ -181,6 +181,8 @@ installQt() {
     source "$config_dir/env/bin/activate"
     python3 -c "import PyQt6.QtWidgets" 2>/dev/null \
         || warn "PyQt6 import failed — eSim GUI will not start"
+    python3 -c "import PyQt6.QtSvg" 2>/dev/null \
+        || warn "PyQt6.QtSvg import failed — eSim GUI will not start (install python3-pyqt6.qtsvg)"
     python3 -c "import PyQt6.Qsci" 2>/dev/null \
         || warn "PyQt6.Qsci import failed — the code editor will be unavailable"
 }
@@ -372,8 +374,22 @@ createDesktopStartScript() {
     # The application anchors all resources to __file__ (configuration.paths),
     # so the launcher no longer needs to cd into src/frontEnd or source the
     # venv — invoking the venv's python directly is equivalent and quoting-safe.
-    printf '#!/bin/bash\nexec "%s/env/bin/python3" "%s/src/frontEnd/Application.py" "$@"\n' \
-        "$config_dir" "$eSim_Home" > esim-start.sh
+    #
+    # Default to software OpenGL (llvmpipe). Inside VirtualBox / headless / broken
+    # -GPU-driver setups Mesa's hardware path fails with
+    #   libEGL warning: failed to get driver name for fd -1
+    #   MESA: error: ZINK: failed to choose pdev / egl: failed to create dri2 screen
+    # eSim is a Qt Widgets + matplotlib app that needs no GPU, so forcing the
+    # software path is free on real hardware and removes those errors in VMs.
+    # All three vars are defaulted-not-forced (`:=`), so a user can still override.
+    {
+        echo '#!/bin/bash'
+        echo ': "${LIBGL_ALWAYS_SOFTWARE:=1}"; export LIBGL_ALWAYS_SOFTWARE'
+        echo ': "${QT_OPENGL:=software}"; export QT_OPENGL'
+        echo ': "${EGL_LOG_LEVEL:=fatal}"; export EGL_LOG_LEVEL'
+        printf 'exec "%s/env/bin/python3" "%s/src/frontEnd/Application.py" "$@"\n' \
+            "$config_dir" "$eSim_Home"
+    } > esim-start.sh
     sudo chmod 755 esim-start.sh
     sudo cp -p esim-start.sh /usr/bin/esim
     rm -f esim-start.sh
