@@ -223,6 +223,17 @@ def main_schematic(proj_dir, stem):
                     words = line.split()
                     if len(words) >= 2 and words[0] == 'schematicFile':
                         candidate = os.path.join(proj_dir, words[1])
+                        # Legacy example projects pin a KiCad-4 ``.sch`` here.
+                        # KiCad 6+ migrates by writing a sibling ``.kicad_sch``
+                        # and leaving the old ``.sch`` in place; the ``.proj``
+                        # is never repointed. If that migrated file exists,
+                        # it is authoritative -- otherwise every open reopens
+                        # the legacy file and re-triggers the rescue/migrate
+                        # prompt, orphaning the user's saved schematic.
+                        if candidate.endswith('.sch'):
+                            migrated = candidate[:-len('.sch')] + '.kicad_sch'
+                            if os.path.exists(migrated):
+                                return migrated
                         if os.path.exists(candidate):
                             return candidate
         except (IOError, OSError):
