@@ -1694,6 +1694,25 @@ def main(args):
     else:
         appView.obj_workspace.show()
 
+    # Pre-warm the heavy plotting imports in the background once startup has
+    # settled, so the first plot / Model-Creation click doesn't pay matplotlib's
+    # multi-second cold import inline. Python's import lock makes a daemon-thread
+    # import safe; by the time the user opens a plot, matplotlib is already in
+    # sys.modules. Fire-and-forget, gated so a failure can never affect startup.
+    def _prewarm_plot_imports():
+        import threading
+
+        def _warm():
+            try:
+                import matplotlib.pyplot  # noqa: F401
+                from ngspiceSimulation import plot_window  # noqa: F401
+            except Exception:
+                pass
+
+        threading.Thread(target=_warm, daemon=True).start()
+
+    QtCore.QTimer.singleShot(3000, _prewarm_plot_imports)
+
     _stage('startup complete, entering event loop')
     sys.exit(app.exec())
 

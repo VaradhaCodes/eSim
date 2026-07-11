@@ -14,8 +14,6 @@ FONT_BOLD = QtGui.QFont.Weight.Bold
 TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
 TOOLBTN_INSTANT = QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
 
-import numpy as np
-from ngspiceSimulation.plot_window import plotWindow
 from PyQt6.Qsci import QsciScintilla
 # Reuse eSim's shared editor lexers + theme so HDL here looks exactly like the
 # project code editor (same QsciLexerVerilog/VHDL colours), instead of a
@@ -61,55 +59,85 @@ def _no_glow(btn):
         btn.setGraphicsEffect(None)
 
 
-class VcdPlotWindow(plotWindow):
-    def __init__(self, timestamps, signals_data, signal_types, project_name="Verilog Simulation", parent=None):
-        self.timestamps = timestamps
-        self.signals_data = signals_data
-        self.signal_types = signal_types
-        # Pass a dummy path to bypass NGSpice reading
-        super().__init__("dummy_path", project_name, parent)
+# VcdPlotWindow subclasses plotWindow, which pulls matplotlib (+numpy). Defining
+# it at module load made the FIRST Model Creation / Makerchip open pay that
+# multi-second cold import even though plots only appear in the Verify stage.
+# Build the subclass lazily on first use instead, cached module-wide, so
+# authoring/UI opens import nothing heavy.
+_VcdPlotWindow = None
 
-    def _parse_tran_start_time(self):
-        return 0.0
 
-    def load_simulation_data(self):
-        self._cursor_interp_cache.clear()
-        self._drawn_signature = None
-        self._tran_start_time = self._parse_tran_start_time()
-        
-        class MockDataExt:
-            def __init__(self):
-                self.x = np.array([])
-                self.y = []
-                self.NBList = []
-                self.NBIList = []
-                self.volts_length = 0
-                self.analysisType = 1 # TRANSIENT
-                self.dec = 0
-            def computeAxes(self): pass
-            def numVals(self): return [len(self.y), self.volts_length]
-            def openFile(self, path): return [1, 0]
+def make_vcd_plot_window(timestamps, signals_data, signal_types,
+                         project_name="Verilog Simulation", parent=None):
+    """Return a VcdPlotWindow, importing matplotlib/plotWindow lazily."""
+    global _VcdPlotWindow
+    if _VcdPlotWindow is None:
+        import numpy as np
+        from ngspiceSimulation.plot_window import plotWindow
 
-        self.obj_dataext = MockDataExt()
-        
-        if self.timestamps and self.signals_data:
-            self.obj_dataext.x = np.array(self.timestamps, dtype=np.float64)
-            for name, y_vals in self.signals_data.items():
-                self.obj_dataext.NBList.append(name)
-                self.obj_dataext.y.append(np.array(y_vals, dtype=np.float64))
-            self.obj_dataext.volts_length = len(self.obj_dataext.NBList)
-            
-        self.plot_type = [1, 0]
-        self._rebuild_nb_sorted()
-        self.data_info = self.obj_dataext.numVals()
-        self.volts_length = self.data_info[1]
-        
-        self.analysis_label.setText("Verilog Transient Analysis")
-        self.populate_waveform_list()
-        self._apply_persisted_layout()
-        
-        self.radio_timing.setEnabled(True)
-        self.radio_timing.setChecked(True)
+        class VcdPlotWindow(plotWindow):
+            def __init__(self, timestamps, signals_data, signal_types,
+                         project_name="Verilog Simulation", parent=None):
+                self.timestamps = timestamps
+                self.signals_data = signals_data
+                self.signal_types = signal_types
+                # Pass a dummy path to bypass NGSpice reading
+                super().__init__("dummy_path", project_name, parent)
+
+            def _parse_tran_start_time(self):
+                return 0.0
+
+            def load_simulation_data(self):
+                self._cursor_interp_cache.clear()
+                self._drawn_signature = None
+                self._tran_start_time = self._parse_tran_start_time()
+
+                class MockDataExt:
+                    def __init__(self):
+                        self.x = np.array([])
+                        self.y = []
+                        self.NBList = []
+                        self.NBIList = []
+                        self.volts_length = 0
+                        self.analysisType = 1  # TRANSIENT
+                        self.dec = 0
+
+                    def computeAxes(self):
+                        pass
+
+                    def numVals(self):
+                        return [len(self.y), self.volts_length]
+
+                    def openFile(self, path):
+                        return [1, 0]
+
+                self.obj_dataext = MockDataExt()
+
+                if self.timestamps and self.signals_data:
+                    self.obj_dataext.x = np.array(
+                        self.timestamps, dtype=np.float64)
+                    for name, y_vals in self.signals_data.items():
+                        self.obj_dataext.NBList.append(name)
+                        self.obj_dataext.y.append(
+                            np.array(y_vals, dtype=np.float64))
+                    self.obj_dataext.volts_length = len(
+                        self.obj_dataext.NBList)
+
+                self.plot_type = [1, 0]
+                self._rebuild_nb_sorted()
+                self.data_info = self.obj_dataext.numVals()
+                self.volts_length = self.data_info[1]
+
+                self.analysis_label.setText("Verilog Transient Analysis")
+                self.populate_waveform_list()
+                self._apply_persisted_layout()
+
+                self.radio_timing.setEnabled(True)
+                self.radio_timing.setChecked(True)
+
+        _VcdPlotWindow = VcdPlotWindow
+    return _VcdPlotWindow(timestamps, signals_data, signal_types,
+                          project_name, parent)
 
 # Default Verilog Design Example
 DEFAULT_DESIGN = """module counter (
@@ -1252,8 +1280,8 @@ class VerilogVerifier(QtWidgets.QWidget):
         # (Flow Navigator -> DockArea) takes ownership when it docks the plot as
         # its own full-width tab, so the verifier keeps no reference that could
         # dangle once that tab is closed/destroyed.
-        plot = VcdPlotWindow(timestamps, signals_data, signal_types,
-                             "Verilog Simulation")
+        plot = make_vcd_plot_window(timestamps, signals_data, signal_types,
+                                    "Verilog Simulation")
 
         self.act_export_csv.setEnabled(True)
         self.waveformReady.emit(plot)
