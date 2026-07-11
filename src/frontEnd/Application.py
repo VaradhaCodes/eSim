@@ -947,14 +947,15 @@ class Application(QtWidgets.QMainWindow):
 
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             self._save_snapshot_dock_state()
-            # Terminate every tracked child through its handle. Copy the lists:
-            # WorkerThreads may be reaping them concurrently as children exit.
-            # (QProcess.close() only shuts I/O channels, it does NOT stop the
-            # process -- terminate_handle actually kills it.)
-            for proc in list(self.obj_appconfig.procThread_list):
-                Worker.terminate_handle(proc)
-            for process_object in list(self.obj_appconfig.process_obj):
-                Worker.terminate_handle(process_object)
+            # Terminate every tracked child in one batch with a shared wait
+            # budget, so exit stays bounded (~2 s) regardless of how many
+            # external windows are open, instead of blocking the GUI thread for
+            # 2-3 s per child. Copy the lists: WorkerThreads may be reaping them
+            # concurrently as children exit. (QProcess.close() only shuts I/O
+            # channels, it does NOT stop the process -- terminate_all kills it.)
+            Worker.terminate_all(
+                list(self.obj_appconfig.procThread_list) +
+                list(self.obj_appconfig.process_obj))
 
             # Check if "Open project" and "New project" window is open.
             # If yes, just close it when application is closed.

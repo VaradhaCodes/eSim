@@ -20,6 +20,7 @@ from PyQt6 import QtCore
 from configuration import Dialogs
 import subprocess
 import shlex
+import time
 from configuration.Appconfig import Appconfig
 
 
@@ -59,6 +60,54 @@ def terminate_handle(handle):
                     handle.kill()
     except Exception:
         pass
+
+
+def terminate_all(handles, total_deadline=2.0):
+    """Stop every tracked child with ONE shared wait budget.
+
+    terminate_handle escalates terminate -> wait(2 s) -> kill -> wait(1 s) per
+    child; calling it in a loop at exit serialises those waits, so N open
+    external windows froze the GUI thread for up to N * 3 s (users read that as
+    a hang and force-killed, which fed teardown crashes). Instead: ask ALL
+    children to terminate first (no wait), then wait for them within a single
+    total_deadline shared across the batch, then kill whatever is still alive.
+    Bounds exit to ~total_deadline wall regardless of child count.
+    """
+    live = []
+    for handle in handles:
+        if handle is None:
+            continue
+        try:
+            if _handle_running(handle):
+                handle.terminate()          # Popen and QProcess both have it
+                live.append(handle)
+        except Exception:
+            pass
+
+    deadline = time.monotonic() + max(0.0, total_deadline)
+    for handle in live:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            if isinstance(handle, QtCore.QProcess):
+                handle.waitForFinished(int(remaining * 1000))
+            else:
+                try:
+                    handle.wait(timeout=remaining)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    for handle in live:                     # kill stragglers, brief reap
+        try:
+            if _handle_running(handle):
+                handle.kill()
+                if isinstance(handle, QtCore.QProcess):
+                    handle.waitForFinished(200)
+        except Exception:
+            pass
 
 
 class WorkerThread(QtCore.QThread):
