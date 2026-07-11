@@ -139,7 +139,11 @@ class Application(QtWidgets.QMainWindow):
         self.setWindowTitle(
             self.obj_appconfig._APPLICATION + "-" + self.obj_appconfig._VERSION
         )
-        self.showMaximized()
+        # NOTE: do NOT showMaximized() here. __init__ runs behind the splash and
+        # main() immediately hide()s the window, so maximizing now is a full
+        # layout+paint thrown away (and an extra transient top-level the flash
+        # watcher used to catch). The workspace flow maximizes it once, when the
+        # window is actually revealed (Workspace._finish_workspace_change).
         self.setWindowIcon(QtGui.QIcon(paths.image_path('logo.png')))
 
         # Aurora micro-interactions: install hover/press glow on the main

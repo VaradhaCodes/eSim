@@ -165,7 +165,10 @@ class Workspace(QtWidgets.QDialog):
                 view.splash.close()
         except Exception:
             pass
-        view.show()
+        # Maximize here (not in Application.__init__): this is where the main
+        # window is first actually revealed, so the maximized layout+paint
+        # happens once instead of being built behind the splash then discarded.
+        view.showMaximized()
 
     # ------------------------------------------------------------------ slots
     def defaultWorkspace(self):
