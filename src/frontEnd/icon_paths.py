@@ -248,3 +248,67 @@ _THEME_TOGGLE_SVG = """
 
 def theme_toggle_icon(size: int = 16) -> QtGui.QIcon:
     return _svg_icon(_THEME_TOGGLE_SVG, size)
+
+
+_FOLDER_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+</svg>
+""".strip()
+
+
+def folder_icon(size: int = 16) -> QtGui.QIcon:
+    """Project-folder icon. Replaces SP_DirIcon, which resolves to the OS
+    shell folder (yellow Explorer folder on Windows, icon-theme folder on
+    Linux) and so never matched the design on either platform."""
+    return _svg_icon(_FOLDER_SVG, size, role="accent")
+
+
+_FILE_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+  <polyline points="14 2 14 8 20 8"/>
+</svg>
+""".strip()
+
+
+def file_icon(size: int = 16) -> QtGui.QIcon:
+    """Plain file icon. Replaces the platform-divergent SP_FileIcon."""
+    return _svg_icon(_FILE_SVG, size)
+
+
+_TRASH_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="3 6 5 6 21 6"/>
+  <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+  <line x1="10" y1="11" x2="10" y2="17"/>
+  <line x1="14" y1="11" x2="14" y2="17"/>
+</svg>
+""".strip()
+
+
+def trash_icon(size: int = 16) -> QtGui.QIcon:
+    """Delete/remove icon. Replaces the platform-divergent SP_TrashIcon."""
+    return _svg_icon(_TRASH_SVG, size, role="danger")
+
+
+_SNAPSHOT_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+  <circle cx="12" cy="13" r="4"/>
+</svg>
+""".strip()
+
+
+def snapshot_icon(size: int = 16) -> QtGui.QIcon:
+    """Snapshot (camera) icon. Replaces SP_DriveHDIcon, which showed the OS
+    hard-drive glyph and read as 'disk', not 'snapshot'."""
+    return _svg_icon(_SNAPSHOT_SVG, size)

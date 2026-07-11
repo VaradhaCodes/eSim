@@ -230,15 +230,18 @@ class ProjectExplorer(QtWidgets.QWidget):
 
     @staticmethod
     def _dir_icon():
-        """Standard folder icon for project (top-level) rows."""
-        return QtWidgets.QApplication.style().standardIcon(
-            QtWidgets.QStyle.StandardPixmap.SP_DirIcon)
+        """Folder icon for project (top-level) rows. Bundled SVG, not
+        SP_DirIcon: the standard pixmap resolves to the OS shell folder
+        (yellow Explorer folder on Windows) and never matched the theme."""
+        from frontEnd import icon_paths
+        return icon_paths.folder_icon()
 
     @staticmethod
     def _file_icon():
-        """Standard file icon for the file rows under a project."""
-        return QtWidgets.QApplication.style().standardIcon(
-            QtWidgets.QStyle.StandardPixmap.SP_FileIcon)
+        """File icon for the file rows under a project. Bundled SVG for the
+        same cross-platform reason as _dir_icon."""
+        from frontEnd import icon_paths
+        return icon_paths.file_icon()
 
     def _projectLabel(self, path):
         """Base display label for a project: its stem, else the folder name."""
@@ -355,23 +358,20 @@ class ProjectExplorer(QtWidgets.QWidget):
             index = index.parent()
             level += 1
 
-        style = QtWidgets.QApplication.style()
+        from frontEnd import icon_paths
         menu = QtWidgets.QMenu()
         if level == 0:
             renameProject = menu.addAction(self.tr("Rename Project"))
             renameProject.triggered.connect(self.renameProject)
             deleteproject = menu.addAction(self.tr("Remove Project"))
-            deleteproject.setIcon(style.standardIcon(
-                QtWidgets.QStyle.StandardPixmap.SP_TrashIcon))
+            deleteproject.setIcon(icon_paths.trash_icon())
             deleteproject.triggered.connect(self.removeProject)
             refreshproject = menu.addAction(self.tr("Refresh"))
-            refreshproject.setIcon(style.standardIcon(
-                QtWidgets.QStyle.StandardPixmap.SP_BrowserReload))
+            refreshproject.setIcon(icon_paths.refresh_icon())
             refreshproject.triggered.connect(self.refreshProject)
             menu.addSeparator()
             snapshotProject = menu.addAction(self.tr("Snapshot Project"))
-            snapshotProject.setIcon(style.standardIcon(
-                QtWidgets.QStyle.StandardPixmap.SP_DriveHDIcon))
+            snapshotProject.setIcon(icon_paths.snapshot_icon())
             snapshotProject.triggered.connect(self.takeProjectSnapshot)
             openSnaps = menu.addAction(self.tr("Open Snapshots…"))
             openSnaps.triggered.connect(self.openSnapshotsPanel)
