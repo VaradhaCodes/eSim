@@ -52,6 +52,15 @@ class NgspiceWidget(QtWidgets.QWidget):
         self._stderr_decoder = codecs.getincrementaldecoder('utf-8')('replace')
         self._main_pid: Optional[int] = None
 
+        # Coalesce console writes. A chatty run fires readyRead in rapid bursts;
+        # one insertPlainText per burst thrashes the widget and stalls the UI.
+        # Buffer decoded text and flush it once per 50 ms tick instead.
+        self._console_buffer: List[str] = []
+        self._console_flush_timer = QtCore.QTimer(self)
+        self._console_flush_timer.setSingleShot(True)
+        self._console_flush_timer.setInterval(50)
+        self._console_flush_timer.timeout.connect(self._flush_console)
+
         self.ngspice_args = self._prepare_ngspice_arguments(netlist)
         logger.info(f"NGSpice arguments: {self.ngspice_args}")
 
@@ -278,6 +287,27 @@ class NgspiceWidget(QtWidgets.QWidget):
         except Exception as e:
             logger.error(f"Failed to start GAW process: {e}")
 
+    def _queue_console(self, text: str) -> None:
+        """Buffer console text; a 50 ms single-shot timer flushes it in one
+        insert. Coalesces the readyRead bursts of a chatty simulation."""
+        self._console_buffer.append(text)
+        if not self._console_flush_timer.isActive():
+            self._console_flush_timer.start()
+
+    def _flush_console(self) -> None:
+        """Write buffered text in one insert. Auto-scroll only when the user is
+        already at the bottom, so scrolling back through the log isn't yanked."""
+        if not self._console_buffer:
+            return
+        text = ''.join(self._console_buffer)
+        self._console_buffer.clear()
+        console = self.terminal_ui.simulationConsole
+        scrollbar = console.verticalScrollBar()
+        at_bottom = scrollbar.value() >= scrollbar.maximum() - 4
+        console.insertPlainText(text)
+        if at_bottom:
+            scrollbar.setValue(scrollbar.maximum())
+
     @pyqtSlot()
     def _handle_stdout(self) -> None:
         try:
@@ -285,7 +315,7 @@ class NgspiceWidget(QtWidgets.QWidget):
             if data:
                 text = self._stdout_decoder.decode(data)
                 if text:
-                    self.terminal_ui.simulationConsole.insertPlainText(text)
+                    self._queue_console(text)
         except Exception as e:
             logger.error(f"Error reading stdout: {e}")
 
@@ -304,7 +334,7 @@ class NgspiceWidget(QtWidgets.QWidget):
                 if 'PrinterOnly' not in line and 'viewport for graphics' not in line
             )
             if filtered.strip():
-                self.terminal_ui.simulationConsole.insertPlainText(filtered)
+                self._queue_console(filtered)
         except Exception as e:
             logger.error(f"Error reading stderr: {e}")
 
@@ -328,6 +358,9 @@ class NgspiceWidget(QtWidgets.QWidget):
             exit_status = self.process.exitStatus()
 
         try:
+            # Drain any buffered console output before the verdict banner so
+            # "Simulation Completed/Failed" lands after the last ngspice line.
+            self._flush_console()
             self._update_ui_after_simulation()
 
             if self.uses_dcosim:
@@ -492,11 +525,11 @@ class NgspiceWidget(QtWidgets.QWidget):
 
     def _show_success_message(self) -> None:
         success_message = self.SUCCESS_FORMAT.format("Simulation Completed Successfully!")
-        self.terminal_ui.simulationConsole.append(success_message)
+        self.terminal_ui.simulationConsole.appendHtml(success_message)
 
     def _show_failure_message(self, error_type: QtCore.QProcess.ProcessError) -> None:
         failure_message = self.FAILURE_FORMAT.format("Simulation Failed!")
-        self.terminal_ui.simulationConsole.append(failure_message)
+        self.terminal_ui.simulationConsole.appendHtml(failure_message)
 
         error_message = self._get_error_message(error_type)
         error_dialog = Dialogs.make_error_message(self)

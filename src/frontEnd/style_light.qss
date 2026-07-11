@@ -1339,7 +1339,7 @@ QStatusBar#spiceEditorStatus {
 
 /* ── Console / Note ──────────────────────────────────────────────── */
 QTextEdit#mainNoteConsole,
-QTextEdit#simulationConsole {
+QPlainTextEdit#simulationConsole {
     background-color: #FBFDFF;
     color: #405168;
     border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -1352,7 +1352,7 @@ QTextEdit#simulationConsole {
     selection-color: #FFFFFF;
 }
 
-QTextEdit#simulationConsole:focus {
+QPlainTextEdit#simulationConsole:focus {
     border-color: #0077A8;
 }
 

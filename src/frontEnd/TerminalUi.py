@@ -40,9 +40,14 @@ class TerminalUi(QtWidgets.QMainWindow):
             "progressBar"
         )
         self.simulationConsole = self.findChild(
-            QtWidgets.QTextEdit,
+            QtWidgets.QPlainTextEdit,
             "simulationConsole"
         )
+        # A chatty transient can emit tens of thousands of lines. QPlainTextEdit
+        # is built for logs (cheap per-line append, no full-document relayout
+        # like QTextEdit); cap the scrollback so memory can't grow without
+        # bound during a long simulation.
+        self.simulationConsole.setMaximumBlockCount(20000)
 
         self.lightDarkModeButton = self.findChild(
             QtWidgets.QPushButton,
@@ -124,7 +129,7 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.progressBar.setProperty("value", 100)
 
         cancelFormat = '<span style="color:#FF8624; font-size:26px;">{}</span>'
-        self.simulationConsole.append(
+        self.simulationConsole.appendHtml(
             cancelFormat.format("Simulation Cancelled!"))
         self.simulationConsole.verticalScrollBar().setValue(
             self.simulationConsole.verticalScrollBar().maximum()
@@ -144,7 +149,7 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.progressBar.setMaximum(0)
         self.progressBar.setProperty("value", -1)
 
-        self.simulationConsole.setText("")
+        self.simulationConsole.clear()
         self.simulationCancelled = False
 
         self.Flag = self._resolveNgspicePlotChoice()
