@@ -16,9 +16,18 @@ needs_sim = pytest.mark.skipif(
 
 
 @needs_sim
-def test_verifier_emits_simulation_succeeded(qapp):
+def test_verifier_emits_simulation_succeeded(qapp, monkeypatch):
     from PyQt6.QtCore import QEventLoop, QTimer
     from maker.VerilogVerifier import VerilogVerifier
+
+    # Pin the toolchain resolved at import time through the env override.
+    # The module-level probe above ran against the real machine config
+    # (~/.nghdl), but the test itself executes inside the suite's sandboxed
+    # home (src/conftest.py) where that config does not exist -- without the
+    # pin, find_iverilog falls through to a MODAL install prompt and the
+    # headless run hangs forever.
+    monkeypatch.setenv("ESIM_IVERILOG", _IV)
+    monkeypatch.setenv("ESIM_VVP", _VVP)
 
     w = VerilogVerifier()
     loop = QEventLoop()

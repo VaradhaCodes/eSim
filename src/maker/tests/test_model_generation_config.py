@@ -8,6 +8,7 @@ from maker import CosimConfig, ModelGeneration
 
 def test_constructor_survives_missing_nghdl_config(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     importlib.reload(CosimConfig)
 
     terminal = QtWidgets.QTextEdit()
@@ -25,6 +26,7 @@ def test_constructor_survives_missing_nghdl_config(qapp, tmp_path, monkeypatch):
 
 def test_constructor_accepts_partial_nghdl_config(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     config_dir = tmp_path / ".nghdl"
     config_dir.mkdir()
     (config_dir / "config.ini").write_text(

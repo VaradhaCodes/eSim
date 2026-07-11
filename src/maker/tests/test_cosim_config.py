@@ -18,6 +18,7 @@ def fake_home(tmp_path, monkeypatch):
     """Point config.ini resolution at an isolated HOME and clear any env
     overrides, then hand back a freshly-reloaded CosimConfig module."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     for var in ("ESIM_IVERILOG", "ESIM_VVP", "ESIM_NGSPICE",
                 "ESIM_NGSPICE_GUI", "ESIM_IVERILOG_LIB"):
         monkeypatch.delenv(var, raising=False)

@@ -135,6 +135,7 @@ def test_safe_model_subdir_accepts_plain_name(tmp_path):
 def test_nghdl_sym_path_posix(tmp_path, monkeypatch):
     # HOME redirected so we never create/touch the real ~/.esim.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(os.path, "expanduser",
                         lambda p: p.replace("~", str(tmp_path), 1))
     p = mt._nghdl_sym_path("")

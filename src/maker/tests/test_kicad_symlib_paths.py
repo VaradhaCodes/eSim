@@ -20,6 +20,7 @@ def _redirect_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr(os.path, "expanduser",
                         lambda p: p.replace("~", str(home), 1))
     return home

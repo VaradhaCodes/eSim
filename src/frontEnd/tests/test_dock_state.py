@@ -45,6 +45,10 @@ def test_dock_registry_and_counter_are_per_instance(qapp):
 def test_tab_close_matches_exact_title_not_prefix(qapp):
     da = DockArea()
     try:
+        # handle_tab_close only considers VISIBLE docks; children of a hidden
+        # top-level are never visible, so the area itself must be shown for
+        # this test to exercise the match at all (offscreen platform is fine).
+        da.show()
         # Two docks whose titles share a prefix -- the classic wrong-close case.
         short = _RecordingDock('Simulation-RLC-2')
         long = _RecordingDock('Simulation-RLC-21')

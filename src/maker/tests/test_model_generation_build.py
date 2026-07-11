@@ -21,6 +21,7 @@ from maker import CosimConfig, ModelGeneration
 def model(qapp, tmp_path, monkeypatch):
     """A ModelGeneration whose model dir lives under a throwaway HOME."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     importlib.reload(CosimConfig)
     terminal = QtWidgets.QTextEdit()
     m = ModelGeneration.ModelGeneration(str(tmp_path / "counter.v"), terminal)
@@ -165,6 +166,7 @@ class _StubModel:
 @pytest.fixture
 def ngveri(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     from maker import NgVeri, Maker
     importlib.reload(CosimConfig)
     Maker.verilogFile = [""]

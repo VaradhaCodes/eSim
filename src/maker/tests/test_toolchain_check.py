@@ -30,6 +30,7 @@ def _make_tool(dirpath, name, output="tool version 1.0"):
 def fake_env(tmp_path, monkeypatch):
     """Isolated HOME, empty PATH, no ESIM_* overrides; reloaded modules."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("PATH", str(tmp_path / "emptybin"))
     for var in ("ESIM_IVERILOG", "ESIM_VVP", "ESIM_NGSPICE",
                 "ESIM_IVERILOG_LIB"):
