@@ -1567,6 +1567,17 @@ def main(args):
     The splash screen opened at the starting of screen is performed
     by this function.
     """
+    # Windows: configure the tool environment and run per-user bootstrap in
+    # THIS interpreter, so a direct `pythonw Application.py` launch needs no
+    # esim.bat and no second interpreter. Both are sentinel-/idempotency-guarded,
+    # so launching via esim.bat (which still sets the env) stays correct.
+    if os.name == 'nt':
+        try:
+            from frontEnd import launcher_windows
+            launcher_windows.setup_environment()
+            launcher_windows.run_bootstrap()
+        except Exception as e:
+            print("Windows launcher setup skipped:", e)
     # Headless doctor mode: report the simulation-toolchain state and exit
     # BEFORE any QApplication/GUI work, so `esim --doctor` works over ssh and
     # in installer self-checks.

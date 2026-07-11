@@ -26,9 +26,12 @@ rem always runs the KiCad version it shipped and was tested with.
 for /d %%K in ("%ProgramFiles%\KiCad\*") do if exist "%%K\bin\eeschema.exe" set "PATH=%%K\bin;%PATH%"
 if exist "%ESIM_HOME%\tools\kicad\bin\eeschema.exe" set "PATH=%ESIM_HOME%\tools\kicad\bin;%PATH%"
 
-rem Per-user setup (config.ini, symbol seeding, sym-lib-table registration).
-rem Idempotent + best-effort: a failure must not stop the GUI from starting.
-"%ESIM_HOME%\python\python.exe" "%ESIM_HOME%\windows\windows_bootstrap.py" --esim-root "%ESIM_HOME%"
+rem Tell Application.py the environment is already configured, so its in-process
+rem launcher_windows.setup_environment() does not prepend these dirs a second
+rem time. Per-user bootstrap (config.ini, symbol seeding, sym-lib-table) now
+rem runs IN the GUI interpreter (launcher_windows.run_bootstrap) instead of a
+rem separate python.exe, removing one cold interpreter start per launch.
+set "ESIM_ENV_READY=1"
 
 rem Toolchain doctor: print the dependency report in this console and exit.
 if "%~1"=="--doctor" (
