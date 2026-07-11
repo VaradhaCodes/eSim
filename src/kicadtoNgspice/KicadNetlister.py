@@ -35,6 +35,24 @@ def _kicad_cli():
     return os.environ.get('ESIM_KICAD_CLI') or shutil.which('kicad-cli')
 
 
+def _no_window_kwargs():
+    """subprocess kwargs that fully suppress the console flash on Windows.
+
+    CREATE_NO_WINDOW alone still lets a console exe (kicad-cli) blink a black
+    box when the GUI parent has no console. Pairing it with a STARTUPINFO that
+    forces SW_HIDE kills the flash for good. No-op on non-Windows.
+    """
+    if os.name != 'nt':
+        return {}
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 0  # SW_HIDE
+    return {
+        'startupinfo': si,
+        'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+    }
+
+
 def _esim_subckt_lib():
     """Return the eSim SubcircuitLibrary root, or None if not installed."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -258,7 +276,7 @@ def generate_netlist(proj_dir, proj_name):
              '-o', xml_path, sch],
             capture_output=True, text=True, timeout=120,
             # No blank console window on Windows (GUI parent has no console).
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            **_no_window_kwargs())
         if proc.returncode != 0 or not os.path.isfile(xml_path):
             return False, "kicad-cli netlist export failed: " + proc.stderr.strip()
 

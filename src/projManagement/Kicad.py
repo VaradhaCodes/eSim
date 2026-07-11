@@ -193,44 +193,37 @@ class Kicad:
         if self.obj_validation.validateKicad(self.projDir):
             projName = self.obj_appconfig.get_proj_stem()
 
+            # Guard against a second Convert click while an export is running.
+            existing = getattr(self, '_netlist_job', None)
+            if existing is not None and existing.isRunning():
+                self.obj_appconfig.print_info(
+                    'KiCad netlist generation already in progress.')
+                return
+
             # KiCad >= 7 `--format spice` strips connectivity for eSim symbols
-            # (they carry no Sim.* model), degrading every part to "<ref> __<REF>".
-            # Regenerate <proj>.cir ourselves from the kicadxml netlist, which
-            # always preserves ref/value/pin->net regardless of simulation models.
-            try:
-                from kicadtoNgspice import KicadNetlister
-                ok, msg = KicadNetlister.generate_netlist(self.projDir, projName)
-                self.obj_appconfig.print_info('KiCad netlist: ' + msg)
-            except Exception as e:
-                self.obj_appconfig.print_warning(
-                    'Netlist auto-generation skipped: ' + str(e))
-
-            # Checking if project has .cir file or not
-            if self.obj_validation.validateCir(self.projDir, projName):
-                self.projName = projName
-                self.project = os.path.join(self.projDir, self.projName)
-
-                # Creating a command to run
-                """
-                self.cmd = ("python3  ../kicadtoNgspice/KicadtoNgspice.py "
-                + "self.project+".cir ")
-                self.obj_workThread = Worker.WorkerThread(self.cmd)
-                self.obj_workThread.start()
-                """
-                var = self.project + ".cir"
-                self.obj_dockarea.kicadToNgspiceEditor(var)
-
-            else:
-                self.msg = Dialogs.make_error_message(None)
-                self.msg.setModal(True)
-                self.msg.setWindowTitle("Error Message")
-                self.msg.showMessage(
-                    'The project does not contain any Kicad netlist file ' +
-                    'for conversion.')
-                self.obj_appconfig.print_error(
-                    'The project does not contain any Kicad netlist file ' +
-                    'for conversion.')
-                self.msg.exec()
+            # (they carry no Sim.* model), degrading every part to "<ref>
+            # __<REF>". Regenerate <proj>.cir ourselves from the kicadxml
+            # netlist, which always preserves ref/value/pin->net regardless of
+            # simulation models.
+            #
+            # kicad-cli start can take 5-15 s on a cold Windows boot (Defender
+            # scan + KiCad DLL load), and generate_netlist waits up to 120 s.
+            # Run it on a worker thread so the UI event loop stays responsive;
+            # the conversion is resumed on the GUI thread by the completion
+            # slots below (which may safely touch widgets -- the signal is
+            # queued).
+            from maker.hdl.jobs import BackgroundJob
+            from kicadtoNgspice import KicadNetlister
+            self.obj_appconfig.print_info('Generating KiCad netlist...')
+            job = BackgroundJob(
+                KicadNetlister.generate_netlist, self.projDir, projName)
+            job.succeeded.connect(
+                lambda res, p=projName: self._onNetlistReady(p, res))
+            job.failed.connect(
+                lambda err, p=projName: self._onNetlistFailed(p, err))
+            job.finished.connect(job.deleteLater)
+            self._netlist_job = job
+            job.start()
 
         else:
             self.msg = Dialogs.make_error_message(None)
@@ -243,3 +236,41 @@ class Kicad:
             self.obj_appconfig.print_warning(
                 'Please select the project first. You can either ' +
                 'create new project or open an existing project')
+
+    def _onNetlistReady(self, projName, result):
+        """Netlist worker returned (ok, msg). Runs on the GUI thread."""
+        try:
+            ok, msg = result
+        except (TypeError, ValueError):
+            ok, msg = bool(result), str(result)
+        self.obj_appconfig.print_info('KiCad netlist: ' + str(msg))
+        self._continueKicadToNgspice(projName)
+
+    def _onNetlistFailed(self, projName, err):
+        """Netlist worker raised. Mirror the old inline behaviour: log and
+        still try opening any pre-existing .cir. Runs on the GUI thread."""
+        self.obj_appconfig.print_warning(
+            'Netlist auto-generation skipped: ' + str(err))
+        self._continueKicadToNgspice(projName)
+
+    def _continueKicadToNgspice(self, projName):
+        """Resume the conversion once the netlist step has settled: validate
+        the .cir and open the KicadToNgspice editor, else show the error."""
+        self._netlist_job = None
+        # Checking if project has .cir file or not
+        if self.obj_validation.validateCir(self.projDir, projName):
+            self.projName = projName
+            self.project = os.path.join(self.projDir, self.projName)
+            var = self.project + ".cir"
+            self.obj_dockarea.kicadToNgspiceEditor(var)
+        else:
+            self.msg = Dialogs.make_error_message(None)
+            self.msg.setModal(True)
+            self.msg.setWindowTitle("Error Message")
+            self.msg.showMessage(
+                'The project does not contain any Kicad netlist file ' +
+                'for conversion.')
+            self.obj_appconfig.print_error(
+                'The project does not contain any Kicad netlist file ' +
+                'for conversion.')
+            self.msg.exec()
