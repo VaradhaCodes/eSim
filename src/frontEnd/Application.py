@@ -1753,24 +1753,44 @@ def main(args):
     else:
         appView.obj_workspace.show()
 
-    # Pre-warm the heavy plotting imports in the background once startup has
-    # settled, so the first plot / Model-Creation click doesn't pay matplotlib's
-    # multi-second cold import inline. Python's import lock makes a daemon-thread
-    # import safe; by the time the user opens a plot, matplotlib is already in
-    # sys.modules. Fire-and-forget, gated so a failure can never affect startup.
-    def _prewarm_plot_imports():
+    # Pre-warm every tool's imports in the background once startup has
+    # settled, so the first click on any launcher (plot, Model Creation,
+    # KiCad-to-Ngspice, Model/Subcircuit editor, converters, manual) never
+    # pays a cold import inline -- on a cold Windows boot Defender scans each
+    # native module on first load, which is exactly the multi-second "why is
+    # this tab taking so long" stall. Python's import lock makes daemon-thread
+    # imports safe (a click racing the prewarm just waits on the same lock it
+    # would have paid anyway); only modules are imported, no QWidget is
+    # constructed off the GUI thread. Ordered heaviest-first so the biggest
+    # win lands earliest. Fire-and-forget, gated so a failure can never
+    # affect startup.
+    def _prewarm_tool_imports():
         import threading
 
         def _warm():
-            try:
-                import matplotlib.pyplot  # noqa: F401
-                from ngspiceSimulation import plot_window  # noqa: F401
-            except Exception:
-                pass
+            for mod in (
+                'matplotlib.pyplot',
+                'ngspiceSimulation.plot_window',
+                'ngspiceSimulation.NgspiceWidget',
+                'maker.makerchip',
+                'kicadtoNgspice.KicadtoNgspice',
+                'modelEditor.ModelEditor',
+                'subcircuit.Subcircuit',
+                'converter.pspiceToKicad',
+                'converter.ltspiceToKicad',
+                'converter.LtspiceLibConverter',
+                'converter.libConverter',
+                'ngspicetoModelica.ModelicaUI',
+                'browser.UserManual',
+            ):
+                try:
+                    __import__(mod)
+                except Exception:
+                    pass
 
         threading.Thread(target=_warm, daemon=True).start()
 
-    QtCore.QTimer.singleShot(3000, _prewarm_plot_imports)
+    QtCore.QTimer.singleShot(3000, _prewarm_tool_imports)
 
     _stage('startup complete, entering event loop')
     sys.exit(app.exec())
