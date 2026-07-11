@@ -23,6 +23,27 @@ for _p in (SRC, PKG):
         sys.path.insert(0, _p)
 
 from kicadtoNgspice import Convert, TrackWidget               # noqa: E402
+from kicadtoNgspice import Processing                          # noqa: E402
+
+
+def test_two_adjacent_ic_components_are_both_processed():
+    # convertICintoBasicBlocks removes each u* line and reinserts a comment
+    # while walking schematicInfo. Two ADJACENT u* components is the case a
+    # mutate-during-iteration bug would drop the second of -- pin that both
+    # survive into modelList and get commented out of the netlist body.
+    proc = Processing.PrcocessNetlist()
+    schematic = ["u1 1 ic", "u2 2 ic"]      # 'ic' branch: no XML/lib lookup
+    out_sch, _out_opt, model_list, unknown, multiple, _plot = \
+        proc.convertICintoBasicBlocks(list(schematic), [], [], [])
+
+    # Both ICs produced a model entry (compName is field index 3).
+    ref_names = {entry[3] for entry in model_list}
+    assert ref_names == {"u1", "u2"}, ref_names
+
+    # Both original lines were commented out (not left live, not dropped).
+    assert "* u1 1 ic" in out_sch
+    assert "* u2 2 ic" in out_sch
+    assert unknown == [] and multiple == []
 
 
 def _sub_dir(name, nports):

@@ -267,7 +267,12 @@ class PrcocessNetlist:
             'plot_phase']
         interMediateNodeCount = 1
         k = 1
-        for compline in schematicInfo:
+        # Iterate a snapshot: the body remove()s the current line and reinserts
+        # a comment / appends model lines into schematicInfo. Walking the live
+        # list while mutating it skips the element after any net removal (two
+        # adjacent IC components would drop the second) and needlessly re-walks
+        # the appended a*/v_ lines. The snapshot pins the original components.
+        for compline in list(schematicInfo):
             words = compline.split()
             compName = words[0]
             # print "Compline----------------->",compline
