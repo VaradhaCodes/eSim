@@ -77,7 +77,21 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.layout.addWidget(self.terminal_ui)
 
         self._configure_process()
-        self._start_process()
+
+        # Feedback before the process exists: on a cold boot the very first
+        # ngspice launch can take seconds (the OS scans the exe, its DLL
+        # closure and every spinit codemodel on first load), during which the
+        # console would otherwise sit empty and look hung.
+        self.terminal_ui.simulationConsole.insertPlainText(
+            "[eSim] Starting ngspice ...\n[eSim] "
+            + self.ngspice_bin + " " + " ".join(self.ngspice_args) + "\n")
+
+        # Paint first, spawn second: process.start() runs CreateProcess on the
+        # GUI thread, so a cold ngspice.exe blocks it before this widget has
+        # ever painted -- the user saw an empty white Simulation page. One
+        # deferred event-loop turn lets the dock render the banner + busy bar
+        # before any stall can happen.
+        QtCore.QTimer.singleShot(0, self._start_process)
 
     @staticmethod
     def _raw_path(netlist: str) -> str:
@@ -151,6 +165,8 @@ class NgspiceWidget(QtWidgets.QWidget):
         self._stdout_decoder.reset()
         self._stderr_decoder.reset()
         self._main_pid = self.process.processId()
+        self._queue_console(
+            "[eSim] ngspice running (PID %s)\n" % self._main_pid)
         if self.process not in self.obj_appconfig.process_obj:
             self._register_process(self.process)
 
