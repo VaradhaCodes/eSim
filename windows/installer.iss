@@ -84,6 +84,14 @@ Source: "{#StageDir}\tools\nghdl\src\*"; DestDir: "{app}\tools\nghdl\src"; Compo
 Source: "{#StageDir}\tools\nghdl\release\*"; DestDir: "{app}\tools\nghdl\release"; Components: hdl; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 
+[Tasks]
+; Default-checked: the single biggest cold-start lever (Defender real-time
+; scanning of the install tree dominates first-launch time). Users who decline
+; just get slower cold starts.
+Name: "defenderexclusion"; \
+    Description: "Exclude eSim from Microsoft Defender real-time scanning (recommended, improves start-up)"; \
+    GroupDescription: "Performance:"
+
 [Icons]
 ; runminimized: esim.bat runs in a cmd console; minimized keeps it as a
 ; taskbar blip instead of flashing a black console window at every launch.
@@ -95,8 +103,27 @@ Name: "{autodesktop}\eSim";  Filename: "{app}\esim.bat"; \
     Flags: runminimized
 
 [Run]
+; Precompile bytecode at install time so the first cold launch doesn't compile
+; every .py on import (and Defender doesn't scan each freshly written .pyc).
+Filename: "{app}\python\python.exe"; \
+    Parameters: "-m compileall -q -j 0 ""{app}\src"" ""{app}\windows"""; \
+    WorkingDir: "{app}"; StatusMsg: "Precompiling eSim modules..."; \
+    Flags: runhidden
+; Defender exclusion for the install dir (guarded by the task; installer is
+; already elevated, PrivilegesRequired=admin).
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Add-MpPreference -ExclusionPath '{app}'"""; \
+    Tasks: defenderexclusion; StatusMsg: "Adding Microsoft Defender exclusion..."; \
+    Flags: runhidden
 Filename: "{app}\esim.bat"; Description: "Launch eSim"; \
     Flags: postinstall nowait skipifsilent
+
+[UninstallRun]
+; Mirror the install-time exclusion removal. UninstallRun has no Tasks: filter,
+; so run unconditionally and swallow the error when no exclusion was added.
+Filename: "powershell.exe"; RunOnceId: "RemoveEsimDefenderExclusion"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-MpPreference -ExclusionPath '{app}' -ErrorAction SilentlyContinue"""; \
+    Flags: runhidden
 
 [UninstallDelete]
 ; Compiled artifacts the app writes inside its own tree at runtime.
