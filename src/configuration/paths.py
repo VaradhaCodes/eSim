@@ -5,7 +5,6 @@ directory.  Per-user state lives under ``~/.esim`` on every platform.
 """
 
 import os
-import tempfile
 
 
 def repo_root():
@@ -44,12 +43,23 @@ def nghdl_config_path():
 
 
 def atomic_write_text(path, text, encoding="utf-8"):
-    """Atomically replace ``path`` with ``text`` and return ``path``."""
-    parent = os.path.dirname(os.path.abspath(path))
+    """Atomically replace ``path`` with ``text`` and return ``path``.
+
+    Uses a fixed sibling temp name with ONE create attempt, never
+    tempfile.mkstemp: in a directory this process cannot write (admin-owned,
+    revoked ACL) mkstemp on Windows spins through all 10000 candidate names
+    because ``os.access(dir, W_OK)`` misreports ACL-denied directories as
+    writable -- on the GUI thread that is a minutes-long freeze. A plain
+    open() raises PermissionError immediately so callers can degrade. These
+    are per-user config files, so a stale temp from an earlier attempt by
+    the same app is safe to overwrite.
+    """
+    path = os.path.abspath(path)
+    parent = os.path.dirname(path)
     os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=".tmp-", dir=parent, text=True)
+    tmp_path = path + ".tmp"
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as handle:
+        with open(tmp_path, "w", encoding=encoding) as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
@@ -90,3 +100,26 @@ def write_workspace(check, path):
     """Persist workspace selection without exposing a truncated file."""
     return atomic_write_text(
         esim_config_path("workspace.txt"), f"{int(check)} {path}")
+
+
+def workspace_is_usable(home):
+    """True when ``home`` exists (or can be created) and THIS process can
+    create files in it.
+
+    A real create-and-delete probe, not ``os.access``: on Windows access()
+    ignores ACLs, so a directory owned by another account (or left behind by
+    an elevated test run) reads as writable and then every actual write
+    fails. A stale workspace pointer must send the user back to the picker,
+    not freeze startup.
+    """
+    if not home:
+        return False
+    try:
+        os.makedirs(home, exist_ok=True)
+        probe = os.path.join(home, ".esim-write-probe")
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False

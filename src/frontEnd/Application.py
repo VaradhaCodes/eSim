@@ -1608,6 +1608,33 @@ def main(args):
     except OSError:
         pass
     _stage('interpreter up, excepthook installed')
+
+    # Startup watchdog: under pythonw a wedged startup is just a frozen
+    # splash with zero diagnostics. If startup is still running after 25s,
+    # dump every thread's stack to ~/.esim/startup-hang.log (startup keeps
+    # going -- exit=False); cancelled the moment the event loop is reached.
+    watchdog_file = None
+    try:
+        import faulthandler
+        watchdog_file = open(
+            paths.esim_config_path('startup-hang.log'), 'w')
+        faulthandler.dump_traceback_later(25, file=watchdog_file, exit=False)
+    except Exception:
+        pass
+
+    # A stale workspace pointer -- unplugged drive, folder deleted, or a
+    # directory this (non-elevated) process cannot write -- must never reach
+    # Application(): ProjectExplorer persists the registry into the workspace
+    # during construction, and a bad path turns that into a frozen splash.
+    # Reset the pointer and let the normal flow show the workspace picker.
+    try:
+        check, home = paths.read_workspace()
+        if int(check) != 0 and not paths.workspace_is_usable(home):
+            _stage('workspace unusable, resetting to picker: %s' % home)
+            os.remove(paths.esim_config_path('workspace.txt'))
+    except (OSError, ValueError):
+        pass
+
     # Set non-native dialogs globally
     # NOTE: AA_DontUseNativeDialogs removed in Qt6.
     # Native dialog behavior is now controlled per-dialog via QFileDialog.Option.
@@ -1791,6 +1818,18 @@ def main(args):
         threading.Thread(target=_warm, daemon=True).start()
 
     QtCore.QTimer.singleShot(3000, _prewarm_tool_imports)
+
+    # Startup made it to the event loop: stand down the hang watchdog and
+    # drop its (empty) log so a stale file never reads as a current freeze.
+    try:
+        import faulthandler
+        faulthandler.cancel_dump_traceback_later()
+        if watchdog_file is not None:
+            watchdog_file.close()
+            if os.path.getsize(watchdog_file.name) == 0:
+                os.remove(watchdog_file.name)
+    except Exception:
+        pass
 
     _stage('startup complete, entering event loop')
     sys.exit(app.exec())

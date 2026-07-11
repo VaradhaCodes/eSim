@@ -26,7 +26,6 @@ import glob
 import json
 import shutil
 import hashlib
-import tempfile
 
 
 def canonical_path(path):
@@ -262,9 +261,17 @@ def save_project_explorer(path, data):
     """
     directory = os.path.dirname(path) or '.'
     os.makedirs(directory, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=directory, suffix='.json.tmp')
+    # Fixed temp name, ONE create attempt -- never tempfile.mkstemp here. On
+    # Windows a directory this process may not write (e.g. admin-owned) makes
+    # mkstemp retry its full TMP_MAX=10000 candidate names because
+    # os.access(dir, W_OK) reports writable; called from ProjectExplorer on
+    # the GUI thread that retry storm is a minutes-long "not responding"
+    # white screen. A single open() surfaces PermissionError immediately and
+    # the caller degrades gracefully. The registry is per-user, so a name
+    # collision means an older attempt by the same app; overwriting it is fine.
+    tmp = path + '.tmp'
     try:
-        with os.fdopen(fd, 'w') as fh:
+        with open(tmp, 'w') as fh:
             json.dump(data, fh)
         os.replace(tmp, path)
     except BaseException:

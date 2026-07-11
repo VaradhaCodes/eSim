@@ -193,14 +193,15 @@ class Workspace(QtWidgets.QDialog):
             )
             return
 
-        # Create the destination before persisting it as the new default.
-        try:
-            if not os.path.isdir(path):
-                os.makedirs(path)
-        except OSError as e:
+        # Create the destination and prove THIS process can write in it
+        # before persisting it as the new default -- an existing folder the
+        # user cannot write (network share, another account's dir) would
+        # otherwise poison every later launch.
+        if not paths.workspace_is_usable(path):
             Dialogs.critical(
                 self, "Workspace",
-                f"Could not create that folder:\n{e}"
+                "Could not create or write in that folder.\n"
+                "Choose a folder you have permission to write to."
             )
             return
 
