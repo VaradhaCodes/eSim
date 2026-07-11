@@ -72,6 +72,12 @@ class ModelGeneration(QtWidgets.QWidget):
     # without ever touching a widget off-thread.
     line = QtCore.pyqtSignal(str)
 
+    # Emitted at the start of each build phase (the termtitle banner text) so
+    # the NgVeri tab can drive a live progress indicator naming the current
+    # step. Auto-typed like `line`: a call from the build worker thread is
+    # queued back onto the GUI thread, so updating the label/bar is safe.
+    phase = QtCore.pyqtSignal(str)
+
     def __init__(self, file, termedit):
         super().__init__()
         self.obj_Appconfig = Appconfig.Appconfig()
@@ -242,11 +248,19 @@ class ModelGeneration(QtWidgets.QWidget):
                           str(err))
             return False
 
-        err_buf = []
-
         def _drain_stderr():
+            # Stream stderr live (in red), line by line, instead of buffering
+            # the whole pipe and emitting it only after the step finishes.
+            # verilator, gcc and make write their progress + warnings to
+            # stderr, so buffering made a multi-minute step look frozen until
+            # it was already done. Runs on its own thread (kept off the stdout
+            # loop) so neither pipe can fill up and deadlock the child; every
+            # emit is queued to the GUI thread via the `line` signal.
             try:
-                err_buf.append(proc.stderr.read())
+                for err_line in proc.stderr:
+                    err_line = err_line.rstrip()
+                    if err_line:
+                        self._emit_error(err_line)
             except Exception:
                 pass
 
@@ -277,11 +291,11 @@ class ModelGeneration(QtWidgets.QWidget):
             returncode = proc.wait()
         finally:
             watchdog.cancel()
+            # Let the stderr streamer finish flushing the tail of the pipe
+            # before we judge the step; it emits live, so nothing is emitted
+            # here anymore.
             drainer.join(timeout=5)
 
-        stderr = "".join(err_buf)
-        if stderr.strip():
-            self._emit_error(stderr)
         if timed_out.is_set():
             self.termtext("[NgVeri] '" + title +
                           "' timed out and was stopped.")
@@ -1566,6 +1580,8 @@ and set the load for input ports */
         Text += "<br>================================<br>"
         Text += "</span>"
         self.line.emit(Text)
+        # Drive the NgVeri progress indicator with the plain banner text.
+        self.phase.emit(textin)
 
     def termtext(self, textin):
         '''

@@ -174,6 +174,8 @@ class NgVeri(QtWidgets.QWidget):
         # both convert buttons until it returns so a second build can't race
         # this one.
         self._set_convert_buttons_enabled(False)
+        model.phase.connect(self._on_build_phase)
+        self._show_build_progress(True)
         self._build_model = model            # keep refs alive for the build
         self._build_logs = currentTermLogs
         self._build_job = BackgroundJob(
@@ -250,6 +252,24 @@ class NgVeri(QtWidgets.QWidget):
             if btn is not None:
                 btn.setEnabled(enabled)
 
+    def _show_build_progress(self, on, message="Starting build…"):
+        '''
+            Show/hide the live build progress bar + phase label. Called on the
+            GUI thread: on when a build is dispatched, off in the shared build
+            epilogue (_flush_build_logs).
+        '''
+        if on:
+            self.buildStatus.setText(message)
+        self.buildStatus.setVisible(on)
+        self.buildBar.setVisible(on)
+
+    def _on_build_phase(self, phase):
+        '''
+            Slot for ModelGeneration.phase (queued from the build worker):
+            name the step currently running under the spinning bar.
+        '''
+        self.buildStatus.setText("⏳ " + phase)
+
     def _flush_build_logs(self, logs):
         '''
             Append the build's captured HTML into the visible terminal, scroll
@@ -260,6 +280,7 @@ class NgVeri(QtWidgets.QWidget):
         self.entry_var[0].verticalScrollBar().setValue(
             self.entry_var[0].verticalScrollBar().maximum()
         )
+        self._show_build_progress(False)
         self._set_convert_buttons_enabled(True)
         self._build_model = None
         self._build_logs = None
@@ -329,6 +350,8 @@ class NgVeri(QtWidgets.QWidget):
         # must run on the GUI thread. Disable both convert buttons until the
         # build returns so a second build can't race it.
         self._set_convert_buttons_enabled(False)
+        model.phase.connect(self._on_build_phase)
+        self._show_build_progress(True, "Building d_cosim model…")
         self._build_model = model            # keep refs alive for the build
         self._build_logs = currentTermLogs
         self._cosim_modelname = modelname
@@ -1045,6 +1068,31 @@ class NgVeri(QtWidgets.QWidget):
         controls_box.setFixedWidth(210)
         self.trgrid.addWidget(
             controls_box, 0, 1, QtCore.Qt.AlignmentFlag.AlignTop)
+
+        # Live build progress under the console: an indeterminate bar + a label
+        # naming the current step, shown ONLY while a convert build runs on the
+        # worker thread. The bar animates because the GUI event loop stays free
+        # (the build is off-thread), and the label is driven by
+        # ModelGeneration.phase -- so a long verilator/make reads as "working",
+        # not "hung".
+        self.buildStatus = QtWidgets.QLabel("")
+        self.buildStatus.setProperty("cssClass", "muted")
+        self.buildStatus.setVisible(False)
+        self.buildBar = QtWidgets.QProgressBar()
+        self.buildBar.setRange(0, 0)          # 0..0 == indeterminate "busy"
+        self.buildBar.setTextVisible(False)
+        self.buildBar.setVisible(False)
+        progress_row = QtWidgets.QHBoxLayout()
+        progress_row.setContentsMargins(0, 6, 0, 0)
+        progress_row.setSpacing(10)
+        progress_row.addWidget(self.buildStatus)
+        progress_row.addWidget(self.buildBar, 1)
+        progress_wrap = QtWidgets.QWidget()
+        progress_wrap.setLayout(progress_row)
+        self.trgrid.addWidget(progress_wrap, 1, 0, 1, 2)
+        # Console takes all the vertical slack; the progress row stays compact.
+        self.trgrid.setRowStretch(0, 1)
+        self.trgrid.setRowStretch(1, 0)
 
         # Console soaks up horizontal space; the control column stays compact.
         self.trgrid.setColumnStretch(0, 1)
