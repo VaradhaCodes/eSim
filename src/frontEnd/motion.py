@@ -1,5 +1,12 @@
+import os
 import weakref
 from PyQt6 import QtCore, QtGui, QtWidgets
+
+# Motion (button glows + per-button drop shadows) defaults OFF on Windows, where
+# widget graphics effects are CPU-blurred with no compositor help and are the
+# biggest structural drag; ON elsewhere so the effect stays discoverable. The
+# Preferences toggle overrides this default either way.
+_MOTION_DEFAULT = (os.name != "nt")
 
 # Every TactileButtonFilter registers here so a theme change can stop all of
 # their running glow animations before the global re-polish toggles the very
@@ -224,9 +231,9 @@ def motion_enabled():
     try:
         path = paths.esim_config_path("preferences.json")
         with open(path) as fh:
-            val = bool(json.load(fh).get("enable_motion", True))
+            val = bool(json.load(fh).get("enable_motion", _MOTION_DEFAULT))
     except Exception:
-        val = True
+        val = _MOTION_DEFAULT
     _motion_enabled_cache = val
     return val
 

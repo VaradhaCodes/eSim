@@ -251,10 +251,13 @@ class Appconfig:
     def load_preferences(self):
         """Return the persisted Aurora theme preferences, with safe defaults
         when ~/.esim/preferences.json is absent or unreadable."""
+        # enable_motion defaults OFF on Windows (CPU-blurred graphics effects
+        # are the biggest structural drag there), ON elsewhere. Preferences
+        # overrides it either way.
         prefs = {"theme_mode": "System", "accent_color": "default",
                  "secondary_accent_color": "system",
                  "internal_bg_color": "system",
-                 "enable_motion": True}
+                 "enable_motion": os.name != "nt"}
         try:
             path = paths.esim_config_path("preferences.json")
             if os.path.exists(path):

@@ -50,3 +50,18 @@ def test_invalidate_motion_cache_forces_reread(qapp):
     motion._motion_enabled_cache = True
     motion.invalidate_motion_cache()
     assert motion._motion_enabled_cache is None
+
+
+def test_motion_default_is_platform_specific(qapp, monkeypatch, tmp_path):
+    # With no preferences file, motion_enabled() falls back to the platform
+    # default: OFF on Windows (CPU-blurred effects are the biggest drag there),
+    # ON elsewhere.
+    import os
+    from configuration import paths
+    monkeypatch.setattr(
+        paths, "esim_config_path", lambda *p: str(tmp_path / "absent.json"))
+    motion.invalidate_motion_cache()
+    try:
+        assert motion.motion_enabled() is (os.name != "nt")
+    finally:
+        motion.invalidate_motion_cache()
