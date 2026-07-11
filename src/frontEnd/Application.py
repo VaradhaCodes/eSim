@@ -1614,6 +1614,16 @@ def main(args):
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     QtWidgets.QApplication.setHighDpiScaleFactorRoundingPolicy(
         QtCore.Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    # Windows: give the process an explicit AppUserModelID BEFORE the
+    # QApplication (and thus any window) exists, so the taskbar groups eSim
+    # under its own icon/identity instead of the generic pythonw host.
+    if os.name == 'nt':
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "FOSSEE.eSim.2.5")
+        except Exception:
+            pass
     app = QtWidgets.QApplication(args)
     app.setApplicationName("eSim")
 
