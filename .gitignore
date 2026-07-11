@@ -33,3 +33,9 @@ rescue-backup/
 nghdl/**/__pycache__/
 nghdl/src/xspice/
 nghdl/*.tar.xz
+
+# Bundled runtime staged into the repo root by the Windows installer build:
+# the embedded CPython and the KiCad/msys64/nghdl toolchain. Third-party trees,
+# hundreds of MB, rebuilt by windows/build -- never source.
+/python/
+/tools/
