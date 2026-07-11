@@ -99,6 +99,14 @@ def make_menu_rounded(menu):
         return menu
     try:
         menu.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Windows gives every popup window the legacy CS_DROPSHADOW class
+        # style: a hard-edged native shadow drawn around the WINDOW, not the
+        # rounded frame, so it reads as a dark outline hugging the menu.
+        # Linux compositors never draw it, which is why the same build looks
+        # clean on Ubuntu. Opting out must happen before the native window is
+        # created, same as the translucency attribute.
+        menu.setWindowFlag(
+            QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
     except Exception:
         pass
     return menu
@@ -118,6 +126,12 @@ def apply_menu_rounded_mask(menu, radius=14):
     The radius matches the QMenu QSS ``border-radius`` (14px).
     """
     if menu is None:
+        return
+    # Windows: DWM composites every top-level window, so the translucent
+    # surface always has alpha and the QSS border-radius corners are already
+    # genuine. The bitmap mask would only hard-clip the antialiased border
+    # into stair-steps — skip it entirely.
+    if sys.platform == "win32":
         return
     try:
         size = menu.size()
@@ -437,12 +451,29 @@ class PopupMotionFilter(QtCore.QObject):
         # before the native window exists, plus a rounded mask on show for the
         # no-compositor / over-QWebEngineView case. Radius matches the item-view
         # QSS (10px).
+        # Windows: theme the native titlebar of every real window as it
+        # appears (main window, dialogs, plot windows, ...). Popups/tooltips
+        # have no caption, so only Window/Dialog types matter. Re-applied on
+        # every Show — three cheap dwmapi calls — so windows re-shown after a
+        # theme toggle pick up the new caption color.
+        if (sys.platform == "win32"
+                and et == QtCore.QEvent.Type.Show
+                and isinstance(obj, QtWidgets.QWidget)
+                and obj.isWindow()
+                and obj.windowType() in (
+                    QtCore.Qt.WindowType.Window,
+                    QtCore.Qt.WindowType.Dialog)):
+            from frontEnd import theme_utils
+            theme_utils.apply_titlebar_theme(obj)
+
         if type(obj).__name__ == "QComboBoxPrivateContainer":
             if et == QtCore.QEvent.Type.Polish:
                 if not obj.testAttribute(
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground):
                     obj.setAttribute(
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                obj.setWindowFlag(
+                    QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
             elif et == QtCore.QEvent.Type.Show:
                 apply_menu_rounded_mask(obj, radius=10)
                 QtCore.QTimer.singleShot(
@@ -463,6 +494,10 @@ class PopupMotionFilter(QtCore.QObject):
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground):
                     obj.setAttribute(
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                # Kill the Windows CS_DROPSHADOW outline (see
+                # make_menu_rounded); no-op elsewhere.
+                obj.setWindowFlag(
+                    QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
             elif et == QtCore.QEvent.Type.Show:
                 # X11-without-compositor fallback: clip the corners with a
                 # rounded mask for any surface that still lacks alpha. Harmless

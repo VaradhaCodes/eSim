@@ -1,5 +1,7 @@
 import os
+import sys
 import json
+import ctypes
 from PyQt6 import QtGui, QtCore, QtWidgets
 from configuration import paths
 
@@ -17,6 +19,74 @@ INTERNAL_TOKENS = {
     "dark": ["#0E1728", "#08111F", "#09111F", "#0B1220", "#111B2D", "#101827", "#151F32", "#1A2740", "#0A1020"],
     "light": ["#FFFFFF", "#FBFDFF", "#F8FBFF", "#FBFCFE", "#EEF4FA", "#EEF3FA"],
 }
+
+
+# Whether the last apply_theme() resolved to dark. Read by the Show-time
+# titlebar hook in motion.py so windows created AFTER a theme apply still get
+# the right caption color.
+_CURRENT_DARK = False
+
+
+def current_theme_is_dark():
+    return _CURRENT_DARK
+
+
+def apply_titlebar_theme(window, is_dark=None):
+    """Windows-only: color the native titlebar to match the active theme.
+
+    Qt never touches the titlebar — it is drawn by DWM, which follows the OS
+    accent/light setting, so a dark-themed eSim kept a light (or accent-
+    colored) caption bar that no stylesheet can reach. On Ubuntu the window
+    manager themes the decoration itself, which is why this mismatch never
+    shows there. DwmSetWindowAttribute is the only way in:
+
+      20 DWMWA_USE_IMMERSIVE_DARK_MODE — dark caption (Win10 1809+)
+      35 DWMWA_CAPTION_COLOR           — exact caption color (Win11+)
+      36 DWMWA_TEXT_COLOR              — caption text color  (Win11+)
+
+    The color attributes fail harmlessly (E_INVALIDARG) on Win10; the
+    immersive flag alone still gets a dark bar there. Safe to call repeatedly
+    and on any top-level widget; no-op off Windows or before the native
+    window exists.
+    """
+    if sys.platform != "win32" or window is None or not window.isWindow():
+        return
+    if is_dark is None:
+        is_dark = _CURRENT_DARK
+    try:
+        # Never force native-window creation here: winId() on a not-yet-shown
+        # widget realizes the window early, which would defeat attributes that
+        # must be set pre-creation (WA_TranslucentBackground) and re-open the
+        # first-show flash. Windows without a handle get themed by the Show
+        # hook in motion.py once they actually appear.
+        if window.windowHandle() is None:
+            return
+        hwnd = int(window.winId())
+        if not hwnd:
+            return
+        dwm = ctypes.windll.dwmapi
+        dark_flag = ctypes.c_int(1 if is_dark else 0)
+        dwm.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 20,
+            ctypes.byref(dark_flag), ctypes.sizeof(dark_flag))
+
+        # COLORREF is 0x00BBGGRR; match the QPalette Window/WindowText pair
+        # so the caption reads as part of the app surface.
+        def colorref(hex_color):
+            c = QtGui.QColor(hex_color)
+            return ctypes.c_uint32(
+                (c.blue() << 16) | (c.green() << 8) | c.red())
+
+        caption = colorref("#050812" if is_dark else "#F3F7FC")
+        text = colorref("#F8FBFF" if is_dark else "#142033")
+        dwm.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 35,
+            ctypes.byref(caption), ctypes.sizeof(caption))
+        dwm.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 36,
+            ctypes.byref(text), ctypes.sizeof(text))
+    except Exception:
+        pass
 
 
 def replace_tokens(qss, tokens, value):
@@ -233,6 +303,9 @@ def apply_theme(app):
     else:
         is_dark = (scheme == QtCore.Qt.ColorScheme.Dark)
 
+    global _CURRENT_DARK
+    _CURRENT_DARK = is_dark
+
     if is_dark:
         qss_name = 'style_dark.qss'
     else:
@@ -327,6 +400,9 @@ def apply_theme(app):
 
     from frontEnd.icon_paths import workspace_icon, timeline_icon, help_icon, dev_docs_icon, settings_icon, home_icon
     for widget in app.topLevelWidgets():
+        # Keep every open window's native titlebar in step with the theme
+        # (windows shown later are handled by the Show hook in motion.py).
+        apply_titlebar_theme(widget, is_dark)
         if hasattr(widget, 'home_action'):
             widget.home_action.setIcon(home_icon())
         if hasattr(widget, 'wrkspce'):

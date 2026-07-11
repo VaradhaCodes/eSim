@@ -55,6 +55,10 @@ class AuroraToolTip(QtWidgets.QWidget):
         self.setWindowFlags(
             QtCore.Qt.WindowType.ToolTip
             | QtCore.Qt.WindowType.FramelessWindowHint
+            # Windows draws a hard native CS_DROPSHADOW around the whole
+            # (padded, mostly transparent) window — a floating square outline
+            # detached from the card, which paints its own soft shadow.
+            | QtCore.Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(
             QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
