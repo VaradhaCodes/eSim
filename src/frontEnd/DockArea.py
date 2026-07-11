@@ -1,4 +1,4 @@
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtWidgets, sip
 from configuration import Dialogs
 from configuration.Appconfig import Appconfig
 from browser.Welcome import Welcome
@@ -80,6 +80,15 @@ class DockArea(QtWidgets.QMainWindow):
         self._docks = {}
         self._count = 1
 
+        # Single-instance registry: (tool kind, project key) -> live dock.
+        # Every tool opener consults this first, so clicking a launcher button
+        # N times raises the one existing tab instead of stacking N heavy
+        # widget trees (each plot dock alone holds a matplotlib canvas; each
+        # Model Creation dock a full Flow Navigator). The dock's inner tool
+        # widget is kept on the dock as ``_tool_widget`` so reuse can poke it
+        # (reload plot data, jump the Flow Navigator to VHDL, ...).
+        self._tool_docks = {}
+
         for dockName in ['Welcome']:
             self._docks[dockName] = QtWidgets.QDockWidget(dockName)
             self.welcomeWidget = QtWidgets.QWidget()
@@ -140,12 +149,45 @@ class DockArea(QtWidgets.QMainWindow):
                         QtWidgets.QTabBar.ButtonPosition.RightSide,
                         None)
 
+    def _live_tool_dock(self, kind, projKey=None):
+        """Return the still-alive single-instance dock for (kind, projKey).
+
+        A dock can die outside our control (tab close, Close Project, Qt-side
+        deletion), so a registry hit is verified with ``sip.isdeleted`` before
+        being trusted; stale entries are dropped on the spot."""
+        key = (kind, projKey)
+        d = self._tool_docks.get(key)
+        if d is None:
+            return None
+        try:
+            if sip.isdeleted(d):
+                self._tool_docks.pop(key, None)
+                return None
+        except Exception:
+            self._tool_docks.pop(key, None)
+            return None
+        return d
+
+    def _register_tool_dock(self, kind, projKey, dock_widget, tool_widget):
+        """Record (kind, projKey) -> dock and stash the inner tool widget on
+        the dock for reuse-time actions."""
+        dock_widget._tool_widget = tool_widget
+        self._tool_docks[(kind, projKey)] = dock_widget
+
+    def _focus_dock(self, dock_widget):
+        """Bring an existing (possibly tabified) dock to the front."""
+        dock_widget.setVisible(True)
+        dock_widget.raise_()
+        dock_widget.setFocus()
+
     def _forget_dock(self, child):
         """Drop every reference eSim keeps to a dock so closing a tab cannot
         leave a zombie member behind (which would corrupt the saved layout)."""
         keys_to_delete = [k for k, v in self._docks.items() if v is child]
         for k in keys_to_delete:
             del self._docks[k]
+        for k in [k for k, v in self._tool_docks.items() if v is child]:
+            del self._tool_docks[k]
         try:
             self.active_plotting_docks.discard(child)
         except Exception:
@@ -311,10 +353,29 @@ class DockArea(QtWidgets.QMainWindow):
         dockName = f'Plotting-{self.projName}-'
         # self.project = os.path.join(self.projDir, self.projName)
 
+        # One plot dock per project: a re-click (or a fresh simulation) reloads
+        # the existing viewer with the latest plot_data instead of stacking
+        # another matplotlib canvas per click.
+        existing = self._live_tool_dock('plotting', self.projDir)
+        if existing is not None:
+            try:
+                existing._tool_widget.load_simulation_data()
+                existing._tool_widget.refresh_plot()
+            except Exception:
+                # Data reload failing (e.g. plot files deleted) must not lose
+                # the tab; the user still lands on the viewer.
+                pass
+            self._focus_dock(existing)
+            main_view = self.get_main_view_reference()
+            if main_view:
+                QtCore.QTimer.singleShot(100, main_view.collapse_console_area)
+            return
+
         self.plottingWidget = QtWidgets.QWidget()
 
+        plot_widget = plotWindow(self.projDir, self.projName)
         self.plottingLayout = QtWidgets.QVBoxLayout()
-        self.plottingLayout.addWidget(plotWindow(self.projDir, self.projName))
+        self.plottingLayout.addWidget(plot_widget)
 
         # Adding to main Layout
         self.plottingWidget.setLayout(self.plottingLayout)
@@ -331,6 +392,9 @@ class DockArea(QtWidgets.QMainWindow):
         # Track this as a plotting dock (the activation slot is wired once in
         # __init__, not per plot).
         self.active_plotting_docks.add(self._docks[dockName + str(self._count)])
+        self._register_tool_dock(
+            'plotting', self.projDir,
+            self._docks[dockName + str(self._count)], plot_widget)
 
         self._docks[dockName + str(self._count)].setVisible(True)
         self._docks[dockName + str(self._count)].setFocus()
@@ -351,12 +415,22 @@ class DockArea(QtWidgets.QMainWindow):
     def ngspiceEditor(self, projName, netlist, simEndSignal, plotFlag):
         """ This function creates widget for Ngspice window."""
         from ngspiceSimulation.NgspiceWidget import NgspiceWidget
+
+        # One simulation console per project: a re-run replaces the previous
+        # run's dock (terminating its ngspice via the widget teardown) instead
+        # of stacking Simulation-<proj>-N tabs. A fresh NgspiceWidget per run
+        # is still required -- it owns the QProcess for *this* netlist -- so
+        # this is destroy-then-recreate, not reuse. A vetoed close just falls
+        # through to opening a new dock alongside.
+        old = self._live_tool_dock('simulation', projName)
+        if old is not None:
+            self._destroy_dock(old)
+
         self.ngspiceWidget = QtWidgets.QWidget()
 
+        ngspice_widget = NgspiceWidget(netlist, simEndSignal, plotFlag)
         self.ngspiceLayout = QtWidgets.QVBoxLayout()
-        self.ngspiceLayout.addWidget(
-            NgspiceWidget(netlist, simEndSignal, plotFlag)
-        )
+        self.ngspiceLayout.addWidget(ngspice_widget)
 
         # Adding to main Layout
         self.ngspiceWidget.setLayout(self.ngspiceLayout)
@@ -372,6 +446,9 @@ class DockArea(QtWidgets.QMainWindow):
                               self._docks[dockName
                                    + str(self._count)])
 
+        self._register_tool_dock(
+            'simulation', projName,
+            self._docks[dockName + str(self._count)], ngspice_widget)
 
         self._docks[dockName + str(self._count)].setVisible(True)
         self._docks[dockName + str(self._count)].setFocus()
@@ -386,6 +463,13 @@ class DockArea(QtWidgets.QMainWindow):
 
     def eSimConverter(self):
         """This function creates a widget for eSimConverter."""
+        # Single instance: the converter holds only pick-a-file state, so a
+        # re-click resurfaces the open tab (preserving the chosen path).
+        existing = self._live_tool_dock('esim-converter')
+        if existing is not None:
+            self._focus_dock(existing)
+            return
+
         from converter.pspiceToKicad import PspiceConverter
         from converter.ltspiceToKicad import LTspiceConverter
         from converter.LtspiceLibConverter import LTspiceLibConverter
@@ -562,6 +646,9 @@ class DockArea(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea, self._docks[dockName + str(self._count)])
         self.tabifyDockWidget(self._docks['Welcome'], self._docks[dockName + str(self._count)])
 
+        self._register_tool_dock(
+            'esim-converter', None,
+            self._docks[dockName + str(self._count)], self.eConWidget)
 
         self._docks[dockName + str(self._count)].setVisible(True)
         self._docks[dockName + str(self._count)].setFocus()
@@ -598,13 +685,21 @@ class DockArea(QtWidgets.QMainWindow):
         projName = os.path.basename(projDir)
         dockName = f'Model Editor-{projName}-'
 
+        # Single instance per project: a re-click lands back on the open
+        # editor (with whatever the user had in progress) instead of a new tab.
+        existing = self._live_tool_dock('model-editor', projDir)
+        if existing is not None:
+            self._focus_dock(existing)
+            return
+
         self.modelwidget = QtWidgets.QWidget()
 
+        model_editor_widget = ModelEditorclass()
         self.modellayout = QtWidgets.QVBoxLayout()
         # No wrapper margins — the editor manages its own padding and should
         # fill the dock edge to edge rather than sit inside a dead border.
         self.modellayout.setContentsMargins(0, 0, 0, 0)
-        self.modellayout.addWidget(ModelEditorclass())
+        self.modellayout.addWidget(model_editor_widget)
 
         # Adding to main Layout
         self.modelwidget.setLayout(self.modellayout)
@@ -619,6 +714,9 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(self._docks['Welcome'],
                               self._docks[dockName + str(self._count)])
 
+        self._register_tool_dock(
+            'model-editor', projDir,
+            self._docks[dockName + str(self._count)], model_editor_widget)
 
         self._docks[dockName + str(self._count)].setVisible(True)
         self._docks[dockName + str(self._count)].setFocus()
@@ -713,9 +811,16 @@ class DockArea(QtWidgets.QMainWindow):
             projName = os.path.basename(projDir)
             dockName = f'Subcircuit-{projName}-'
 
+            # Single instance per project: re-click raises the open tab.
+            existing = self._live_tool_dock('subcircuit', projDir)
+            if existing is not None:
+                self._focus_dock(existing)
+                return
+
             self.subcktWidget = QtWidgets.QWidget()
+            subcircuit_widget = Subcircuit(self)
             self.subcktLayout = QtWidgets.QVBoxLayout()
-            self.subcktLayout.addWidget(Subcircuit(self))
+            self.subcktLayout.addWidget(subcircuit_widget)
 
             self.subcktWidget.setLayout(self.subcktLayout)
             self._docks[dockName +
@@ -728,6 +833,9 @@ class DockArea(QtWidgets.QMainWindow):
             self.tabifyDockWidget(self._docks['Welcome'],
                                 self._docks[dockName + str(self._count)])
 
+            self._register_tool_dock(
+                'subcircuit', projDir,
+                self._docks[dockName + str(self._count)], subcircuit_widget)
 
             self._docks[dockName + str(self._count)].setVisible(True)
             self._docks[dockName + str(self._count)].setFocus()
@@ -792,6 +900,19 @@ class DockArea(QtWidgets.QMainWindow):
         # (Simulation-RLC-2, Plotting-RLC-3).
         dockName = f'Model Creation-{projName}-'
 
+        # Single instance per project: both launchers (Makerchip and NGHDL)
+        # share the one Flow Navigator dock -- a re-click raises it, and the
+        # NGHDL launcher additionally jumps it onto the VHDL path.
+        existing = self._live_tool_dock('model-creation', projDir)
+        if existing is not None:
+            if select_vhdl:
+                try:
+                    existing._tool_widget.flow._select_mode("vhdl")
+                except Exception:
+                    pass
+            self._focus_dock(existing)
+            return
+
         # Local import: shadows this method's name inside its own scope only.
         from maker.makerchip import makerchip
         self.makerWidget = QtWidgets.QWidget()
@@ -822,6 +943,7 @@ class DockArea(QtWidgets.QMainWindow):
         # "Back to Verify" (and tab-close) return to the exact instance that
         # produced the plot, even with several Model Creation docks open.
         source_dock = self._docks[dockName + str(self._count)]
+        self._register_tool_dock('model-creation', projDir, source_dock, maker)
         maker.flow.waveformRequested.connect(
             lambda plot, src=source_dock, flow=maker.flow:
             self._show_waveform_dock(plot, src, flow))
@@ -924,10 +1046,17 @@ class DockArea(QtWidgets.QMainWindow):
 
     def usermanual(self):
         """This function creates a widget for user manual."""
+        # Single instance: help is stateless -- just raise the open tab.
+        existing = self._live_tool_dock('user-manual')
+        if existing is not None:
+            self._focus_dock(existing)
+            return
+
         from browser.UserManual import UserManual
         self.usermanualWidget = QtWidgets.QWidget()
+        usermanual_widget = UserManual()
         self.usermanualLayout = QtWidgets.QVBoxLayout()
-        self.usermanualLayout.addWidget(UserManual())
+        self.usermanualLayout.addWidget(usermanual_widget)
 
         self.usermanualWidget.setLayout(self.usermanualLayout)
         self._docks['User Manual-' +
@@ -939,6 +1068,9 @@ class DockArea(QtWidgets.QMainWindow):
         self.tabifyDockWidget(self._docks['Welcome'],
                               self._docks['User Manual-' + str(self._count)])
 
+        self._register_tool_dock(
+            'user-manual', None,
+            self._docks['User Manual-' + str(self._count)], usermanual_widget)
 
         self._docks['User Manual-' + str(self._count)].setVisible(True)
         self._docks['User Manual-' + str(self._count)].setFocus()
@@ -953,9 +1085,16 @@ class DockArea(QtWidgets.QMainWindow):
         projName = os.path.basename(projDir)
         dockName = f'Modelica-{projName}-'
 
+        # Single instance per project: re-click raises the open tab.
+        existing = self._live_tool_dock('modelica', projDir)
+        if existing is not None:
+            self._focus_dock(existing)
+            return
+
         self.modelicaWidget = QtWidgets.QWidget()
+        modelica_widget = OpenModelicaEditor(projDir)
         self.modelicaLayout = QtWidgets.QVBoxLayout()
-        self.modelicaLayout.addWidget(OpenModelicaEditor(projDir))
+        self.modelicaLayout.addWidget(modelica_widget)
 
         self.modelicaWidget.setLayout(self.modelicaLayout)
         self._docks[dockName + str(self._count)
@@ -967,6 +1106,10 @@ class DockArea(QtWidgets.QMainWindow):
                                 + str(self._count)])
         self.tabifyDockWidget(self._docks['Welcome'], self._docks[dockName
                                                     + str(self._count)])
+
+        self._register_tool_dock(
+            'modelica', projDir,
+            self._docks[dockName + str(self._count)], modelica_widget)
 
         self._docks[dockName + str(self._count)].setVisible(True)
         self._docks[dockName + str(self._count)].setFocus()
