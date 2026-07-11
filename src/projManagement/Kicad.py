@@ -215,12 +215,19 @@ class Kicad:
             from maker.hdl.jobs import BackgroundJob
             from kicadtoNgspice import KicadNetlister
             self.obj_appconfig.print_info('Generating KiCad netlist...')
+            # Capture projDir alongside projName: self.projDir is mutated by
+            # the other Kicad entry points, so if the user opens another
+            # project's schematic while the export runs, the continuation must
+            # still act on the project that was converted.
+            projDir = self.projDir
             job = BackgroundJob(
-                KicadNetlister.generate_netlist, self.projDir, projName)
+                KicadNetlister.generate_netlist, projDir, projName)
             job.succeeded.connect(
-                lambda res, p=projName: self._onNetlistReady(p, res))
+                lambda res, d=projDir, p=projName:
+                    self._onNetlistReady(d, p, res))
             job.failed.connect(
-                lambda err, p=projName: self._onNetlistFailed(p, err))
+                lambda err, d=projDir, p=projName:
+                    self._onNetlistFailed(d, p, err))
             job.finished.connect(job.deleteLater)
             self._netlist_job = job
             job.start()
@@ -237,30 +244,30 @@ class Kicad:
                 'Please select the project first. You can either ' +
                 'create new project or open an existing project')
 
-    def _onNetlistReady(self, projName, result):
+    def _onNetlistReady(self, projDir, projName, result):
         """Netlist worker returned (ok, msg). Runs on the GUI thread."""
         try:
             ok, msg = result
         except (TypeError, ValueError):
             ok, msg = bool(result), str(result)
         self.obj_appconfig.print_info('KiCad netlist: ' + str(msg))
-        self._continueKicadToNgspice(projName)
+        self._continueKicadToNgspice(projDir, projName)
 
-    def _onNetlistFailed(self, projName, err):
+    def _onNetlistFailed(self, projDir, projName, err):
         """Netlist worker raised. Mirror the old inline behaviour: log and
         still try opening any pre-existing .cir. Runs on the GUI thread."""
         self.obj_appconfig.print_warning(
             'Netlist auto-generation skipped: ' + str(err))
-        self._continueKicadToNgspice(projName)
+        self._continueKicadToNgspice(projDir, projName)
 
-    def _continueKicadToNgspice(self, projName):
+    def _continueKicadToNgspice(self, projDir, projName):
         """Resume the conversion once the netlist step has settled: validate
         the .cir and open the KicadToNgspice editor, else show the error."""
         self._netlist_job = None
         # Checking if project has .cir file or not
-        if self.obj_validation.validateCir(self.projDir, projName):
+        if self.obj_validation.validateCir(projDir, projName):
             self.projName = projName
-            self.project = os.path.join(self.projDir, self.projName)
+            self.project = os.path.join(projDir, self.projName)
             var = self.project + ".cir"
             self.obj_dockarea.kicadToNgspiceEditor(var)
         else:
