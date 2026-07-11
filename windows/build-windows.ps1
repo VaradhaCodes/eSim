@@ -652,6 +652,41 @@ function Stage-Kicad {
     Log "KiCad $($Manifest.kicad_installer.version) staged (pruned) + netlist smoke OK"
 }
 
+function Stage-Launcher {
+    <# Compile eSim.exe -- the native launcher the shortcuts point at (a .bat
+       cannot carry an icon/version info and looks like a bare script in
+       Windows search). Sources in windows\launcher; mirrors esim.bat's env
+       setup. Runs every build: Stage-App's /MIR purge removes stage-root
+       files that aren't in the repo, so the exe must be re-staged after it
+       (same rule as esim.bat; the compile is ~1s). #>
+    Log 'Compiling eSim.exe launcher'
+    $src = Join-Path $WinDir 'launcher'
+    $out = Join-Path $Stage 'eSim.exe'
+    $gcc = Join-Path $Stage 'tools\msys64\mingw64\bin\gcc.exe'
+    if (-not (Test-Path $gcc)) {
+        $gcc = (Get-Command gcc -ErrorAction SilentlyContinue).Source
+    }
+    if (-not $gcc) {
+        Die 'no gcc found for the eSim.exe launcher (stage MSYS2 first, or put a mingw-w64 gcc on PATH)'
+    }
+    $bindir = Split-Path $gcc
+    $res = Join-Path $Build 'esim_launcher.res.o'
+    # windres shells out to the C preprocessor; it must be able to find cpp.
+    $oldPath = $env:PATH
+    $env:PATH = "$bindir;$env:PATH"
+    try {
+        & (Join-Path $bindir 'windres.exe') `
+            -I $src -I (Join-Path $RepoRoot 'images') `
+            (Join-Path $src 'esim_launcher.rc') -O coff -o $res
+        if ($LASTEXITCODE -ne 0) { Die 'windres failed on esim_launcher.rc' }
+        & $gcc -municode -mwindows -O2 -Wall -Wextra `
+            (Join-Path $src 'esim_launcher.c') $res -o $out
+        if ($LASTEXITCODE -ne 0) { Die 'gcc failed on esim_launcher.c' }
+    }
+    finally { $env:PATH = $oldPath }
+    if (-not (Test-Path $out)) { Die 'eSim.exe was not produced' }
+}
+
 # ----------------------------------------------------------------- main ----
 if ($Clean) { Remove-Item $Build, $Dist -Recurse -Force -ErrorAction SilentlyContinue }
 $7z = Resolve-7z
@@ -664,6 +699,7 @@ Stage-SimToolchain   # custom ngspice + libvvp iverilog (Full flavour)
 Stage-Ngspice        # official build: Compact fallback (+ shim on -SkipSimBuild)
 Stage-Iverilog       # Bleyer fallback, only on -SkipSimBuild
 Stage-Kicad          # pruned official KiCad payload -> tools\kicad (bundled)
+Stage-Launcher       # eSim.exe (native shortcut target; after Stage-App's /MIR)
 
 Log 'Compiling installer (Inno Setup)'
 $Iscc = Resolve-Iscc

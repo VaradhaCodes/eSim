@@ -104,7 +104,8 @@ entirely in `windows/`:
 | `deps-manifest.json` | Every third-party download: URL + version + sha256 + why. The build refuses hash mismatches. |
 | `requirements-windows.txt` | The pip wheel set for the bundled Python. |
 | `installer.iss` | Inno Setup script (readable, diffable — the reason for Inno over NSIS). |
-| `esim.bat` | Relocatable launcher: prepends bundled tool paths (custom ngspice first) + `SPICE_LIB_DIR`, runs the bootstrap, starts the GUI. `esim.bat --doctor` prints the toolchain report. |
+| `launcher/` | `eSim.exe` sources (C, ~1s compile with the staged mingw). The native GUI launcher the shortcuts and Windows search resolve to: embedded icon + version info, no console flash. Mirrors `esim.bat`'s environment setup exactly — change them together. |
+| `esim.bat` | Relocatable terminal launcher: prepends bundled tool paths (custom ngspice first) + `SPICE_LIB_DIR`, runs the bootstrap, starts the GUI. `esim.bat --doctor` prints the toolchain report. |
 | `windows_bootstrap.py` | Per-user every-launch setup (`~/.esim/config.ini`, symbol seeding, the full `~/.nghdl/config.ini`, ngspice `spinit` relocation, KiCad `sym-lib-table` registration). Pure stdlib, OS-independent, unit-tested on Linux (`windows/tests/`). |
 | `collect-logs.ps1` | Debug bundle for the shakedown loop: doctor report + `~/.esim` + `~/.nghdl` + spinit + code-model inventory → one zip on the Desktop. |
 

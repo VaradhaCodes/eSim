@@ -37,7 +37,7 @@ AppPublisherURL=https://esim.fossee.in/
 DefaultDirName={sd}\FOSSEE\eSim
 DisableProgramGroupPage=yes
 UninstallFilesDir={app}
-UninstallDisplayIcon={app}\images\workspace.ico
+UninstallDisplayIcon={app}\eSim.exe
 OutputDir={#OutDir}
 OutputBaseFilename=eSim-{#AppVersion}-installer
 Compression=lzma2/max
@@ -84,23 +84,13 @@ Source: "{#StageDir}\tools\nghdl\src\*"; DestDir: "{app}\tools\nghdl\src"; Compo
 Source: "{#StageDir}\tools\nghdl\release\*"; DestDir: "{app}\tools\nghdl\release"; Components: hdl; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 
-[Tasks]
-; Default-checked: the single biggest cold-start lever (Defender real-time
-; scanning of the install tree dominates first-launch time). Users who decline
-; just get slower cold starts.
-Name: "defenderexclusion"; \
-    Description: "Exclude eSim from Microsoft Defender real-time scanning (recommended, improves start-up)"; \
-    GroupDescription: "Performance:"
-
 [Icons]
-; runminimized: esim.bat runs in a cmd console; minimized keeps it as a
-; taskbar blip instead of flashing a black console window at every launch.
-Name: "{autoprograms}\eSim"; Filename: "{app}\esim.bat"; \
-    IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"; \
-    Flags: runminimized
-Name: "{autodesktop}\eSim";  Filename: "{app}\esim.bat"; \
-    IconFilename: "{app}\images\workspace.ico"; WorkingDir: "{app}"; \
-    Flags: runminimized
+; eSim.exe is a real GUI executable (windows\launcher) with the icon and
+; version info embedded: no console flash, proper identity in Windows search
+; and the taskbar. esim.bat remains in {app} for terminal use (--debug,
+; --doctor).
+Name: "{autoprograms}\eSim"; Filename: "{app}\eSim.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\eSim";  Filename: "{app}\eSim.exe"; WorkingDir: "{app}"
 
 [Run]
 ; Precompile bytecode at install time so the first cold launch doesn't compile
@@ -109,18 +99,20 @@ Filename: "{app}\python\python.exe"; \
     Parameters: "-m compileall -q -j 0 ""{app}\src"" ""{app}\windows"""; \
     WorkingDir: "{app}"; StatusMsg: "Precompiling eSim modules..."; \
     Flags: runhidden
-; Defender exclusion for the install dir (guarded by the task; installer is
-; already elevated, PrivilegesRequired=admin).
-Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Add-MpPreference -ExclusionPath '{app}'"""; \
-    Tasks: defenderexclusion; StatusMsg: "Adding Microsoft Defender exclusion..."; \
-    Flags: runhidden
-Filename: "{app}\esim.bat"; Description: "Launch eSim"; \
-    Flags: postinstall nowait skipifsilent
+; NOTE: no Defender exclusion here, deliberately. An installer that whitelists
+; its own directory from the system antivirus is indistinguishable from
+; malware behaviour and erodes user trust, whatever the cold-start win.
+; Cold-start cost is addressed the legitimate ways instead: precompiled
+; bytecode (above) and background import prewarm in the app.
+; runasoriginaluser: the installer is elevated but eSim must run as the real
+; user -- an elevated first run would write root-owned files into ~/.esim and
+; the workspace that later non-elevated launches cannot touch.
+Filename: "{app}\eSim.exe"; Description: "Launch eSim"; \
+    Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
-; Mirror the install-time exclusion removal. UninstallRun has no Tasks: filter,
-; so run unconditionally and swallow the error when no exclusion was added.
+; Clean up the exclusion earlier installer versions added (current installer
+; adds none). Harmless no-op when absent.
 Filename: "powershell.exe"; RunOnceId: "RemoveEsimDefenderExclusion"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-MpPreference -ExclusionPath '{app}' -ErrorAction SilentlyContinue"""; \
     Flags: runhidden
