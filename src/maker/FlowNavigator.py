@@ -8,7 +8,7 @@
 #                       Verilog:  Author  ->  Verify  ->  Convert
 #                       VHDL:     NGHDL  (its own self-contained tool)
 #
-#                   The Verilog path is a plain underline tab strip (free
+#                   The Verilog path is a plain pill tab strip (free
 #                   navigation, no wizard gating, no completion ticks). The
 #                   VHDL path hands the whole panel to the embedded NGHDL
 #                   window. There is no separate "Place" stage -- Convert
@@ -78,7 +78,7 @@ class FlowNavigator(QtWidgets.QWidget):
 
         # --- Top bar -------------------------------------------------- #
         # Left  : a segmented [ Verilog | VHDL ] language toggle (filled pill).
-        # Middle: the Verilog stage tabs (plain underline tabs, shown only in
+        # Middle: the Verilog stage tabs (plain pill tabs, shown only in
         #         Verilog mode -- in VHDL mode NGHDL owns the whole panel).
         # Right : the contextual fullscreen toggle.
         # Stages are freely clickable in any order: no chevrons, no Next
@@ -90,7 +90,9 @@ class FlowNavigator(QtWidgets.QWidget):
         # Colors come from _apply_pill_theme() (Aurora light/dark tokens),
         # applied at the end of _build_ui and again on every PaletteChange.
         tb = QtWidgets.QHBoxLayout(self.tabbar)
-        tb.setContentsMargins(10, 6, 10, 0)
+        # Symmetric vertical margins: the toggle and the stage tabs float
+        # centred in the bar instead of sitting flush on its bottom border.
+        tb.setContentsMargins(12, 8, 12, 8)
         tb.setSpacing(0)
 
         self._build_mode_toggle(tb)
@@ -167,7 +169,7 @@ class FlowNavigator(QtWidgets.QWidget):
             lambda: self._select_mode(VHDL))
 
     def _build_stage_tabs(self, tb):
-        """The Verilog Author / Verify / Convert underline tabs."""
+        """The Verilog Author / Verify / Convert stage tabs."""
         self._stage_tabs_w = QtWidgets.QWidget()
         row = QtWidgets.QHBoxLayout(self._stage_tabs_w)
         row.setContentsMargins(0, 0, 0, 0)
@@ -183,8 +185,9 @@ class FlowNavigator(QtWidgets.QWidget):
         # font-weight is kept CONSTANT (600) across states on purpose: bolding
         # only on :checked made the selected label wider than the size hint Qt
         # computed for the normal weight, so the text was clipped at the
-        # corners. The active stage is signalled by colour + a filled tint + a
-        # thick underline instead, which also reads as clearly important.
+        # corners. The active stage is signalled by colour + a filled pill
+        # tint (no underline: Qt curls a border-bottom's ends when the top
+        # corners carry a radius, which read as a wobbly squiggle on Windows).
         # Colours come from _apply_pill_theme() (Aurora light/dark tokens).
         self._stage_group = QtWidgets.QButtonGroup(self)
         self._stage_group.setExclusive(True)
@@ -229,7 +232,7 @@ class FlowNavigator(QtWidgets.QWidget):
                 "stage_fg": "#9FB1CC", "stage_hover_fg": "#F4F8FF",
                 "stage_hover_bg": "#121E33",
                 "stage_checked_fg": "#53D7FF",
-                "stage_checked_bg": "rgba(83,215,255,0.14)",
+                "stage_checked_bg": "rgba(83,215,255,0.18)",
                 "reload_bg": "rgba(250,204,21,0.10)",
                 "reload_border": "#FACC15", "reload_fg": "#FACC15",
             }
@@ -239,9 +242,9 @@ class FlowNavigator(QtWidgets.QWidget):
             "seg_fg": "#5A6E89", "seg_hover_fg": "#142033",
             "accent": "#0077A8", "accent_fg": "#FFFFFF",
             "stage_fg": "#5A6E89", "stage_hover_fg": "#142033",
-            "stage_hover_bg": "#F6F9FD",
+            "stage_hover_bg": "#EAF1F9",
             "stage_checked_fg": "#0077A8",
-            "stage_checked_bg": "rgba(0,119,168,0.10)",
+            "stage_checked_bg": "rgba(0,119,168,0.13)",
             "reload_bg": "rgba(217,119,6,0.10)",
             "reload_border": "#D97706", "reload_fg": "#92400E",
         }
@@ -270,17 +273,18 @@ class FlowNavigator(QtWidgets.QWidget):
         }
         for mode, btn in getattr(self, "_mode_btns", {}).items():
             btn.setStyleSheet(base + ends[mode])
-        # Author / Verify / Convert underline tabs.
+        # Author / Verify / Convert stage tabs. The active stage is a filled
+        # rounded pill (tint + accent text) — deliberately NOT an underline:
+        # Qt renders a border-bottom with top-corner radii as a curled
+        # "smile" under the tab, which looked broken on Windows.
         pill_qss = (
             f"QPushButton {{ border:none; background:transparent;"
             f" color:{t['stage_fg']}; font-size:14px; font-weight:600;"
-            " padding:10px 26px; border-top-left-radius:6px;"
-            " border-top-right-radius:6px; border-bottom:3px solid transparent; }"
+            " padding:8px 22px; border-radius:8px; }"
             f"QPushButton:hover {{ color:{t['stage_hover_fg']};"
             f" background:{t['stage_hover_bg']}; }}"
             f"QPushButton:checked {{ color:{t['stage_checked_fg']};"
-            f" background:{t['stage_checked_bg']};"
-            f" border-bottom:3px solid {t['accent']}; }}")
+            f" background:{t['stage_checked_bg']}; }}")
         for btn in getattr(self, "_tabs", {}).values():
             btn.setStyleSheet(pill_qss)
         # External-edit reload banner — Aurora warning tones.
@@ -436,7 +440,10 @@ class FlowNavigator(QtWidgets.QWidget):
         of nagging modally -- and never clobber unsaved edits automatically."""
         import os
         self._reload_label.setText(
-            f"⚠  {os.path.basename(path)} was changed on disk outside eSim.")
+            # U+FE0E after the sign forces the monochrome text glyph; without
+            # it Windows substitutes the Segoe UI Emoji colour warning sign.
+            f"⚠︎  {os.path.basename(path)} was changed on disk "
+            f"outside eSim.")
         self._reload_bar.setVisible(True)
 
     def _do_reload(self):

@@ -570,7 +570,9 @@ class VerilogVerifier(QtWidgets.QWidget):
         corner_layout = QtWidgets.QHBoxLayout(corner_widget)
         corner_layout.setContentsMargins(2, 0, 6, 0)
 
-        self.btn_add_module = QtWidgets.QPushButton("➕ Add Module")
+        # Plain ASCII "+": the ➕ emoji rendered via Segoe UI Emoji on Windows
+        # as an off-palette colour glyph that clashed with the theme.
+        self.btn_add_module = QtWidgets.QPushButton("+ Add Module")
         # Own objectName + compact #addModuleBtn QSS: the global QPushButton
         # min-height (32) + padding made this taller than the tab bar, so it
         # clipped at the top. The styled rule caps its height to fit the bar.
@@ -621,6 +623,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         # and keyboard-driven); the right cluster holds the build/run actions a
         # user actually touches every cycle, ending in the primary Simulate.
         controls_layout = QtWidgets.QHBoxLayout()
+        # Breathing room: without margins the bar sat flush between the editor
+        # card above and the console card below, reading as clutter.
+        controls_layout.setContentsMargins(2, 8, 2, 8)
+        controls_layout.setSpacing(8)
         top_layout.addLayout(controls_layout)
 
         # --- File menu: open/save/export, demoted off the main bar -----------
@@ -703,7 +709,9 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         # The primary action: accented and right-anchored. F5 = run, the near-
         # universal "go" key, so it works without reaching for the mouse.
-        self.btn_simulate = QtWidgets.QPushButton("▶  Simulate")
+        # U+25B8 (small triangle) always takes the monochrome text glyph;
+        # U+25B6 got promoted to a colour emoji by Segoe UI Emoji on Windows.
+        self.btn_simulate = QtWidgets.QPushButton("▸  Simulate")
         # Aurora paints the accented primary button via the verifierPrimary
         # cssClass (replaces the old #primaryAction inline-styled green).
         self.btn_simulate.setProperty("cssClass", "verifierPrimary")
@@ -782,8 +790,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console.setObjectName("verilogConsole")
         self.console_tabs.addTab(self.console, "Console Output")
 
-        # Copy lives in the console tab's corner now that there is no popout bar.
-        self.btn_copy_console = QtWidgets.QPushButton("📋 Copy")
+        # Copy lives in the console tab's corner now that there is no popout
+        # bar. Text-only: the 📋 emoji drew as a loud colour clipboard on
+        # Windows, out of place on a quiet corner action.
+        self.btn_copy_console = QtWidgets.QPushButton("Copy")
         self.btn_copy_console.setObjectName("verifierConsoleCopy")
         self.btn_copy_console.setFlat(True)
         self.btn_copy_console.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -979,14 +989,14 @@ class VerilogVerifier(QtWidgets.QWidget):
             # the focus ring the last-clicked arrow otherwise kept.
             vcenter = QtCore.Qt.AlignmentFlag.AlignVCenter
 
-            btn_up = QtWidgets.QPushButton("▲")
+            btn_up = QtWidgets.QPushButton("▴")
             btn_up.setObjectName("hierarchyMoveBtn")
             btn_up.setFixedSize(22, 22)
             btn_up.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             _no_glow(btn_up)
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
 
-            btn_down = QtWidgets.QPushButton("▼")
+            btn_down = QtWidgets.QPushButton("▾")
             btn_down.setObjectName("hierarchyMoveBtn")
             btn_down.setFixedSize(22, 22)
             btn_down.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
