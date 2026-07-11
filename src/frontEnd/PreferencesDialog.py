@@ -448,6 +448,14 @@ class PreferencesDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
+        # enable_motion just changed on disk; drop motion's cached read so the
+        # theme re-apply below wires (or skips) glows per the new value.
+        try:
+            from frontEnd.motion import invalidate_motion_cache
+            invalidate_motion_cache()
+        except Exception:
+            pass
+
         app = QtWidgets.QApplication.instance()
         fn = getattr(app, "apply_theme", None)
         if callable(fn):

@@ -202,23 +202,41 @@ class TactileButtonFilter(QtCore.QObject):
             pass
 
 
+_motion_enabled_cache = None
+
+
 def motion_enabled():
     """True when animated button glows are enabled (default on).
 
     Hover/press glows drive continuous repaints + a per-button drop-shadow.
     They're on by default so the effect is discoverable, with a Preferences
-    toggle to turn them off (reduce motion / save power). Read straight from the
-    prefs file to keep this module free of an Appconfig import; an
-    absent/unreadable file falls back to the default (on).
+    toggle to turn them off (reduce motion / save power). The prefs file is
+    read once and cached (this is called on every dock open and every button
+    wire-up); Preferences save invalidates the cache via
+    :func:`invalidate_motion_cache`. Reading the file keeps this module free of
+    an Appconfig import; an absent/unreadable file falls back to the default.
     """
+    global _motion_enabled_cache
+    if _motion_enabled_cache is not None:
+        return _motion_enabled_cache
     import json
     from configuration import paths
     try:
         path = paths.esim_config_path("preferences.json")
         with open(path) as fh:
-            return bool(json.load(fh).get("enable_motion", True))
+            val = bool(json.load(fh).get("enable_motion", True))
     except Exception:
-        return True
+        val = True
+    _motion_enabled_cache = val
+    return val
+
+
+def invalidate_motion_cache():
+    """Drop the cached enable_motion value so the next read re-hits the file.
+
+    Call after Preferences writes preferences.json."""
+    global _motion_enabled_cache
+    _motion_enabled_cache = None
 
 
 def install_button_motion(root):
@@ -226,11 +244,24 @@ def install_button_motion(root):
     # no glow animations or extra graphics effects are ever created.
     if not motion_enabled():
         return
-    filt = TactileButtonFilter(root)
-    root._esim_press_motion_filter = filt
+    # Reuse ONE filter per root across repeated calls. install_button_motion
+    # runs on every dock open; a fresh TactileButtonFilter each time would
+    # STACK on every button (installEventFilter with a new object appends, it
+    # never replaces), so after N dock opens each button carried N filters and
+    # every hover fired N glow animations -- the "gets laggy over a session"
+    # signature, since the DockArea lives for the whole app lifetime.
+    filt = getattr(root, "_esim_press_motion_filter", None)
+    if filt is None:
+        filt = TactileButtonFilter(root)
+        root._esim_press_motion_filter = filt
     for w in root.findChildren((QtWidgets.QPushButton, QtWidgets.QToolButton)):
         if isinstance(w.parent(), QtWidgets.QToolBar):
             continue
+        # Idempotent per button: one already wired in a previous pass keeps its
+        # single filter and its one base shadow -- skip it so neither stacks.
+        if w.property("_esim_motion_installed"):
+            continue
+        w.setProperty("_esim_motion_installed", True)
         w.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         w.installEventFilter(filt)
         # noMotion opts a button fully out: no glow animation AND no base shadow
