@@ -63,6 +63,16 @@ def atomic_write_text(path, text, encoding="utf-8"):
     return path
 
 
+def write_json_atomic(path, data, indent=2):
+    """Atomically write ``data`` as JSON to ``path`` (tmp file + os.replace).
+
+    Bare ``open(w) + json.dump`` leaves a truncated/corrupt file if the process
+    dies mid-write; every config writer should go through this instead.
+    """
+    import json
+    return atomic_write_text(path, json.dumps(data, indent=indent))
+
+
 def read_workspace(default_path=None, default_check="0"):
     """Return ``(check, path)`` from workspace.txt with safe defaults."""
     fallback = default_path or os.path.join(user_home(), "eSim-Workspace")

@@ -102,12 +102,9 @@ class TerminalUi(QtWidgets.QMainWindow):
             idx = 0
         next_mode = order[(idx + 1) % len(order)]
         try:
-            import json
             prefs["theme_mode"] = next_mode
             path = paths.esim_config_path("preferences.json")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as fh:
-                json.dump(prefs, fh)
+            paths.write_json_atomic(path, prefs)
         except Exception:
             pass
         apply_fn()

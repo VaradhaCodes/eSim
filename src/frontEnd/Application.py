@@ -698,7 +698,6 @@ class Application(QtWidgets.QMainWindow):
 
     def _toggle_theme(self):
         """Flip between forced Light and Dark and persist the choice."""
-        import json
         from frontEnd.theme_utils import get_preferences
         prefs = get_preferences()
         cur = prefs.get("theme_mode", "System")
@@ -713,9 +712,7 @@ class Application(QtWidgets.QMainWindow):
         prefs["theme_mode"] = new_mode
         path = paths.esim_config_path("preferences.json")
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                json.dump(prefs, f)
+            paths.write_json_atomic(path, prefs)
         except Exception:
             pass
         app = QtWidgets.QApplication.instance()
@@ -726,7 +723,6 @@ class Application(QtWidgets.QMainWindow):
 
     def change_zoom(self, delta):
         """Adjust the global UI zoom (50–300%); persists + re-applies theme."""
-        import json
         from frontEnd.theme_utils import get_preferences, apply_theme
         prefs = get_preferences()
         current_zoom = prefs.get("zoom_level", 100)
@@ -735,9 +731,7 @@ class Application(QtWidgets.QMainWindow):
             prefs["zoom_level"] = new_zoom
             path = paths.esim_config_path("preferences.json")
             try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w") as f:
-                    json.dump(prefs, f)
+                paths.write_json_atomic(path, prefs)
             except Exception:
                 pass
             if hasattr(self, 'zoom_label'):

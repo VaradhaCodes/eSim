@@ -440,11 +440,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         try:
             from configuration import paths
             path = paths.esim_config_path("preferences.json")
-            with open(path, "r") as f:
-                existing = json_load(f)
+            existing = {}
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    existing = json_load(f)
             existing.update(prefs)
-            with open(path, "w") as f:
-                json_dump(existing, f)
+            paths.write_json_atomic(path, existing)
         except Exception:
             pass
 

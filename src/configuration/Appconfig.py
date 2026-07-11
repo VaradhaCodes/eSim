@@ -267,16 +267,28 @@ class Appconfig:
     def save_preferences(self, theme_mode, accent_color,
                          secondary_accent_color="system",
                          internal_bg_color="system"):
-        """Persist the Aurora theme preferences to ~/.esim/preferences.json."""
+        """Persist the Aurora theme preferences to ~/.esim/preferences.json.
+
+        Merges into the existing file instead of overwriting it: writing only
+        these four keys used to DROP zoom_level, enable_motion and any other
+        stored key (a data-loss trap that PreferencesDialog had to compensate
+        for). Written atomically so a crash mid-write can't corrupt the file.
+        """
         try:
             path = paths.esim_config_path("preferences.json")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                json.dump({
-                    "theme_mode": theme_mode,
-                    "accent_color": accent_color,
-                    "secondary_accent_color": secondary_accent_color,
-                    "internal_bg_color": internal_bg_color,
-                }, f, indent=2)
+            existing = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r") as f:
+                        existing = json.load(f)
+                except Exception:
+                    existing = {}
+            existing.update({
+                "theme_mode": theme_mode,
+                "accent_color": accent_color,
+                "secondary_accent_color": secondary_accent_color,
+                "internal_bg_color": internal_bg_color,
+            })
+            paths.write_json_atomic(path, existing)
         except Exception as e:
             print("Failed to save preferences:", str(e))
