@@ -380,7 +380,10 @@ class MainWindow(QtWidgets.QWidget):
         self.mainLayout.addWidget(self.tabWidget)
         # self.mainLayout.addStretch(1)
         self.convertWindow.setLayout(self.mainLayout)
-        self.convertWindow.show()
+        # No show() here: convertWindow is parentless at this point, so
+        # showing it opens a brief top-level window (the "flash" popup)
+        # before addWidget() reparents it into the converter layout. The
+        # caller's addWidget() makes it visible with its parent instead.
 
         return self.convertWindow
 
