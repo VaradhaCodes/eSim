@@ -323,6 +323,13 @@ class PopupMotionFilter(QtCore.QObject):
     def eventFilter(self, obj, event):
         et = event.type()
 
+        # Cheap gate FIRST: this filter only reacts to Polish and Show. As an
+        # app-wide filter it sees every event in the process (MouseMove, Paint,
+        # Timer, ...), each crossing C++->Python; bail on the ~99% we ignore
+        # before doing any isinstance / type-name work.
+        if et not in (QtCore.QEvent.Type.Polish, QtCore.QEvent.Type.Show):
+            return False
+
         # Smooth expand/collapse for every tree (project tree, device-model
         # grouping, etc.). Set once, when the view is first polished — Qt has a
         # built-in animated transition; we just have to opt in.
@@ -418,6 +425,42 @@ class EffectShowRefreshFilter(QtCore.QObject):
 def install_effect_refresh(app):
     filt = EffectShowRefreshFilter(app)
     app._esim_effect_refresh_filter = filt
+    app.installEventFilter(filt)
+
+
+class AppWideMotionFilter(PopupMotionFilter):
+    """The single app-wide filter: PopupMotionFilter's popup/tree rounding PLUS
+    EffectShowRefreshFilter's drop-shadow revalidation on Show.
+
+    Merged into one object so each of the process's events crosses the
+    C++->Python boundary once, not twice (two separate app-wide filters each
+    ran an eventFilter per event). The Polish/Show gate inherited from
+    PopupMotionFilter still short-circuits everything else first.
+    """
+
+    def eventFilter(self, obj, event):
+        et = event.type()
+        # Same cheap gate as the base; keep it here so the added Show work below
+        # is never reached for the events we ignore.
+        if et not in (QtCore.QEvent.Type.Polish, QtCore.QEvent.Type.Show):
+            return False
+        # Popup rounding + tree animation (base handles Polish and Show).
+        super().eventFilter(obj, event)
+        # Effect revalidation is Show-only.
+        if et == QtCore.QEvent.Type.Show and isinstance(obj, QtWidgets.QWidget):
+            eff = obj.graphicsEffect()
+            if isinstance(eff, QtWidgets.QGraphicsDropShadowEffect) \
+                    and eff.isEnabled():
+                QtCore.QTimer.singleShot(
+                    0, lambda e=eff: EffectShowRefreshFilter._revalidate(e))
+        return False
+
+
+def install_app_motion(app):
+    """Install the single merged app-wide motion filter (replaces the old
+    install_popup_motion + install_effect_refresh pair)."""
+    filt = AppWideMotionFilter(app)
+    app._esim_app_motion_filter = filt
     app.installEventFilter(filt)
 
 

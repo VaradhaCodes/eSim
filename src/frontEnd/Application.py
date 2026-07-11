@@ -1595,9 +1595,8 @@ def main(args):
     # render stale after a tab/page switch or maximize. Static; guarded so they
     # cannot block startup.
     try:
-        from frontEnd.motion import install_popup_motion, install_effect_refresh
-        install_popup_motion(app)
-        install_effect_refresh(app)
+        from frontEnd.motion import install_app_motion
+        install_app_motion(app)
     except Exception:
         pass
 
