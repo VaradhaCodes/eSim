@@ -267,6 +267,18 @@ class PrcocessNetlist:
             'plot_phase']
         interMediateNodeCount = 1
         k = 1
+        # Index modelParamXML ONCE up front: {filename: [full paths]}. Each u*
+        # component then resolves its model with an O(1) dict lookup instead of
+        # a fresh os.walk + per-directory os.listdir. A 20-IC schematic used to
+        # re-walk the whole tree 20 times -- disk-bound on cold NTFS with
+        # Defender. Built per call (not cached on the class) so a model created
+        # earlier this session is still seen.
+        model_xml_index = {}
+        for _dirpath, _dirs, _files in os.walk(PrcocessNetlist.modelxmlDIR):
+            for _fname in _files:
+                if _fname.endswith(".xml"):
+                    model_xml_index.setdefault(_fname, []).append(
+                        os.path.join(_dirpath, _fname))
         # Iterate a snapshot: the body remove()s the current line and reinserts
         # a comment / appends model lines into schematicInfo. Walking the live
         # list while mutating it skips the element after any net removal (two
@@ -296,15 +308,11 @@ class PrcocessNetlist:
                         compType not in plotList and \
                         compType != 'transfo':
                     xmlfile = compType + ".xml"  # XML Model File
-                    count = 0  # Check if model of same name is present
-                    modelPath = []
-                    all_dir = [x[0]
-                               for x in os.walk(PrcocessNetlist.modelxmlDIR)]
-                    for each_dir in all_dir:
-                        all_file = os.listdir(each_dir)
-                        if xmlfile in all_file:
-                            count += 1
-                            modelPath.append(os.path.join(each_dir, xmlfile))
+                    # O(1) lookup into the prebuilt index (copy so the stored
+                    # list is never mutated downstream). count keeps the same
+                    # meaning: how many dirs hold a model of this name.
+                    modelPath = list(model_xml_index.get(xmlfile, []))
+                    count = len(modelPath)
 
                     if count > 1:
                         multipleModelList.append(modelPath)

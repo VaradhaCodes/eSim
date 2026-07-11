@@ -46,6 +46,28 @@ def test_two_adjacent_ic_components_are_both_processed():
     assert unknown == [] and multiple == []
 
 
+def test_modelparamxml_indexed_with_a_single_walk(monkeypatch):
+    # modelParamXML is now indexed ONCE up front, so N model components cost
+    # one os.walk, not one per component. Count walks while converting several
+    # ICs (unknown model type -> no XML parse, just the index build walk).
+    calls = {"n": 0}
+    real_walk = os.walk
+
+    def counting_walk(path):
+        calls["n"] += 1
+        return real_walk(path)
+
+    monkeypatch.setattr(Processing.os, "walk", counting_walk)
+    proc = Processing.PrcocessNetlist()
+    schematic = ["u1 1 2 zzznotamodel",
+                 "u2 3 4 zzznotamodel",
+                 "u3 5 6 zzznotamodel"]
+    _s, _o, _m, unknown, _mult, _p = \
+        proc.convertICintoBasicBlocks(list(schematic), [], [], [])
+    assert calls["n"] == 1, calls["n"]
+    assert unknown.count("zzznotamodel") == 3
+
+
 def _sub_dir(name, nports):
     d = tempfile.mkdtemp(prefix="esim_char_")
     sub = os.path.join(d, name)
