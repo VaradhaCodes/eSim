@@ -1,12 +1,33 @@
 import os
+import sys
 import weakref
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-# Motion (button glows + per-button drop shadows) defaults OFF on Windows, where
-# widget graphics effects are CPU-blurred with no compositor help and are the
-# biggest structural drag; ON elsewhere so the effect stays discoverable. The
-# Preferences toggle overrides this default either way.
-_MOTION_DEFAULT = (os.name != "nt")
+# Motion (button glows) is ON everywhere, Windows included. What made it a
+# structural drag on Windows was not the glow itself but that EVERY button
+# carried a permanent QGraphicsDropShadowEffect — Qt renders each one to an
+# offscreen pixmap and gaussian-blurs it on the CPU (no compositor help on
+# Windows), so N buttons meant N live blurs. The resting glow those blurs
+# painted was alpha 14/255: invisible. Full price, nothing to show for it.
+#
+# Now the blur is created on the button under the cursor and torn down when the
+# cursor leaves, so at most one exists at a time; the resting look comes from
+# QSS (border + gradient), which the style engine paints for free. Accent
+# buttons keep a permanent halo (see _PERSISTENT_GLOW_CLASSES) because there is
+# only ever one per view.
+_MOTION_DEFAULT = True
+
+# Buttons that keep a resting halo instead of only glowing under the cursor:
+# the single call-to-action per view. Everything else stays calm — the QSS
+# hierarchy is deliberate ("only ONE bold button per view"), and a screen where
+# every button glows has no focal point at all.
+_PERSISTENT_GLOW_CLASSES = ("primary", "danger")
+
+# Resting halo for those accent buttons, and the hover/press halo for any
+# button. Alpha is the only value the animation drives.
+_GLOW_REST_ALPHA = 58
+_GLOW_HOVER_ALPHA = 110
+_GLOW_PRESS_ALPHA = 76
 
 # Every TactileButtonFilter registers here so a theme change can stop all of
 # their running glow animations before the global re-polish toggles the very
@@ -115,10 +136,61 @@ def apply_menu_rounded_mask(menu, radius=14):
         pass
 
 
+def rest_alpha(widget):
+    """Resting glow alpha for a button: the one accent call-to-action per view
+    keeps its halo lit; every other button rests at 0 and carries no effect at
+    all until the cursor reaches it."""
+    if widget.property("noMotion") or widget.property("dockPopButton"):
+        return 0
+    if widget.property("cssClass") in _PERSISTENT_GLOW_CLASSES:
+        return _GLOW_REST_ALPHA
+    if isinstance(widget, QtWidgets.QPushButton) and widget.isDefault():
+        return _GLOW_REST_ALPHA
+    return 0
+
+
+def _ensure_glow(widget):
+    """The button's drop-shadow, created (transparent) if it has none yet.
+
+    Creating on demand is the whole point: a QGraphicsDropShadowEffect costs a
+    CPU gaussian blur on every repaint of its widget, so one must exist only
+    while it is actually painting something visible."""
+    eff = widget.graphicsEffect()
+    if isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
+        return eff
+    if eff is not None:
+        return None                      # some other effect — leave it alone
+    eff = QtWidgets.QGraphicsDropShadowEffect(widget)
+    eff.setBlurRadius(18)
+    eff.setOffset(0, 4)
+    c = accent_qcolor(widget)
+    c.setAlpha(0)
+    eff.setColor(c)
+    widget.setGraphicsEffect(eff)
+    return eff
+
+
+def _drop_glow(widget):
+    """Remove a fully-faded halo so the button goes back to costing nothing.
+    Skipped for buttons whose resting state is lit."""
+    if rest_alpha(widget) > 0:
+        return
+    try:
+        eff = widget.graphicsEffect()
+        if isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
+            widget.setGraphicsEffect(None)
+    except RuntimeError:
+        pass
+
+
 class TactileButtonFilter(QtCore.QObject):
     """Button hover/press feedback via shadow glow only.
     Position animation removed — conflicts with Qt layouts inside toolbars.
-    Press depth comes from QSS padding-top/padding-bottom shift instead."""
+    Press depth comes from QSS padding-top/padding-bottom shift instead.
+
+    The halo is created when the cursor enters and destroyed once it has faded
+    out, so at most one blurred button exists at a time no matter how many are
+    on screen."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -145,16 +217,17 @@ class TactileButtonFilter(QtCore.QObject):
         if et == QtCore.QEvent.Type.Enter:
             obj.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             if not is_dock:
-                self._animate_glow(obj, 18, 4, 84)
+                self._animate_glow(obj, 22, 5, _GLOW_HOVER_ALPHA)
         elif et == QtCore.QEvent.Type.Leave:
             if not is_dock:
-                self._animate_glow(obj, 18, 4, 14)
+                self._animate_glow(obj, 18, 4, rest_alpha(obj))
         elif et == QtCore.QEvent.Type.MouseButtonPress and event.button() == QtCore.Qt.MouseButton.LeftButton:
             if not is_dock:
-                self._animate_glow(obj, 14, 1, 60)
+                self._animate_glow(obj, 14, 1, _GLOW_PRESS_ALPHA)
         elif et == QtCore.QEvent.Type.MouseButtonRelease:
             if not is_dock:
-                self._animate_glow(obj, 18, 4, 84 if obj.underMouse() else 14)
+                target = _GLOW_HOVER_ALPHA if obj.underMouse() else rest_alpha(obj)
+                self._animate_glow(obj, 18, 4, target)
         return False
 
     def _animate_glow(self, obj, blur, y, alpha):
@@ -171,8 +244,8 @@ class TactileButtonFilter(QtCore.QObject):
                 old.stop()
             except RuntimeError:
                 pass
-        eff = obj.graphicsEffect()
-        if not isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
+        eff = _ensure_glow(obj)
+        if eff is None:
             return
         acc = accent_qcolor(obj)
         try:
@@ -196,9 +269,21 @@ class TactileButtonFilter(QtCore.QObject):
             except RuntimeError:
                 pass
         anim.valueChanged.connect(_apply_alpha)
+
+        def _settled(o=obj, target=alpha):
+            self._glow_anims.pop(o, None)
+            # Faded to nothing and the cursor has moved on: free the blur.
+            # Re-check underMouse rather than trusting `target` — a new Enter
+            # may have landed while this fade-out was still running.
+            if target <= 0:
+                try:
+                    if not o.underMouse():
+                        _drop_glow(o)
+                except RuntimeError:
+                    pass
         # Drop our reference the instant it stops, so a later stop() can never
         # reach a DeleteWhenStopped-freed animation.
-        anim.finished.connect(lambda o=obj: self._glow_anims.pop(o, None))
+        anim.finished.connect(_settled)
         self._glow_anims[obj] = anim
         anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
@@ -271,20 +356,19 @@ def install_button_motion(root):
         w.setProperty("_esim_motion_installed", True)
         w.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         w.installEventFilter(filt)
-        # noMotion opts a button fully out: no glow animation AND no base shadow
-        # effect. Small chrome controls (e.g. the verifier's move arrows) use it
-        # so the neon halo never bleeds over their neighbours.
-        if not w.property("dockPopButton") and not w.property("noMotion"):
-            eff = w.graphicsEffect()
-            if eff is None:
-                eff = QtWidgets.QGraphicsDropShadowEffect(w)
-                eff.setBlurRadius(18)
-                eff.setOffset(0, 4)
-                # Base neon glow so it has the shadow by default
+        # Only the accent call-to-action gets a halo up front; the rest stay
+        # effect-free until hovered (the filter builds one on Enter and frees it
+        # on Leave). noMotion / dockPopButton buttons opt out entirely — small
+        # chrome controls (e.g. the verifier's move arrows) use it so the neon
+        # halo never bleeds over their neighbours. rest_alpha() encodes all of
+        # that.
+        alpha = rest_alpha(w)
+        if alpha > 0:
+            eff = _ensure_glow(w)
+            if eff is not None:
                 c = accent_qcolor(w)
-                c.setAlpha(14)
+                c.setAlpha(alpha)
                 eff.setColor(c)
-                w.setGraphicsEffect(eff)
 
 
 class TabMotionFilter(QtCore.QObject):
