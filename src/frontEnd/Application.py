@@ -1526,6 +1526,42 @@ def _install_excepthook():
     sys.excepthook = hook
 
 
+def _app_teardown(apply_theme_slot=None):
+    """Quiesce animation/timer/figure state at exit BEFORE Qt frees the widgets
+    those callbacks touch -- the ordering that avoids the recurring sip
+    use-after-free at teardown (0xc0000005 in sip.*.pyd). Every step is guarded
+    so teardown can never raise. Called from app.aboutToQuit.
+    """
+    # 1. Stop every button-glow animation so none ticks against a freed effect.
+    try:
+        from frontEnd import motion
+        motion.stop_all_glow()
+    except Exception:
+        pass
+    # 2. Stop the OS light/dark signal re-entering apply_theme during teardown.
+    if apply_theme_slot is not None:
+        try:
+            QtGui.QGuiApplication.styleHints().colorSchemeChanged.disconnect(
+                apply_theme_slot)
+        except Exception:
+            pass
+    # 3. Stop lingering widget timers (plot refresh/resize/decimate) so a late
+    #    tick can't touch a half-destroyed canvas.
+    try:
+        for w in QtWidgets.QApplication.topLevelWidgets():
+            for timer in w.findChildren(QtCore.QTimer):
+                timer.stop()
+    except Exception:
+        pass
+    # 4. Close matplotlib figures (plot docks) -- only if it was ever loaded, so
+    #    teardown never forces the heavy import.
+    if 'matplotlib.pyplot' in sys.modules:
+        try:
+            sys.modules['matplotlib.pyplot'].close('all')
+        except Exception:
+            pass
+
+
 def main(args):
     """
     The splash screen opened at the starting of screen is performed
@@ -1579,6 +1615,10 @@ def main(args):
         app.apply_theme = _apply_theme
         _apply_theme()
         QtGui.QGuiApplication.styleHints().colorSchemeChanged.connect(_apply_theme)
+        # Ordered teardown at exit to avoid the sip use-after-free crash: stop
+        # glow animations + this signal + plot timers/figures before Qt frees
+        # the widgets they touch.
+        app.aboutToQuit.connect(lambda: _app_teardown(_apply_theme))
         # Bundled Inter font for the Aurora type scale (QSS has fallbacks).
         font_path = os.path.join(
             os.path.dirname(__file__), '..', '..', 'images', 'fonts',
