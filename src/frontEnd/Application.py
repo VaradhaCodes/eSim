@@ -1649,10 +1649,21 @@ def main(args):
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
                 "FOSSEE.eSim.2.5")
+            # Startup blocks the GUI thread for seconds at a time (window
+            # build, project-tree load). A click on the splash during such a
+            # block makes DWM swap in a white "(Not Responding)" ghost window
+            # -- it looks like a crash, and its close button really does
+            # terminate the process. With ghosting off the splash stays
+            # painted through the block and startup simply finishes.
+            ctypes.windll.user32.DisableProcessWindowsGhosting()
         except Exception:
             pass
     app = QtWidgets.QApplication(args)
     app.setApplicationName("eSim")
+    # One app-wide icon: every top-level window -- the splash and the
+    # workspace picker included -- shows the eSim logo in the taskbar
+    # instead of the generic pythonw icon.
+    app.setWindowIcon(QtGui.QIcon(paths.image_path('logo.png')))
 
     # Aurora design system: attach a bound apply_theme to the app instance so
     # the Preferences dialog can live-apply, theme once before widgets build,
@@ -1741,6 +1752,9 @@ def main(args):
 
     splash = FadingSplash(rounded_splash)
     splash.setDisabled(True)
+    # Busy cursor over the splash: tells the user "loading, don't worry"
+    # during the long blocking phases below.
+    splash.setCursor(QtCore.Qt.CursorShape.BusyCursor)
     splash.show()
     # Force one paint now so the splash is actually on screen before we block
     # the event loop building the main window.
@@ -1751,6 +1765,10 @@ def main(args):
     _stage('splash shown, building main window')
     appView = Application()
     _stage('main window built')
+    # Drain the input queued during the multi-second window build (the
+    # disabled splash discards it) so Windows stops counting the process as
+    # unresponsive before the next blocking phase starts.
+    app.processEvents()
     last_project_path = appView.obj_appconfig.load_last_project()
     if last_project_path:
         try:
@@ -1763,6 +1781,7 @@ def main(args):
             print("Could not restore last project:", str(e))
     appView.obj_Mainview.obj_timeExplorer.load_last_snapshots()
     appView.hide()
+    app.processEvents()
 
     appView.splash = splash
     appView.obj_workspace.returnWhetherClickedOrNot(appView)
@@ -1778,7 +1797,16 @@ def main(args):
     if work != 0:
         appView.obj_workspace.defaultWorkspace()
     else:
+        # First run (or reset workspace): the splash is a disabled
+        # stays-on-top window, so it must be gone before the picker asks for
+        # input -- otherwise the dialog opens underneath it, can't be raised
+        # past it, and the app looks hung. The splash's only job (covering
+        # the slow window build) is already done at this point.
+        splash.close()
+        appView.splash = None
         appView.obj_workspace.show()
+        appView.obj_workspace.raise_()
+        appView.obj_workspace.activateWindow()
 
     # Pre-warm every tool's imports in the background once startup has
     # settled, so the first click on any launcher (plot, Model Creation,

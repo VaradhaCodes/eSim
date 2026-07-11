@@ -146,6 +146,10 @@ class Workspace(QtWidgets.QDialog):
         if view is None:
             return
         try:
+            # loadProjects() blocks the GUI thread for seconds on a big
+            # workspace; drain pending input first so Windows resets its
+            # not-responding timer before the block starts.
+            QtWidgets.QApplication.processEvents()
             view.obj_Mainview.obj_projectExplorer.loadProjects()
         except Exception as e:
             print(f"[Workspace] project explorer refresh failed: {e}")

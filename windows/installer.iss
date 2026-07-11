@@ -89,8 +89,12 @@ Source: "{#StageDir}\tools\nghdl\release\*"; DestDir: "{app}\tools\nghdl\release
 ; version info embedded: no console flash, proper identity in Windows search
 ; and the taskbar. esim.bat remains in {app} for terminal use (--debug,
 ; --doctor).
-Name: "{autoprograms}\eSim"; Filename: "{app}\eSim.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\eSim";  Filename: "{app}\eSim.exe"; WorkingDir: "{app}"
+; AppUserModelID matches SetCurrentProcessExplicitAppUserModelID in
+; Application.py: the running pythonw windows group under this shortcut, so
+; the taskbar shows the eSim icon (and pinning works) instead of a blank
+; pythonw entry.
+Name: "{autoprograms}\eSim"; Filename: "{app}\eSim.exe"; WorkingDir: "{app}"; AppUserModelID: "FOSSEE.eSim.2.5"
+Name: "{autodesktop}\eSim";  Filename: "{app}\eSim.exe"; WorkingDir: "{app}"; AppUserModelID: "FOSSEE.eSim.2.5"
 
 [Run]
 ; Precompile bytecode at install time so the first cold launch doesn't compile
