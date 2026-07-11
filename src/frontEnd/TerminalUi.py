@@ -22,7 +22,8 @@ class TerminalUi(QtWidgets.QMainWindow):
 
         # Other variables
         # The console inherits its colours from the global QSS rule
-        # `QTextEdit#simulationConsole` (see style_dark.qss / style_light.qss).
+        # `QPlainTextEdit#simulationConsole` (see style_dark.qss /
+        # style_light.qss).
         # We deliberately do NOT keep an internal dark/light toggle here — that
         # was a legacy per-widget override that broke the user's selected
         # theme. The lightDarkModeButton now cycles the application's theme via
@@ -67,7 +68,7 @@ class TerminalUi(QtWidgets.QMainWindow):
 
         # Theme cycle — clicking this button asks the running application to
         # swap palette to the next theme (System → Light → Dark → System).
-        # The QSS rule for `QTextEdit#simulationConsole` then re-applies
+        # The QSS rule for `QPlainTextEdit#simulationConsole` then re-applies
         # automatically via apply_theme.
         self.lightDarkModeButton.setToolTip(
             "Cycle application theme (Light → Dark → System)"
