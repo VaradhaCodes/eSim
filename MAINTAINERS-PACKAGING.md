@@ -139,7 +139,9 @@ Everything is unit-tested on Linux (`pytest src windows/tests` green);
 W1–W13 still need the first real Windows run.
 * Known non-blocker: `pytest src/projManagement src/kicadtoNgspice` in that
   argument order has a pre-existing test-ordering flake in
-  `test_model_cache.py` (passes alone and in full-suite order)
+  `test_model_cache.py` (passes alone and in full-suite order).
+  *Since diagnosed and fixed — not ordering at all; see both 2026-07-12 run
+  reports below.*
 
 ### Results — 2026-07-12 Ubuntu 24.04 VM run (Fable session)
 
@@ -172,6 +174,58 @@ Ran U4–U13 on a 24.04.4 VirtualBox VM (the 26.04 sweep runs on its own VM):
    ghdl-gcc (see the addendum in install-nghdl-scripts/GHDL-BACKEND-26.04.md).
 3. `StandardKey.SaveAs` unbound on the Qt 6.4 fallback theme — pinned
    Ctrl+Shift+S in the Verilog Verifier.
+
+### Results — 2026-07-12 Ubuntu 26.04 clean-VM run (Fable session)
+
+Ran U5–U13 on a clean Ubuntu 26.04 LTS VM (fresh box; a prior eSim 2.5
+install was fully removed first). Four breaks found and fixed — two of them
+(the QtSvg dep and the rsync ownership leak) were hit independently by the
+24.04 run above and landed with that run's commits; the other two are
+committed with this run:
+
+* U5 ✅ `--install` completes end-to-end (KiCad 9.0.8 from universe,
+  PyQt6/Qsci from apt, venv, nghdl, sky130, launcher, doctor all-green).
+  **Fix 1:** the nghdl-simulator (ngspice-45.2) tarball is a repacked source
+  tree, so automake maintainer mode re-runs `aclocal-1.16` (absent on
+  24.04+/26.04) and dies — `install-nghdl.sh` now configures with
+  `--disable-maintainer-mode`.
+  **Fix 2:** the GUI hard-imports `PyQt6.QtSvg`, which Debian/Ubuntu split
+  into `python3-pyqt6.qtsvg` (NOT a dependency of `python3-pyqt6`) —
+  added to `QT_PKGS` + an install-time import check.
+* U6 ✅ `esim` launches, PyQt6 GUI stays up, Qsci imports (after Fix 2).
+* U7 ✅ `Examples/Halfwave_Rectifier` netlist through the nghdl ngspice:
+  62 data rows, `plot_data_v/i.txt` produced.
+* U8 ✅ NgVeri Verilator build driven through the real
+  `ModelGeneration` pipeline; symbol lands in `~/.esim` `eSim_Ngveri`,
+  model simulates. **Fix 3:** hdlparse silently drops the FIRST port of a
+  single-line ANSI header (`module m(input a, input b, ...)`) — the header
+  splitter now also breaks the line after `(`.
+* U9 ✅ compile+simulate with the source-built iverilog/vvp (libvvp is
+  resolved via `[COSIM] IVERILOG_LIB` / `LD_LIBRARY_PATH` by design —
+  bare-shell `vvp` without that env fails, which is expected).
+* U10 ✅ nghdl `and_gate` VHDL co-sim end-to-end on ghdl-llvm 5.0.1:
+  ghdlserver elaborates (`ghdl -e -Wl,ghdlserver.o`), socket sim runs,
+  correct output. This was the first real run of the ngspice-45.2 rewrite.
+* U11 ✅ **Fix 4:** `sudo rsync -a` preserved the checkout's user ownership
+  on `/usr/share/kicad/symbols` (files AND the dir) — fixed as
+  `--chown=root:root --chmod=D755,F644` (landed via the 24.04 run's commit).
+* U12 ✅ built model (U8) survives a full `--install` re-run byte-identical;
+  no generated libs leak into `/usr/share`.
+* U13 ✅ uninstall leaves zero eSim artifacts; `/usr/share/kicad` reduced to
+  an empty package-purged dir, nothing KiCad-owned over-wiped. Note: the
+  `modelParamXML/{Nghdl,Ngveri}/*` wipe also deletes the four git-tracked
+  orphan XMLs (or_gate, advanced_pwm, dvsd_8_bit_priority_encoder,
+  vsdserializer_v1 — no matching template symbols); harmless for release
+  zips, dirties a dev checkout. Decide whether to untrack them.
+* Test-suite hygiene: the `test_model_cache.py` flake was NOT ordering — the
+  test resolved paths from import-time HOME while the repo-wide
+  `isolated_user_home` fixture re-points HOME per test. Fixed it plus the
+  same import-time/run-time HOME mismatch in `test_hdl_icarus.py` and
+  `test_nghdl_embed.py`; `pytest src windows/tests`, `pytest src/maker`
+  and each file standalone are now all green (435 passed / 8 skipped full).
+  (`test_model_cache.py` itself got the identical fix from the 24.04 run's
+  commit; the other two are committed with this run.)
+* U4 ✅ covered by the 24.04 run above. W1–W13 ⬜ still owed.
 
 ## 5. When a code change adds a dependency or data file
 
