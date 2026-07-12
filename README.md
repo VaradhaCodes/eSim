@@ -25,8 +25,10 @@ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubun
 ```
 
 (Downloads eSim to `~/eSim` and runs the installer. Re-run the same line to
-update; add `-s -- --uninstall` to remove it. Prefer a manual download? The
-zip flow in [INSTALL](INSTALL) runs the exact same installer.)
+update; add `-s -- --uninstall` to remove it. Upgrading from an older eSim
+2.x? Same line — the installer sweeps old-eSim artifacts and installs
+cleanly on top. Prefer a manual download? The zip flow in
+[INSTALL](INSTALL) runs the exact same installer.)
 
 Please refer to [downloads](https://esim.fossee.in/downloads) for installers and guidelines.
 

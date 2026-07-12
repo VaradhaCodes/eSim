@@ -133,6 +133,60 @@ createConfigFile() {
     } >> "$config_dir/$config_file"
 }
 
+# Sweep artifacts of OLD eSim releases (2.x and earlier) so installing on
+# top of any prior eSim just works. Each install step below already cleans
+# and regenerates its own bits (config, venv, launcher, symbols, ngspice,
+# SKY130); this handles only what old releases left OUTSIDE those paths.
+# Everything touched here is eSim-owned — user files (old extracted eSim
+# directories, zips) are reported, never deleted.
+cleanLegacyEsim() {
+    log "Checking for artifacts of an older eSim install"
+
+    # Legacy-format symbol libs: this eSim ships only .kicad_sym. The install
+    # rsync never deletes, so stale eSim_*.lib from old releases would linger
+    # in /usr/share forever (uninstall already removes them).
+    sudo rm -f /usr/share/kicad/symbols/eSim_*.lib 2>/dev/null || true
+
+    # Old eSim's KiCad PPA entries (kicad-6.0 era). On a newer/upgraded
+    # Ubuntu those PPAs publish no Release file, which makes every
+    # `apt-get update` below fail hard. installKicad re-adds the right
+    # source for this Ubuntu version, so dropping them is always safe.
+    if ls /etc/apt/sources.list.d/kicad* &>/dev/null; then
+        warn "Removing old KiCad apt sources left by a previous eSim:"
+        ls /etc/apt/sources.list.d/kicad* | sed 's/^/       /'
+        sudo rm -f /etc/apt/sources.list.d/kicad*
+    fi
+
+    # Old nghdl (eSim <= 2.5) compiled GHDL from source into /usr/local —
+    # typically the mcode backend. /usr/local/bin shadows /usr/bin in PATH,
+    # so it would hijack the apt ghdl-llvm/gcc this installer sets up and
+    # break VHDL co-simulation (mcode cannot link the nghdl socket server).
+    if [ -x /usr/local/bin/ghdl ]; then
+        warn "Found /usr/local/bin/ghdl: $(/usr/local/bin/ghdl --version 2>/dev/null | head -n 1)"
+        warn "It shadows the GHDL this installer sets up (old eSim/nghdl builds put it there)."
+        read -rp "Remove the /usr/local GHDL? (y/n): " g
+        if [[ "$g" =~ ^[Yy] ]]; then
+            sudo rm -rf /usr/local/bin/ghdl /usr/local/bin/ghdl1-* \
+                        /usr/local/lib/ghdl /usr/local/include/ghdl*
+            log "/usr/local GHDL removed"
+        else
+            warn "Keeping it — VHDL co-simulation will likely use THIS ghdl (PATH order) and fail."
+        fi
+    fi
+
+    # Old standalone nghdl GUI launcher; nghdl is embedded in eSim now and
+    # the tree it pointed at is usually gone. (Uninstall removes it too.)
+    sudo rm -f /usr/local/bin/nghdl 2>/dev/null || true
+
+    # Purely informational — old trees that are no longer referenced once
+    # this install repoints the launcher and ~/.esim/config.ini.
+    local d
+    for d in "$HOME/ngspice-nghdl" "$HOME"/eSim-2.* "$HOME"/Downloads/eSim-2.*; do
+        [ -e "$d" ] && warn "Old eSim-era directory found: $d (unused after this install — safe to delete)"
+    done
+    return 0
+}
+
 installDependency() {
     log "Updating apt index"
     set +e; trap "" ERR
@@ -561,6 +615,7 @@ case "$option" in
         echo ">>> Logging to $HOME/eSim-install.log"
         set -e; set -E; trap error_exit ERR
         setupProxy
+        cleanLegacyEsim
         createConfigFile
         installDependency
         installQt
