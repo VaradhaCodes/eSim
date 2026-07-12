@@ -1,10 +1,13 @@
-// Resources for eSim.exe. The icon is the same workspace.ico the installer
-// uses for shortcuts, so the exe, shortcuts and taskbar all present one
-// identity. Version fields are static (2.5 product line); bump them together
-// with the repo VERSION file.
+// Resources for eSim.exe. The icon is images\esim.ico -- the eSim mark, built
+// from images\logo.png by windows\branding\make-app-icon.py -- and the setup
+// exe and the shortcuts it creates carry the SAME file, so the installer, the
+// exe, the taskbar and Add/Remove Programs all present one identity. (This
+// used to be workspace.ico: generic briefcase clipart, no eSim in it.)
+// Version fields are static (2.5 product line); bump them together with the
+// repo VERSION file.
 #include <winver.h>
 
-1 ICON "workspace.ico"
+1 ICON "esim.ico"
 
 1 VERSIONINFO
 FILEVERSION     2,5,0,0

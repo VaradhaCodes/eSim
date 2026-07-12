@@ -47,6 +47,18 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 WizardStyle=modern
 
+; Branding. One identity end to end: the setup exe carries the SAME icon as
+; eSim.exe, the Start-menu/desktop shortcuts and the uninstall entry, so the
+; downloaded file is recognisable in Explorer and the download bar before it
+; is ever run. The wizard panels (eSim mark + FOSSEE logo) are generated from
+; the repo's own logo assets by branding\make-wizard-images.py -- one file per
+; DPI scaling step (100/125/150/200%); Inno picks the closest match, which is
+; why they are listed rather than wildcarded (a wildcard would also sweep the
+; small images into the big-panel slot).
+SetupIconFile=..\images\esim.ico
+WizardImageFile=branding\wizard-164x314.bmp,branding\wizard-205x393.bmp,branding\wizard-246x471.bmp,branding\wizard-328x628.bmp
+WizardSmallImageFile=branding\wizard-small-55x58.bmp,branding\wizard-small-69x73.bmp,branding\wizard-small-83x87.bmp,branding\wizard-small-110x116.bmp
+
 [Types]
 Name: "full";    Description: "Full (HDL toolchain: NgVeri, d_cosim, NGHDL/GHDL VHDL co-sim)"
 Name: "compact"; Description: "Compact (analog simulation only; no HDL model builds)"
