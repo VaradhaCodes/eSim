@@ -154,9 +154,14 @@ def _detect_is_dark(app: Optional[QtWidgets.QApplication]) -> bool:
         except Exception:
             pass
         try:
-            return QtGui.QGuiApplication.styleHints().colorScheme() == QtCore.Qt.ColorScheme.Dark
+            # colorScheme() needs Qt >= 6.5; on Ubuntu 24.04 (Qt 6.4) the
+            # palette-lightness branch above is the only system signal.
+            hints = QtGui.QGuiApplication.styleHints()
+            if hasattr(hints, "colorScheme"):
+                return hints.colorScheme() == QtCore.Qt.ColorScheme.Dark
         except Exception:
-            return False
+            pass
+        return False
     return False
 
 

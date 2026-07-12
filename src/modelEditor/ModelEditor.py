@@ -30,8 +30,11 @@ class ParameterEditDelegate(QtWidgets.QStyledItemDelegate):
                 return False
         except Exception:
             pass
-        return (QtGui.QGuiApplication.styleHints().colorScheme()
-                == QtCore.Qt.ColorScheme.Dark)
+        try:
+            from frontEnd.theme_utils import system_is_dark
+            return system_is_dark()
+        except Exception:
+            return False
 
     def createEditor(self, parent, option, index):
         editor = super().createEditor(parent, option, index)

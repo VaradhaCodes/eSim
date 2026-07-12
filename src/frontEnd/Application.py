@@ -706,9 +706,8 @@ class Application(QtWidgets.QMainWindow):
         elif cur == "Light":
             new_mode = "Dark"
         else:
-            scheme = QtGui.QGuiApplication.styleHints().colorScheme()
-            new_mode = "Light" \
-                if scheme == QtCore.Qt.ColorScheme.Dark else "Dark"
+            from frontEnd.theme_utils import system_is_dark
+            new_mode = "Light" if system_is_dark() else "Dark"
         prefs["theme_mode"] = new_mode
         path = paths.esim_config_path("preferences.json")
         try:
@@ -1673,7 +1672,11 @@ def main(args):
             theme_utils.apply_theme(app)
         app.apply_theme = _apply_theme
         _apply_theme()
-        QtGui.QGuiApplication.styleHints().colorSchemeChanged.connect(_apply_theme)
+        # colorSchemeChanged only exists on Qt >= 6.5; on Ubuntu 24.04 (Qt 6.4)
+        # there is no live OS light/dark signal — users toggle via the menu.
+        hints = QtGui.QGuiApplication.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):
+            hints.colorSchemeChanged.connect(_apply_theme)
         # Ordered teardown at exit to avoid the sip use-after-free crash: stop
         # glow animations + this signal + plot timers/figures before Qt frees
         # the widgets they touch.

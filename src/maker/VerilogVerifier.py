@@ -645,7 +645,9 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.act_save.triggered.connect(self.save_file)
 
         self.act_save_as = QtGui.QAction("Save As…", self)
-        self.act_save_as.setShortcut(QtGui.QKeySequence.StandardKey.SaveAs)
+        # Explicit key: StandardKey.SaveAs is unbound on Windows and on the
+        # Qt 6.4 (Ubuntu 24.04) fallback theme, leaving the action shortcutless.
+        self.act_save_as.setShortcut(QtGui.QKeySequence("Ctrl+Shift+S"))
         self.act_save_as.triggered.connect(self.save_as_file)
 
         # Export is rare and only meaningful after a sim; it lives in the menu,

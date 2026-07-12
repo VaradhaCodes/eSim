@@ -19,8 +19,15 @@ os.environ["HOME"] = _TMP_HOME
 from projManagement import modelCache               # noqa: E402
 
 
+def _cache_file():
+    # Resolve at call time: the repo-wide isolated_user_home fixture points
+    # HOME at a fresh tmp dir per test, so the module-level _TMP_HOME is only
+    # correct under the standalone runner below.
+    return os.path.join(os.path.expanduser("~"), ".esim", "model_cache.json")
+
+
 def _reset():
-    p = os.path.join(_TMP_HOME, ".esim", "model_cache.json")
+    p = _cache_file()
     if os.path.exists(p):
         os.remove(p)
 
@@ -111,7 +118,7 @@ def test_no_op_write_when_unchanged():
     f = _real_file()
     try:
         modelCache.remember("a", f)
-        p = os.path.join(_TMP_HOME, ".esim", "model_cache.json")
+        p = _cache_file()
         mtime = os.path.getmtime(p)
         modelCache.remember("a", f)            # identical -> should not rewrite
         assert os.path.getmtime(p) == mtime

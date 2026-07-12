@@ -276,14 +276,38 @@ def _refresh_graphics_effects(app):
             pass
 
 
+def system_is_dark():
+    """True when the OS prefers a dark color scheme.
+
+    QStyleHints.colorScheme() only exists on Qt >= 6.5; Ubuntu 24.04 LTS ships
+    Qt 6.4, where calling it raises AttributeError (which used to silently
+    disable all theming at startup and crash the theme toggle). Fall back to
+    GNOME's color-scheme setting, then to palette lightness.
+    """
+    hints = QtGui.QGuiApplication.styleHints()
+    if hasattr(hints, "colorScheme"):
+        return hints.colorScheme() == QtCore.Qt.ColorScheme.Dark
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+            capture_output=True, text=True, timeout=2).stdout
+        if "dark" in out.lower():
+            return True
+        if out.strip():
+            return False
+    except Exception:
+        pass
+    win = QtGui.QGuiApplication.palette().color(QtGui.QPalette.ColorRole.Window)
+    return win.isValid() and win.lightness() < 128
+
+
 def apply_theme(app):
     prefs = get_preferences()
     theme_mode = prefs.get("theme_mode", "System")
     accent_color = prefs.get("accent_color", "default")
     secondary_color = prefs.get("secondary_accent_color", "system")
     internal_bg_color = prefs.get("internal_bg_color", "system")
-
-    scheme = QtGui.QGuiApplication.styleHints().colorScheme()
 
     # Stop every button glow animation before we re-polish: setStyleSheet +
     # _refresh_graphics_effects() below toggle the very QGraphicsDropShadowEffect
@@ -301,7 +325,7 @@ def apply_theme(app):
     elif theme_mode == "Light":
         is_dark = False
     else:
-        is_dark = (scheme == QtCore.Qt.ColorScheme.Dark)
+        is_dark = system_is_dark()
 
     global _CURRENT_DARK
     _CURRENT_DARK = is_dark
