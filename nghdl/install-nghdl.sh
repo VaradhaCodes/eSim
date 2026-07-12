@@ -254,9 +254,15 @@ installNGHDL() {
 
     log "Configuring nghdl-simulator"
     chmod +x ../configure
+    # --disable-maintainer-mode: the tarball is a repacked source tree, so
+    # automake maintainer mode defaults ON and tar-restored mtimes make
+    # aclocal.m4 look stale -> make demands the exact aclocal-1.16 that
+    # generated the tree (absent on 24.04+/26.04) and dies before compiling.
+    # Disabling maintainer mode compiles what's shipped, regenerates nothing.
     ../configure \
         --enable-xspice \
         --disable-debug \
+        --disable-maintainer-mode \
         --prefix="$HOME/$nghdl/install_dir/" \
         --exec-prefix="$HOME/$nghdl/install_dir/" \
         CFLAGS="$NGHDL_CFLAGS"
