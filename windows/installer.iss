@@ -74,8 +74,12 @@ Name: "{app}"; Permissions: users-modify
 ; new HDL models (MSYS2, ngspice sources, configured build tree) are the
 ; optional 'hdl' component. release_gui is a throwaway build dir; the build
 ; script deletes it, and this excludes an interrupted build's leftovers.
+; tools\nghdl.old: a hand-made backup of an earlier simulator tree that
+; survives in the stage across incremental builds (nothing in the pipeline
+; creates or purges it) and rode into the last release as 127 MB of dead
+; weight. Belt and braces -- the build script now deletes it as well.
 Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
-    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*"; \
+    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*,tools\nghdl.old\*"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StageDir}\tools\msys64\*"; DestDir: "{app}\tools\msys64"; Components: hdl; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist

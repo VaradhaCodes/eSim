@@ -160,12 +160,23 @@ function Stage-App {
     # silently forced a ~15 min iverilog source rebuild on every re-run.
     $xd += @('python', 'tools', 'library\bin') |
            ForEach-Object { Join-Path $Stage $_ }
-    robocopy $RepoRoot $Stage /MIR /NFL /NDL /NJH /NJS /XD @xd `
+    # /XJ: do not follow junctions. A dev box often has repo-root python\ and
+    # tools\ junctions pointing at an INSTALLED eSim (handy for running the
+    # working tree against a real toolchain) -- without /XJ robocopy walks
+    # straight through them and mirrors the installed tree's gigabytes back
+    # into the stage, so the installer would repackage its own output.
+    robocopy $RepoRoot $Stage /MIR /XJ /NFL /NDL /NJH /NJS /XD @xd `
         /XF '*.pyc' '*.pyo' '*.raw' 'plot_data_*.txt' '.DS_Store' `
             'fp-info-cache' `
             'nghdl-simulator-source.tar.xz' `
             'install-nghdl.sh' | Out-Null
     if ($LASTEXITCODE -ge 8) { Die "robocopy failed ($LASTEXITCODE)" }
+
+    # Stage-side leftovers no pipeline stage owns (so /MIR never purges them:
+    # they live under the /XD-protected tools\). nghdl.old is a hand-made
+    # backup of an earlier simulator build that shipped in the last release.
+    Remove-Item (Join-Path $Stage 'tools\nghdl.old') -Recurse -Force `
+        -ErrorAction SilentlyContinue
 
     # kicadLibrary must be a real dir at runtime on Windows (symbols are
     # referenced in place); expand the tarball form if that's what the tree has.
