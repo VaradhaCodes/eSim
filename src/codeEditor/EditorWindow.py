@@ -213,6 +213,11 @@ def _cursor_line_col(editor):
 class EditorWindow(QtWidgets.QMainWindow):
     """A standalone tabbed editor; reuse one instance per project."""
 
+    #: Class-level so they are readable even from a changeEvent that Qt
+    #: delivers before __init__ has run its first line.
+    _applying_theme = False
+    _chrome_sheet = None
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("eSim Editor")
@@ -696,14 +701,27 @@ class EditorWindow(QtWidgets.QMainWindow):
 
     def _apply_chrome_theme(self):
         """Paint the window chrome to match the active Aurora theme."""
-        self.setStyleSheet(
-            STYLE_DARK if theme.is_dark_theme() else STYLE_LIGHT)
+        sheet = STYLE_DARK if theme.is_dark_theme() else STYLE_LIGHT
+        if sheet == self._chrome_sheet:
+            return
+        self._chrome_sheet = sheet
+        # setStyleSheet re-polishes the window, and Qt reports that back as
+        # a PaletteChange -- straight into changeEvent and back here.  The
+        # window is only polished once it is shown, so the recursion starts
+        # on the first show() and runs until the C stack overflows, killing
+        # eSim outright.  Ignore our own palette events while restyling.
+        self._applying_theme = True
+        try:
+            self.setStyleSheet(sheet)
+        finally:
+            self._applying_theme = False
 
     def changeEvent(self, event):
         # The app palette flips dark<->light on a theme switch; repaint the
         # chrome so the floating editor tracks it live (the per-tab editors
         # re-theme themselves via their own changeEvent).
-        if event.type() == QtCore.QEvent.Type.PaletteChange:
+        if (event.type() == QtCore.QEvent.Type.PaletteChange
+                and not self._applying_theme):
             self._apply_chrome_theme()
         super().changeEvent(event)
 
