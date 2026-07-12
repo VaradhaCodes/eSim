@@ -130,20 +130,38 @@ def test_nghdl_launcher_opens_vhdl_path():
 # Functional guard (needs a configured NGHDL install + headless Qt)
 # ---------------------------------------------------------------------------
 
+# Captured at import time: when this module is imported outside any test
+# (subset runs like `pytest src/maker`), HOME is still the real home, so this
+# points at the real installed config. In full-suite runs pytest imports the
+# module while another test's isolated_user_home is active; the config then
+# appears absent and the test below skips -- exactly as before.
+_REAL_NGHDL_CFG = os.path.join(os.path.expanduser("~"),
+                               ".nghdl", "config.ini")
+
+
 def _have_config():
-    cfg = os.path.join(os.path.expanduser("~"), ".nghdl", "config.ini")
-    return os.path.isfile(cfg) and os.path.getsize(cfg) > 0
+    return (os.path.isfile(_REAL_NGHDL_CFG)
+            and os.path.getsize(_REAL_NGHDL_CFG) > 0)
 
 
 @pytest.mark.skipif(not _have_config(),
                     reason="NGHDL not installed (~/.nghdl/config.ini absent)")
 def test_embedded_mainwindow_is_safe_widget(qapp):
+    import shutil
     import sys
     if _NGHDL_SRC not in sys.path:
         sys.path.append(_NGHDL_SRC)
     from PyQt6 import QtWidgets
     import Appconfig
     from ngspice_ghdl import Mainwindow
+
+    # The repo-wide isolated_user_home fixture points HOME at an empty temp
+    # dir, hiding the ~/.nghdl the skipif above verified. Mirror the real
+    # config into the isolated home so Mainwindow can construct against the
+    # actual install without the test ever writing to the real home.
+    cfgdir = os.path.join(os.path.expanduser("~"), ".nghdl")
+    os.makedirs(cfgdir, exist_ok=True)
+    shutil.copy(_REAL_NGHDL_CFG, os.path.join(cfgdir, "config.ini"))
 
     cwd_before = os.getcwd()
     win = Mainwindow(embedded=True)

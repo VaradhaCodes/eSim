@@ -14,6 +14,11 @@ from maker.hdl import icarus
 
 _IVERILOG = CosimConfig.iverilog_binary()
 _VVP = CosimConfig.vvp_binary()
+# Resolve the lib dir at import time, like the binaries above: at test run
+# time the repo-wide isolated_user_home fixture has re-pointed HOME, so a
+# run-time CosimConfig lookup finds no ~/.nghdl config and returns None --
+# and a source-built vvp then fails to dlopen libvvp (no LD_LIBRARY_PATH).
+_LIBDIR = CosimConfig.iverilog_libdir()
 needs_iverilog = pytest.mark.skipif(
     not _IVERILOG, reason="iverilog not installed")
 needs_sim = pytest.mark.skipif(
@@ -85,7 +90,7 @@ def test_compile_and_simulate_produces_vcd(tmp_path):
     assert res.ok, res.stderr
     sim = icarus.simulate(
         _VVP, res.out_path, str(tmp_path),
-        env=icarus.vvp_env(_VVP, libdir=CosimConfig.iverilog_libdir()))
+        env=icarus.vvp_env(_VVP, libdir=_LIBDIR))
     assert sim.ok, sim.stderr
     assert sim.vcd_path and os.path.isfile(sim.vcd_path)
 
@@ -94,7 +99,7 @@ def test_compile_and_simulate_produces_vcd(tmp_path):
 def test_build_and_simulate_orchestration(tmp_path):
     run = icarus.build_and_simulate(
         _IVERILOG, _VVP, [("counter.v", COUNTER), ("tb_design.v", TB)],
-        str(tmp_path), libdir=CosimConfig.iverilog_libdir())
+        str(tmp_path), libdir=_LIBDIR)
     assert run.ok, run.compile.stderr + ((run.sim.stderr) if run.sim else "")
     # VCD content is read on the worker side so the GUI never touches tmpdir.
     assert run.vcd_content and "$var" in run.vcd_content
