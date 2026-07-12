@@ -400,8 +400,11 @@ class ModelGeneration(QtWidgets.QWidget):
                 
         header_re = re.compile(r'module\s+\w+\s*\((.*?)\)\s*;', re.S)
         def _split_ports(match):
-            # add a newline after every comma that is inside the header
-            return match.group(0).replace(',', ',\n')
+            # hdlparse only recognises a port declaration at the start of a
+            # line, so put every header port on its own line: newline after
+            # the opening '(' (else the FIRST port -- still on the "module"
+            # line -- is silently dropped) and after every comma.
+            return match.group(0).replace('(', '(\n', 1).replace(',', ',\n')
         code = header_re.sub(_split_ports, code)
         vlog_ex = vlog.VerilogExtractor()
         vlog_mods = vlog_ex.extract_objects_from_source(code)
