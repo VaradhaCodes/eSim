@@ -1,0 +1,174 @@
+#!/bin/bash
+#=============================================================================
+#          FILE: bootstrap.sh
+#
+#         USAGE: curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubuntu/bootstrap.sh | bash
+#                curl -fsSL .../bootstrap.sh | bash -s -- --uninstall
+#                curl -fsSL .../bootstrap.sh | bash -s -- --dry-run
+#
+#   DESCRIPTION: One-line bootstrap for the eSim Ubuntu installer. The eSim
+#                source tree IS the installed application (the launcher runs
+#                src/frontEnd/Application.py out of it), so this script
+#                downloads the tree to a durable location ($ESIM_DIR, default
+#                ~/eSim) and hands off to Ubuntu/install-eSim.sh there. ALL
+#                install/uninstall logic lives in install-eSim.sh — this
+#                script only fetches, locates and dispatches, so the zip and
+#                curl install paths can never drift apart.
+#
+#                Re-running the one-liner updates a bootstrap-managed tree in
+#                place (user-built NgVeri/NGHDL model XML is preserved); a
+#                git checkout or hand-extracted zip at $ESIM_DIR is reused
+#                as-is and never overwritten.
+#
+#     OVERRIDES: ESIM_DIR    where the eSim tree lives   (default ~/eSim)
+#                ESIM_BRANCH branch/tag to download      (default windows-test)
+#                ESIM_REPO   GitHub owner/repo           (default VaradhaCodes/eSim)
+#=============================================================================
+set -euo pipefail
+
+ESIM_REPO="${ESIM_REPO:-VaradhaCodes/eSim}"
+ESIM_BRANCH="${ESIM_BRANCH:-windows-test}"
+ESIM_DIR="${ESIM_DIR:-$HOME/eSim}"
+MARKER=".esim-bootstrap"          # stamped only on trees THIS script created
+
+log() { echo -e "\n>>> $*"; }
+die() { echo -e "\n[ERROR] $*\n" >&2; exit 1; }
+
+_tmpdirs=()
+cleanup() { rm -rf "${_tmpdirs[@]}" 2>/dev/null || true; }
+trap cleanup EXIT
+
+is_esim_tree() {
+    [ -f "$1/VERSION" ] && [ -d "$1/src" ] && [ -f "$1/Ubuntu/install-eSim.sh" ]
+}
+
+# install/uninstall prompt for proxy, sudo password, IHP, etc. Under
+# `curl | bash` stdin is the script pipe, so those reads must come from the
+# terminal instead.
+require_tty() {
+    { : < /dev/tty; } 2>/dev/null \
+        || die "No terminal available for the installer's prompts.
+       Run this from an interactive terminal (not cron/CI)."
+}
+
+# Download the eSim source tarball and extract it into a scratch dir NEXT TO
+# $ESIM_DIR (the tree is ~700 MB — /tmp is often a small tmpfs, and a same-
+# filesystem mv into place is instant). Sets FETCHED_TREE to the tree's path.
+FETCHED_TREE=""
+fetch_tree() {
+    local tmp sub
+    mkdir -p "$(dirname "$ESIM_DIR")"
+    tmp=$(mktemp -d "$(dirname "$ESIM_DIR")/.esim-download-XXXXXX")
+    _tmpdirs+=("$tmp")
+    log "Downloading eSim ($ESIM_REPO @ $ESIM_BRANCH) — several hundred MB," \
+        "this can take a while"
+    curl -fL --progress-bar \
+        "https://codeload.github.com/$ESIM_REPO/tar.gz/refs/heads/$ESIM_BRANCH" \
+        | tar -xz -C "$tmp" \
+        || die "Download or extraction failed. Check your connection and that
+       branch '$ESIM_BRANCH' exists at https://github.com/$ESIM_REPO"
+    sub=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+    [ -n "$sub" ] && is_esim_tree "$sub" \
+        || die "Downloaded archive does not look like an eSim source tree."
+    printf 'repo=%s\nbranch=%s\ndate=%s\n' \
+        "$ESIM_REPO" "$ESIM_BRANCH" "$(date -Is)" > "$sub/$MARKER"
+    FETCHED_TREE="$sub"
+}
+
+# Make sure a usable eSim tree exists at $ESIM_DIR (download/refresh as
+# needed) — used by --install and --dry-run.
+ensure_tree() {
+    local fresh keep d
+    if is_esim_tree "$ESIM_DIR"; then
+        if [ -d "$ESIM_DIR/.git" ]; then
+            log "Reusing the git checkout at $ESIM_DIR (left untouched —" \
+                "use git to update it)"
+        elif [ -f "$ESIM_DIR/$MARKER" ]; then
+            log "Updating the bootstrap-managed eSim tree at $ESIM_DIR"
+            fetch_tree; fresh="$FETCHED_TREE"
+            # Keep the user's runtime-built NgVeri/NGHDL model XML: eSim
+            # writes it into the tree, and their symbols/models in ~/.esim
+            # would dangle without it.
+            keep=$(mktemp -d)
+            _tmpdirs+=("$keep")
+            for d in Nghdl Ngveri; do
+                [ -d "$ESIM_DIR/library/modelParamXML/$d" ] \
+                    && cp -a "$ESIM_DIR/library/modelParamXML/$d" "$keep/"
+            done
+            rm -rf "$ESIM_DIR"
+            mv "$fresh" "$ESIM_DIR"
+            for d in Nghdl Ngveri; do
+                [ -d "$keep/$d" ] \
+                    && cp -a "$keep/$d/." "$ESIM_DIR/library/modelParamXML/$d/"
+            done
+        else
+            log "Reusing the existing eSim tree at $ESIM_DIR (not managed by" \
+                "this script — delete it or set ESIM_DIR for a fresh copy)"
+        fi
+    elif [ -e "$ESIM_DIR" ]; then
+        die "$ESIM_DIR exists but is not an eSim source tree.
+       Move it aside, or point ESIM_DIR at another location:
+       curl ... | ESIM_DIR=\$HOME/esim-app bash"
+    else
+        fetch_tree; fresh="$FETCHED_TREE"
+        mv "$fresh" "$ESIM_DIR"
+        log "eSim source installed at $ESIM_DIR (keep this directory — the" \
+            "application runs from it)"
+    fi
+}
+
+# For --uninstall: find the tree the current install actually points at.
+# Priority: the recorded eSim_HOME in ~/.esim/config.ini, then $ESIM_DIR.
+find_installed_tree() {
+    local cfg="$HOME/.esim/config.ini" home="" d
+    [ -f "$cfg" ] && home=$(sed -n 's/^eSim_HOME[[:space:]]*=[[:space:]]*//p' "$cfg" | head -n 1)
+    for d in "$home" "$ESIM_DIR"; do
+        if [ -n "$d" ] && is_esim_tree "$d"; then
+            echo "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+main() {
+    local action="${1:---install}" tree
+    case "$action" in
+        --install|--uninstall|--dry-run) ;;
+        *) die "Unknown option: $action
+       Usage: curl ... | bash [-s -- --install | --uninstall | --dry-run]" ;;
+    esac
+
+    [ "$(id -u)" -eq 0 ] \
+        && die "Run as a normal user, not root — the installer calls sudo itself."
+    grep -qs '^ID=ubuntu' /etc/os-release \
+        || die "This bootstrap supports Ubuntu only (see INSTALL for other platforms)."
+    command -v curl >/dev/null || die "curl is required."
+
+    case "$action" in
+        --install)
+            require_tty
+            ensure_tree
+            log "Handing off to install-eSim.sh --install"
+            ( cd "$ESIM_DIR" && bash Ubuntu/install-eSim.sh --install < /dev/tty )
+            ;;
+        --dry-run)
+            ensure_tree
+            ( cd "$ESIM_DIR" && bash Ubuntu/install-eSim.sh --dry-run < /dev/null )
+            ;;
+        --uninstall)
+            require_tty
+            if tree=$(find_installed_tree); then
+                log "Uninstalling via $tree"
+            else
+                # Tree already deleted — the uninstaller only needs the
+                # script itself, so run it from a throwaway download.
+                log "No local eSim tree found — fetching one just to run its uninstaller"
+                fetch_tree; tree="$FETCHED_TREE"
+            fi
+            ( cd "$tree" && bash Ubuntu/install-eSim.sh --uninstall < /dev/tty )
+            ;;
+    esac
+}
+
+main "$@"

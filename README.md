@@ -18,6 +18,16 @@ eSim is released for the following operating systems:
 * Ubuntu 24.04 LTS and 26.04 LTS (23.04 / 25.04 best-effort) — native installer
 * Microsoft Windows 10 and 11
 
+**Ubuntu quick install** — paste this in a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubuntu/bootstrap.sh | bash
+```
+
+(Downloads eSim to `~/eSim` and runs the installer. Re-run the same line to
+update; add `-s -- --uninstall` to remove it. Prefer a manual download? The
+zip flow in [INSTALL](INSTALL) runs the exact same installer.)
+
 Please refer to [downloads](https://esim.fossee.in/downloads) for installers and guidelines.
 
 See [INSTALL](INSTALL) for detailed installation instructions for all platforms.

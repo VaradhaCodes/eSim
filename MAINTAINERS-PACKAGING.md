@@ -10,6 +10,14 @@ There are two artifacts per release:
 2. `eSim-<VERSION>-installer.exe` — built on a Windows box with
    `windows\build-windows.ps1`
 
+There is also a zero-download-page install path for Ubuntu:
+`Ubuntu/bootstrap.sh`, served raw from GitHub as a `curl | bash` one-liner
+(see README/INSTALL). It fetches the branch tarball to `~/eSim` and execs
+`Ubuntu/install-eSim.sh` there — it contains NO install logic of its own, so
+it needs no per-release work beyond keeping its default `ESIM_BRANCH`/
+`ESIM_REPO` pointed at the branch users should get (currently
+`windows-test`; flip to the release branch/`master` when this work merges).
+
 ---
 
 ## 0. Pre-flight

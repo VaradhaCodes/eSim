@@ -15,6 +15,21 @@ Table of contents
     One unified installer auto-detects the Ubuntu version — there are no
     per-version scripts to pick.
 
+    Quick install (one line, no manual download)
+    --------------------------------------------
+    Open a terminal and paste:
+
+        $ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubuntu/bootstrap.sh | bash
+
+    This downloads eSim to ~/eSim and runs the same installer described
+    below. Re-running the line later updates eSim in place (your built
+    models are kept). It can also uninstall or preview:
+
+        $ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubuntu/bootstrap.sh | bash -s -- --uninstall
+        $ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubuntu/bootstrap.sh | bash -s -- --dry-run
+
+    Manual install (downloaded zip)
+    -------------------------------
    	i.      After downloading eSim, extract it using:
 
    		       $ unzip eSim-2.5-ubuntu.zip
