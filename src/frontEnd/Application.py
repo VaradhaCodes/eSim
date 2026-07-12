@@ -1525,6 +1525,38 @@ def _install_excepthook():
     sys.excepthook = hook
 
 
+#: Kept alive for the whole session: faulthandler writes into this handle from
+#: a signal/exception context, so it must outlive the function that opened it.
+_crash_log_file = None
+
+
+def _install_crash_log():
+    """Leave a stack trace behind when the process dies *natively*.
+
+    ``sys.excepthook`` only ever sees Python exceptions. A C-stack overflow
+    (an event handler that re-raises the event it handles: changeEvent ->
+    setStyleSheet -> PaletteChange -> changeEvent ...) or a sip use-after-free
+    kills the process outright -- under pythonw that means the window simply
+    disappears, leaving nothing to debug from. faulthandler catches those at
+    the OS level, so the trace lands in ~/.esim/crash.log instead.
+    """
+    global _crash_log_file
+    try:
+        import faulthandler
+        from datetime import datetime
+        os.makedirs(paths.esim_config_dir(), exist_ok=True)
+        _crash_log_file = open(
+            paths.esim_config_path('crash.log'), 'a', encoding='utf-8')
+        _crash_log_file.write(
+            '\n=== eSim session %s ===\n' % datetime.now().isoformat())
+        _crash_log_file.flush()
+        # all_threads: a crash in a worker (ngspice reader, plot thread) is
+        # just as fatal, and its stack is the one worth having.
+        faulthandler.enable(file=_crash_log_file, all_threads=True)
+    except Exception:
+        pass
+
+
 def _app_teardown(apply_theme_slot=None):
     """Quiesce animation/timer/figure state at exit BEFORE Qt frees the widgets
     those callbacks touch -- the ordering that avoids the recurring sip
@@ -1607,6 +1639,8 @@ def main(args):
     except OSError:
         pass
     _stage('interpreter up, excepthook installed')
+
+    _install_crash_log()
 
     # Startup watchdog: under pythonw a wedged startup is just a frozen
     # splash with zero diagnostics. If startup is still running after 25s,
