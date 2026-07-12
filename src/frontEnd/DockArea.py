@@ -1036,7 +1036,15 @@ class DockArea(QtWidgets.QMainWindow):
 
     def _return_to_verify(self, source_dock, flow):
         """Bring the Model Creation dock that owns this plot forward and select
-        its Verify stage."""
+        its Verify stage.
+
+        The wave tab outlives its source dock: closing Model Creation deletes
+        that dock (WA_DeleteOnClose) while the plot tab it spawned stays open,
+        still holding this reference. Closing the plot afterwards -- or hitting
+        "Back to Verify" -- would then touch a freed QDockWidget, so check the
+        dock is still alive first, exactly as _live_tool_dock does."""
+        if sip.isdeleted(source_dock):
+            return
         try:
             flow.goto_verify()
         except Exception:
