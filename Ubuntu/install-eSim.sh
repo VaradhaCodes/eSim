@@ -255,8 +255,11 @@ copyKicadLibrary() {
     # --- Static libs: the 14 eSim never rewrites go into KiCad's own dir and
     #     stay ROOT-OWNED. No chown here: the old chown -R of the whole symbols
     #     dir hijacked ownership of KiCad's standard libraries.
+    # --chown/--chmod: plain `sudo rsync -a` preserves the SOURCE owner/mode,
+    # i.e. the user's repo checkout — leaving user-owned, group-writable files
+    # in /usr/share. Force the root-owned 644 a system dir is supposed to have.
     sudo mkdir -p /usr/share/kicad/symbols
-    sudo rsync -a \
+    sudo rsync -a --chown=root:root --chmod=D755,F644 \
         --exclude='eSim_Ngveri.kicad_sym' \
         --exclude='eSim_NgVeriCosim.kicad_sym' \
         --exclude='eSim_Nghdl.kicad_sym' \
@@ -442,6 +445,10 @@ uninstall_eSim() {
     # already cleared by the "$HOME/.esim" removal at the top of this function.
     sudo rm -f /usr/share/kicad/symbols/eSim_*.kicad_sym \
                /usr/share/kicad/symbols/eSim_*.lib 2>/dev/null || true
+    # Drop the now-empty dirs our mkdir -p created; --ignore-fail-on-non-empty
+    # keeps this a no-op if KiCad (or anything else) still owns files there.
+    sudo rmdir --ignore-fail-on-non-empty /usr/share/kicad/symbols \
+               /usr/share/kicad 2>/dev/null || true
     sudo rm -f /etc/apt/sources.list.d/kicad* 2>/dev/null || true
 
     log "Removing SKY130 PDK"

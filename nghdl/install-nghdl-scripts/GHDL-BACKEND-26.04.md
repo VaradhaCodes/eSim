@@ -102,3 +102,29 @@ install_dir/bin/ngspice -b <testbench>.cir.out
 the nghdl block. The eSim code, the new KiCad netlister, and local patches were
 all correct — the box just had the wrong GHDL backend from a tarball-era
 install. Captured here so it does not bite us again at package time.*
+
+---
+
+## Addendum — Ubuntu 24.04: ghdl-llvm installs fine but cannot compile
+
+Found 2026-07-12 running the U10 checklist on a clean 24.04 VM.
+
+On noble, `ghdl-llvm 4.1.0+dfsg-0ubuntu2.1` is **broken as shipped**: its
+backend binary requests the soname `libLLVM-18.so.18.1`, but noble's
+`libllvm18` ships the library as `libLLVM.so.18.1` (no compat symlink):
+
+```
+/usr/lib/ghdl/llvm/ghdl1-llvm: error while loading shared libraries:
+libLLVM-18.so.18.1: cannot open shared object file
+```
+
+The trap: `ghdl --version` works (it only runs the driver), the installer's
+mcode check passes, and the failure surfaces later as a VHDL co-sim that
+hangs at `Client-Initialising GHDL...` — the server compile dies before
+listening, so it looks exactly like the mcode symptom above.
+
+`install-nghdl.sh` now runs `ghdl_smoke` (analyze+elaborate a scratch
+entity) after installing GHDL and falls back to **`ghdl-gcc`** when the
+compile fails; the `/usr/bin/ghdl` wrapper auto-selects gcc over llvm, and
+the gcc backend links `-Wl,ghdlserver.o` fine. Do not "simplify" the smoke
+test away: a --version check cannot catch this class of breakage.

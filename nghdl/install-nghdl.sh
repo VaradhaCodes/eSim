@@ -148,6 +148,22 @@ installDependency() {
     installGHDL
 }
 
+# Prove the active ghdl can actually COMPILE, not just print --version.
+# `ghdl --version` only exercises the driver: on Ubuntu 24.04 ghdl-llvm
+# installs cleanly but its backend (/usr/lib/ghdl/llvm/ghdl1-llvm) needs
+# libLLVM-18.so.18.1, a soname noble's libllvm18 renamed to libLLVM.so.18.1
+# — so every analyze fails at run time while every install-time check passed.
+ghdl_smoke() {
+    local d rc
+    d=$(mktemp -d)
+    printf 'entity t is end t;\narchitecture a of t is begin end a;\n' \
+        > "$d/t.vhdl"
+    ( cd "$d" && ghdl -a t.vhdl && ghdl -e t ) >/dev/null 2>&1
+    rc=$?
+    rm -rf "$d"
+    return $rc
+}
+
 # Install GHDL with a non-mcode backend and prove it.
 installGHDL() {
     log "Installing GHDL (llvm/gcc backend; never mcode)"
@@ -182,7 +198,25 @@ installGHDL() {
         echo "       Try: export GHDL_BACKEND=llvm  (or install ghdl-llvm/ghdl-gcc)"
         exit 1
     fi
-    log "ghdl: $(ghdl --version 2>/dev/null | head -n1)"
+
+    # Compile smoke test. Catches ghdl-llvm's broken libLLVM dependency on
+    # 24.04 (see ghdl_smoke above): fall back to the gcc backend, which the
+    # /usr/bin/ghdl wrapper then auto-selects (its order is mcode->gcc->llvm
+    # and mcode is kept out above).
+    if ! ghdl_smoke; then
+        warn "ghdl is installed but cannot compile VHDL (broken backend"
+        warn "dependency — known for ghdl-llvm on Ubuntu 24.04)."
+        warn "Installing ghdl-gcc as the working backend."
+        sudo apt-get install -y ghdl-gcc
+        if ! ghdl_smoke; then
+            echo "ERROR: no working GHDL backend: both llvm and gcc failed to"
+            echo "       compile a trivial entity. Check 'ghdl -a' output by"
+            echo "       hand: printf 'entity t is end t;\\narchitecture a of"
+            echo "       t is begin end a;\\n' > t.vhdl && ghdl -a t.vhdl"
+            exit 1
+        fi
+    fi
+    log "ghdl: $(ghdl --version 2>/dev/null | head -n1) (compile smoke test passed)"
 }
 
 installNGHDL() {
@@ -352,6 +386,11 @@ selfCheck() {
     if ghdl --version 2>/dev/null | grep -qi 'mcode'; then
         warn "GHDL backend is mcode - nghdl simulation will fail (see"
         warn "install-nghdl-scripts/GHDL-BACKEND-26.04.md)"
+        bad=1
+    fi
+    if ! ghdl_smoke; then
+        warn "ghdl cannot compile a trivial entity (broken backend) - VHDL"
+        warn "co-simulation will hang at 'Client-Initialising GHDL...'"
         bad=1
     fi
 

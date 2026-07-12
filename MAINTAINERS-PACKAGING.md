@@ -141,6 +141,38 @@ W1–W13 still need the first real Windows run.
   argument order has a pre-existing test-ordering flake in
   `test_model_cache.py` (passes alone and in full-suite order)
 
+### Results — 2026-07-12 Ubuntu 24.04 VM run (Fable session)
+
+Ran U4–U13 on a 24.04.4 VirtualBox VM (the 26.04 sweep runs on its own VM):
+
+* U1 ✅ 435 passed / 8 skipped after fixes; the `test_model_cache.py`
+  "ordering flake" noted above was actually a HOME-isolation bug in the test
+  (module-level `_TMP_HOME` vs the repo-wide `isolated_user_home` fixture) —
+  fixed, passes in every order now
+* U2 ✅ `bash -n` + `--dry-run` correct on the 24.04 profile
+* U4 ✅ clean install; second full pass after U13's purge also green
+* U6 ✅ GUI up on the live desktop 30 s, themed, Qsci/QtSvg import
+* U7 ✅ BJT_amplifier: 1008 rows, gain ≈ 20×
+* U8 ✅ NgVeri counter model: Ngveri.cm rebuilt, symbol in eSim_Ngveri
+* U9 ✅ verifier engine compile+sim+VCD parse via source-built iverilog
+* U10 ✅ and_gate VHDL co-sim: socket handshake, 194 rows, truth table clean
+  on steady-state samples — **after** the ghdl-gcc fallback fix below
+* U11 ✅ after fixing `sudo rsync -a` source-ownership leak (`--chown=root:root`)
+* U12 ✅ eSim_Ngveri.kicad_sym byte-identical across reinstall
+* U13 ✅ no leftovers, KiCad removed by package purge only
+
+24.04-specific findings fixed this run:
+
+1. **Qt 6.4**: noble ships Qt 6.4.2; `QStyleHints.colorScheme()` /
+   `colorSchemeChanged` are Qt ≥ 6.5. Added `theme_utils.system_is_dark()`
+   (gsettings → palette fallback) and guarded the signal hookup.
+2. **ghdl-llvm broken as shipped on noble**: backend wants
+   `libLLVM-18.so.18.1`, noble's libllvm18 ships `libLLVM.so.18.1`.
+   `install-nghdl.sh` now compile-smoke-tests GHDL and falls back to
+   ghdl-gcc (see the addendum in install-nghdl-scripts/GHDL-BACKEND-26.04.md).
+3. `StandardKey.SaveAs` unbound on the Qt 6.4 fallback theme — pinned
+   Ctrl+Shift+S in the Verilog Verifier.
+
 ## 5. When a code change adds a dependency or data file
 
 | The change adds… | You must edit |
