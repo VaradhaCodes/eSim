@@ -1516,10 +1516,14 @@ QToolButton#verifierFileBtn {
     border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 rgba(0,119,168,0.18), stop:1 rgba(109,93,246,0.10));
     border-radius: 10px;
-    padding: 8px 14px;
+    /* Right padding is a reserved lane for the drop arrow: the label centres
+       inside the content rect, so a symmetric padding would push "File" into
+       the indicator that ::menu-indicator pins to the right edge. */
+    padding: 8px 28px 8px 16px;
     font-weight: 600;
     font-size: 13px;
     min-height: 32px;
+    min-width: 62px;
 }
 
 QToolButton#verifierFileBtn:hover {
@@ -1529,10 +1533,23 @@ QToolButton#verifierFileBtn:hover {
     color: #005E86;
 }
 
+/* InstantPopup keeps the button sunken while the menu is open; without this it
+   fell back to the native pressed look mid-interaction. */
+QToolButton#verifierFileBtn:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(0,119,168,0.10), stop:1 rgba(109,93,246,0.06));
+    border-color: rgba(0,119,168,0.48);
+}
+
+QToolButton#verifierFileBtn:focus {
+    border-color: #0077A8;
+}
+
 QToolButton#verifierFileBtn::menu-indicator {
     subcontrol-origin: padding;
     subcontrol-position: center right;
-    right: 6px;
+    right: 10px;
+    width: 10px;
 }
 
 /* Console "Copy" lives in the tab-bar corner. Strip back to a quiet text
