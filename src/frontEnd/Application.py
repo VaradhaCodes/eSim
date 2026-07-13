@@ -1079,16 +1079,16 @@ class Application(QtWidgets.QMainWindow):
 
     def help_project(self):
         """
-        This function opens usermanual in dockarea.
+        This function opens the user manual in the system viewer / browser.
             - It prints the message ""Function : Help""
             - Uses print_info() method of class Appconfig
               from Configuration/Appconfig.py file.
-            - Call method usermanual() from ./DockArea.py.
         """
         print("Function : Help")
         self.obj_appconfig.print_info('Help is called')
         print("Current Project is : ", self.obj_appconfig.current_project)
-        self.obj_Mainview.obj_dockarea.usermanual()
+        from browser.UserManual import open_user_manual
+        open_user_manual(self)
 
     def dev_docs(self):
         """

@@ -69,21 +69,10 @@ def test_qt_side_deletion_is_detected(qapp):
         qapp.processEvents()
 
 
-def test_usermanual_is_single_instance(qapp):
-    da = DockArea()
-    try:
-        da.usermanual()
-        first = da._live_tool_dock('user-manual')
-        assert first is not None
-        assert _tool_dock_count(da, 'User Manual-') == 1
-
-        # Second click raises the same dock instead of stacking another.
-        da.usermanual()
-        assert da._live_tool_dock('user-manual') is first
-        assert _tool_dock_count(da, 'User Manual-') == 1
-    finally:
-        da.deleteLater()
-        qapp.processEvents()
+def test_usermanual_mounts_no_dock():
+    # Help hands the manual to the system viewer/browser, so it has no in-app
+    # surface: the old dock was an always-empty tab. Nothing may mount one.
+    assert not hasattr(DockArea, 'usermanual')
 
 
 def test_esim_converter_is_single_instance(qapp):

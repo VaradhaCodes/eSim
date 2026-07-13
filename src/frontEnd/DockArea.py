@@ -20,7 +20,6 @@ import os
 #   subcircuiteditor    -> subcircuit.Subcircuit.Subcircuit
 #   makerchip           -> maker.makerchip.makerchip
 #   kicadToNgspiceEditor-> kicadtoNgspice.KicadtoNgspice.MainWindow
-#   usermanual          -> browser.UserManual.UserManual
 #   modelicaEditor      -> ngspicetoModelica.ModelicaUI.OpenModelicaEditor
 #   eSimConverter       -> converter.*
 
@@ -276,8 +275,8 @@ class DockArea(QtWidgets.QMainWindow):
         The holder is the dock's *direct* child, so FullScreenToggle (which
         reparents the dock's direct child) carries the whole card in and out of
         fullscreen and the look survives the round-trip. The card is a plain
-        QFrame with no graphics effect, so QWebEngineView tools (Makerchip /
-        User Manual) keep rendering."""
+        QFrame with no graphics effect, so QWebEngineView tools (Makerchip)
+        keep rendering."""
         if not dock_widget.objectName():
             dock_widget.setObjectName(dock_widget.windowTitle() or "dock")
 
@@ -1051,40 +1050,6 @@ class DockArea(QtWidgets.QMainWindow):
             pass
         source_dock.setVisible(True)
         source_dock.raise_()
-
-    def usermanual(self):
-        """This function creates a widget for user manual."""
-        # Single instance: help is stateless -- just raise the open tab.
-        existing = self._live_tool_dock('user-manual')
-        if existing is not None:
-            self._focus_dock(existing)
-            return
-
-        from browser.UserManual import UserManual
-        self.usermanualWidget = QtWidgets.QWidget()
-        usermanual_widget = UserManual()
-        self.usermanualLayout = QtWidgets.QVBoxLayout()
-        self.usermanualLayout.addWidget(usermanual_widget)
-
-        self.usermanualWidget.setLayout(self.usermanualLayout)
-        self._docks['User Manual-' +
-             str(self._count)] = QtWidgets.QDockWidget('User Manual-' + str(self._count))
-        self.apply_fullscreen_feature(
-            self._docks['User Manual-' + str(self._count)], self.usermanualWidget)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
-                           self._docks['User Manual-' + str(self._count)])
-        self.tabifyDockWidget(self._docks['Welcome'],
-                              self._docks['User Manual-' + str(self._count)])
-
-        self._register_tool_dock(
-            'user-manual', None,
-            self._docks['User Manual-' + str(self._count)], usermanual_widget)
-
-        self._docks['User Manual-' + str(self._count)].setVisible(True)
-        self._docks['User Manual-' + str(self._count)].setFocus()
-        self._docks['User Manual-' + str(self._count)].raise_()
-
-        self._count = self._count + 1
 
     def modelicaEditor(self, projDir):
         """This function sets up the UI for ngspice to modelica conversion."""
