@@ -2,12 +2,25 @@
 #=============================================================================
 #          FILE: make-release.sh
 #
-#         USAGE: ./make-release.sh
+#         USAGE: ./make-release.sh [<ref>]     # default: HEAD
+#                ./make-release.sh origin/windows-test
+#                ./make-release.sh --dirty     # include uncommitted edits
 #
-#   DESCRIPTION: Freeze the CURRENT eSim working tree (including any local,
-#                uncommitted changes) into a versioned, self-contained release
-#                zip for Ubuntu — the artifact users download and install,
-#                instead of cloning a moving master.
+#   DESCRIPTION: Freeze a COMMITTED eSim tree into a versioned, self-contained
+#                release zip for Ubuntu — the artifact users download and
+#                install, instead of cloning a moving master.
+#
+#                What lands in the zip is decided by ONE file: .gitattributes.
+#                This script builds the payload with `git archive`, and so does
+#                GitHub when Ubuntu/bootstrap.sh curls the branch tarball —
+#                both honour `export-ignore`, so the zip and the curl install
+#                can never ship a different set of files. Add an exclusion
+#                there, not here.
+#
+#                Building from a commit (not the working tree) is deliberate:
+#                a release must never pick up half-finished local edits or
+#                stray files sitting in the checkout. Pass --dirty to override
+#                that for a local test build.
 #
 #                Output layout matches the FOSSEE release convention so the
 #                same artifact also feeds the Windows packaging pipeline:
@@ -28,14 +41,35 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$repo"
 
-command -v rsync >/dev/null || { echo "ERROR: rsync required"; exit 1; }
-command -v zip   >/dev/null || { echo "ERROR: zip required (sudo apt install zip)"; exit 1; }
+command -v zip >/dev/null || { echo "ERROR: zip required (sudo apt install zip)"; exit 1; }
+git rev-parse --is-inside-work-tree &>/dev/null \
+    || { echo "ERROR: not a git checkout — make-release.sh archives a commit"; exit 1; }
+
+# Resolve what we are packaging.
+#
+# --dirty: `git stash create` bottles the working tree up as a real (dangling)
+# commit, so uncommitted edits go through the exact same `git archive` filter
+# as everything else. Untracked files stay out either way — that is the point.
+ref="${1:-HEAD}"
+dirty=""
+if [ "$ref" = "--dirty" ]; then
+    ref="$(git stash create)" || true
+    if [ -n "$ref" ]; then
+        dirty=" + uncommitted changes"
+    else
+        ref="HEAD"    # nothing to stash; tree is clean
+    fi
+fi
+git rev-parse --verify --quiet "$ref^{commit}" >/dev/null \
+    || { echo "ERROR: '$ref' is not a commit"; exit 1; }
+
+if [ -z "$dirty" ] && [ -n "$(git status --porcelain)" ]; then
+    echo ">>> NOTE: working tree has local changes; they are NOT in this build."
+    echo "          (packaging $ref — pass --dirty to include them)"
+fi
 
 VERSION="$(cat VERSION 2>/dev/null || echo 0.0)"
-commit="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-dirty=""
-git rev-parse --is-inside-work-tree &>/dev/null \
-    && [ -n "$(git status --porcelain 2>/dev/null)" ] && dirty=" + local changes"
+commit="$(git rev-parse --short "$ref")"
 date_str="$(date -u +%Y-%m-%d)"
 
 name="eSim-${VERSION}"
@@ -45,33 +79,14 @@ top="$stage/$name"
 mkdir -p "$top" "$out"
 trap 'rm -rf "$stage"' EXIT
 
-echo ">>> Snapshotting working tree -> $name"
-# Snapshot the WORKING TREE (captures committed AND uncommitted state — this is
-# the point of "freeze what is here right now"). Exclude VCS/build/editor cruft
-# AND regeneratable ngspice simulation outputs that accumulate from running the
-# bundled examples (they balloon library/ from ~100M to ~650M; eSim recreates
-# them on demand). This is what keeps the release ~60-80M like the official 2.5.
-rsync -a \
-    --exclude='.git' \
-    --exclude='dist' \
-    --exclude='windows/build' \
-    --exclude='windows/downloads' \
-    --exclude='__pycache__' \
-    --exclude='*.py[co]' \
-    --exclude='*.egg-info' \
-    --exclude='.pytest_cache' \
-    --exclude='.mypy_cache' \
-    --exclude='.DS_Store' \
-    --exclude='node_modules' \
-    --exclude='*.raw' \
-    --exclude='plot_data_*.txt' \
-    --exclude='library/subcircuitLibrary' \
-    "$repo/" "$top/"
+echo ">>> Exporting $ref -> $name (excludes come from .gitattributes)"
+git archive "$ref" | tar -x -C "$top"
 
 echo ">>> Flattening installer to release root"
 # Release convention puts install-eSim.sh at the top level. The unified
 # installer resolves the eSim root from its own location, so dropping the
-# Ubuntu/ wrapper dir is safe.
+# Ubuntu/ wrapper dir is safe. bootstrap.sh is a curl-path entry point and has
+# no job inside an already-downloaded zip.
 if [ -f "$top/Ubuntu/install-eSim.sh" ]; then
     cp "$top/Ubuntu/install-eSim.sh" "$top/install-eSim.sh"
     chmod +x "$top/install-eSim.sh"
@@ -95,7 +110,7 @@ version    : $VERSION
 git_commit : $commit$dirty
 built      : $date_str (UTC)
 target     : Ubuntu 23.04 / 24.04 / 25.04 / 26.04
-installer  : unified (install-eSim.sh --install | --uninstall)
+installer  : unified (./install-eSim.sh --install | --uninstall)
 EOF
 
 final="$out/${name}-ubuntu.zip"
