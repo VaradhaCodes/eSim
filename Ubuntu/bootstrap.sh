@@ -60,13 +60,25 @@ fetch_tree() {
     mkdir -p "$(dirname "$ESIM_DIR")"
     tmp=$(mktemp -d "$(dirname "$ESIM_DIR")/.esim-download-XXXXXX")
     _tmpdirs+=("$tmp")
-    log "Downloading eSim ($ESIM_REPO @ $ESIM_BRANCH) — several hundred MB," \
+    # ESIM_BRANCH may name a branch OR a release tag (a tag is what pins an
+    # install to one reviewed commit), and the two live under different refs,
+    # so ask GitHub which exists rather than guessing. Tags are tried FIRST:
+    # this repo carries both a v2.4 branch and a v2.4 tag, and someone who
+    # passes a version number wants the release, not a stale branch of that name.
+    local base="https://codeload.github.com/$ESIM_REPO/tar.gz/refs" url=""
+    for ref in "tags/$ESIM_BRANCH" "heads/$ESIM_BRANCH"; do
+        if curl -fsIL -o /dev/null "$base/$ref" 2>/dev/null; then
+            url="$base/$ref"
+            break
+        fi
+    done
+    [ -n "$url" ] || die "No branch or tag '$ESIM_BRANCH' at https://github.com/$ESIM_REPO"
+
+    log "Downloading eSim ($ESIM_REPO @ $ESIM_BRANCH) — a couple hundred MB," \
         "this can take a while"
-    curl -fL --progress-bar \
-        "https://codeload.github.com/$ESIM_REPO/tar.gz/refs/heads/$ESIM_BRANCH" \
-        | tar -xz -C "$tmp" \
+    curl -fL --progress-bar "$url" | tar -xz -C "$tmp" \
         || die "Download or extraction failed. Check your connection and that
-       branch '$ESIM_BRANCH' exists at https://github.com/$ESIM_REPO"
+       '$ESIM_BRANCH' exists at https://github.com/$ESIM_REPO"
     sub=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)
     [ -n "$sub" ] && is_esim_tree "$sub" \
         || die "Downloaded archive does not look like an eSim source tree."
