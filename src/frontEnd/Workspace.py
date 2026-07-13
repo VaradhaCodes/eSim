@@ -49,6 +49,15 @@ class Workspace(QtWidgets.QDialog):
         self.setModal(True)
         self.setMinimumWidth(520)
 
+        # On first run this picker is the ONLY visible window (the main
+        # window is built hidden, the splash is already closed). Since Qt 6.3
+        # QDialog.done() calls close(), so accepting the dialog fired
+        # lastWindowClosed and quitOnLastWindowClosed exited the event loop:
+        # clicking EITHER button silently killed eSim on a fresh install.
+        # The picker must never drive the application's lifetime -- reject()
+        # below decides explicitly what a first-run cancel means.
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_QuitOnClose, False)
+
         # Window icon
         logo = paths.image_path('logo.png')
         if os.path.exists(logo):
@@ -175,12 +184,37 @@ class Workspace(QtWidgets.QDialog):
         view.showMaximized()
 
     # ------------------------------------------------------------------ slots
+    def reject(self):
+        """Closing the picker without choosing (X button, Esc).
+
+        With WA_QuitOnClose off, Qt no longer quits for us -- decide here:
+        on first run (main window never shown yet) there is no workspace to
+        work in, so cancelling the picker exits eSim. From the toolbar's
+        change-workspace flow the main window is visible and the cancel just
+        closes the dialog.
+        """
+        super().reject()
+        view = self._app_view
+        if view is not None and not view.isVisible():
+            QtWidgets.QApplication.quit()
+
     def defaultWorkspace(self):
         """User picked the default workspace — use it and close."""
-        self.obj_appconfig.print_info(
-            'Default workspace selected: '
-            + self.obj_appconfig.default_workspace["workspace"]
-        )
+        path = self.obj_appconfig.default_workspace["workspace"]
+
+        # Same persistence contract as createWorkspace: honour the "use this
+        # workspace by default" checkbox so the next launch can skip the
+        # picker. Before this, only the custom-folder button ever wrote
+        # workspace.txt and "Use default" asked again on every launch.
+        self.obj_appconfig.workspace_check = self.chkbox.checkState().value
+        paths.workspace_is_usable(path)   # best effort: pre-create the folder
+        try:
+            paths.write_workspace(self.obj_appconfig.workspace_check, path)
+        except OSError as e:
+            # Non-fatal: the workspace still works for this session.
+            print(f"[Workspace] could not persist workspace choice: {e}")
+
+        self.obj_appconfig.print_info('Default workspace selected: ' + path)
         self.accept()
         self._refresh_project_explorer()
         self._finish_workspace_change()
