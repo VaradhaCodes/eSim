@@ -108,8 +108,11 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 ; MSYS2 ship-size excludes, verified against what runtime model builds use:
 ;  * pacman download cache (var\cache) and locale/man/doc/info trees.
-;  * gdb + its private python (mingw64\lib\python3.14 is gdb's scripting
-;    runtime, nothing else links it).
+;  * gdb (debugger; nothing in a user install debugs). mingw64's python3.14
+;    deliberately STAYS despite arriving as gdb's scripting dep: verilator's
+;    verilated.mk hardcodes `PYTHON3 = python3` and every NgVeri model make
+;    runs $(PYTHON3) verilator_includer -- pruning it broke NgVeri with
+;    "Error 127" (caught by the counter e2e on the pruned test install).
 ;  * gnat*.exe + adainclude: the Ada COMPILER that built ghdl. ghdl.exe is
 ;    statically linked (imports only system DLLs) and never compiles Ada at
 ;    runtime. adalib STAYS: lib\ghdl\grt.lst passes -L...\adalib\ at VHDL
@@ -119,7 +122,7 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
 ;    verilator driver is a perl script.
 ;  * verilator debug twins (only `verilator --debug` loads them).
 Source: "{#StageDir}\tools\msys64\*"; DestDir: "{app}\tools\msys64"; Components: hdl; \
-    Excludes: "var\cache,usr\share\locale,usr\share\man,usr\share\doc,usr\share\info,usr\share\bash-completion,mingw64\share\man,mingw64\share\doc,mingw64\share\info,mingw64\share\locale,mingw64\share\gtk-doc,mingw64\share\gdb,mingw64\lib\python3.14,mingw64\include\python3.14,libpython3.14.dll,libpython3.14.dll.a,gdb.exe,gdbserver.exe,gdb-add-index,gnat*.exe,adainclude,verilator_bin_dbg.exe,verilator_coverage_bin_dbg.exe,usr\bin\autoconf*,usr\bin\autoheader*,usr\bin\autom4te*,usr\bin\automake*,usr\bin\autoreconf*,usr\bin\autoscan*,usr\bin\autoupdate*,usr\bin\autopoint,usr\bin\aclocal*,usr\bin\ifnames,usr\share\autoconf*,usr\share\automake*,usr\share\aclocal*"; \
+    Excludes: "var\cache,usr\share\locale,usr\share\man,usr\share\doc,usr\share\info,usr\share\bash-completion,mingw64\share\man,mingw64\share\doc,mingw64\share\info,mingw64\share\locale,mingw64\share\gtk-doc,mingw64\share\gdb,gdb.exe,gdbserver.exe,gdb-add-index,gnat*.exe,adainclude,verilator_bin_dbg.exe,verilator_coverage_bin_dbg.exe,usr\bin\autoconf*,usr\bin\autoheader*,usr\bin\autom4te*,usr\bin\automake*,usr\bin\autoreconf*,usr\bin\autoscan*,usr\bin\autoupdate*,usr\bin\autopoint,usr\bin\aclocal*,usr\bin\ifnames,usr\share\autoconf*,usr\share\automake*,usr\share\aclocal*"; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 Source: "{#StageDir}\tools\nghdl\src\*"; DestDir: "{app}\tools\nghdl\src"; Components: hdl; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
