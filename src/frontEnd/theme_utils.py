@@ -89,6 +89,44 @@ def apply_titlebar_theme(window, is_dark=None):
         pass
 
 
+def apply_round_corners(window):
+    """Windows-only: have DWM round the window's corners in the compositor.
+
+      33 DWMWA_WINDOW_CORNER_PREFERENCE / 2 DWMWCP_ROUND (Win11+)
+
+    Qt cannot round a popup by itself here. Under the Fusion base style the
+    popup's native window is never marked layered (WS_EX_LAYERED stays clear),
+    so its raster backing store has nowhere to put alpha: everything outside
+    the QSS border-radius flushes as OPAQUE BLACK. WA_TranslucentBackground
+    therefore buys no transparency on this path and actively costs a black
+    corner, and clipping those pixels off with setMask() only trades the black
+    for a hard staircase -- a QRegion is 1-bit, so it cannot hold the partial
+    coverage a smooth curve needs, and Qt scales the logical-pixel mask up to
+    device pixels (x1.75 at 175% display scaling), which coarsens the steps
+    further. That staircase is what the rounded menus actually looked like.
+
+    DWM has the alpha the backing store lacks. It clips and antialiases the
+    window after Qt has painted, so the corners come out smooth with no mask
+    and no translucency. Requires the native window to exist -- call it on
+    Show, not on create. Fails harmlessly (E_INVALIDARG) on Win10, which has
+    no rounded corners to ask for.
+    """
+    if sys.platform != "win32" or window is None:
+        return
+    try:
+        if window.windowHandle() is None:
+            return
+        hwnd = int(window.winId())
+        if not hwnd:
+            return
+        pref = ctypes.c_int(2)  # DWMWCP_ROUND
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd), 33,
+            ctypes.byref(pref), ctypes.sizeof(pref))
+    except Exception:
+        pass
+
+
 def replace_tokens(qss, tokens, value):
     for token in tokens:
         qss = qss.replace(token, value)

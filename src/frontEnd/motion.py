@@ -17,6 +17,13 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 # only ever one per view.
 _MOTION_DEFAULT = True
 
+# Windows rounds popups through DWM (theme_utils.apply_round_corners) rather
+# than through WA_TranslucentBackground + a rounded mask: under Fusion the
+# popup window is never layered, so translucency yields black corners instead
+# of transparent ones, and the 1-bit mask that hid them could only produce a
+# staircase. Every other platform keeps the translucency+mask path.
+_ROUND_VIA_DWM = sys.platform == "win32"
+
 # Buttons that keep a resting halo instead of only glowing under the cursor:
 # the single call-to-action per view. Everything else stays calm — the QSS
 # hierarchy is deliberate ("only ONE bold button per view"), and a screen where
@@ -94,8 +101,14 @@ def make_menu_rounded(menu):
     frame shows. Set this on a freshly-created menu BEFORE it is first shown
     (the native window must be created with the translucent attribute), so
     call it right after ``QMenu(...)`` / ``addMenu(...)``.
+
+    Windows is the exception and takes the DWM path instead
+    (theme_utils.apply_round_corners): there the popup never gets an alpha
+    surface, so asking for translucency here would only paint the corners
+    black. Nothing to do at create time — DWM needs the native window, so the
+    rounding is applied on Show.
     """
-    if menu is None:
+    if menu is None or _ROUND_VIA_DWM:
         return menu
     try:
         menu.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -125,12 +138,20 @@ def apply_menu_rounded_mask(menu, radius=14):
     Show because a QMenu sizes to its content (the mask must match its size).
     The radius matches the QMenu QSS ``border-radius`` (14px).
 
-    Windows is NOT exempt: with the Fusion base style Qt never marks the popup
-    window layered (WS_EX_LAYERED stays clear), so the raster backing store
-    flushes the "transparent" corners as opaque black — WA_TranslucentBackground
-    alone rounds nothing. (A DWM-rounded corner under the default windows11
-    style is what made translucency look like it worked.) Only this mask
-    produces round corners here, same as on a compositor-less X11.
+    Windows does NOT come through here — it rounds via DWM instead (see
+    theme_utils.apply_round_corners). A mask is a poor way to round anything:
+    it is 1-bit, so the curve it cuts is all-or-nothing per pixel and lands as
+    a visible staircase, and Qt scales it from logical to device pixels, so at
+    175% display scaling each of those steps arrives ~2 physical pixels tall.
+    DWM antialiases in the compositor and has none of that. The mask survives
+    only for the surfaces with no better option: a compositor-less X11, where
+    an alpha-less surface would otherwise paint the corners solid black.
+
+    Antialiasing is deliberately NOT enabled on the painter below: a QBitmap
+    is monochrome, so it cannot store the partial coverage antialiasing
+    produces, and QPainter dithers it instead — turning the smooth edge into a
+    stipple of holes. A hard edge is the best a 1-bit mask can do, so ask for
+    exactly that.
     """
     if menu is None:
         return
@@ -141,7 +162,6 @@ def apply_menu_rounded_mask(menu, radius=14):
         bmp = QtGui.QBitmap(size)
         bmp.fill(QtCore.Qt.GlobalColor.color0)          # color0 = clipped out
         p = QtGui.QPainter(bmp)
-        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         p.setPen(QtCore.Qt.GlobalColor.color1)          # color1 = kept
         p.setBrush(QtCore.Qt.GlobalColor.color1)
         p.drawRoundedRect(0, 0, size.width(), size.height(), radius, radius)
@@ -149,6 +169,20 @@ def apply_menu_rounded_mask(menu, radius=14):
         menu.setMask(QtGui.QRegion(bmp))
     except Exception:
         pass
+
+
+def _round_popup_via_dwm(popup):
+    """Windows path for apply_menu_rounded_mask: round the popup in DWM.
+
+    Called on Show because DWM addresses the window by HWND, which does not
+    exist before then. Re-applying on every Show is harmless (it is a plain
+    window attribute, not an animation) and covers popups whose native window
+    Qt has destroyed and rebuilt in between.
+    """
+    if popup is None:
+        return
+    from frontEnd import theme_utils
+    theme_utils.apply_round_corners(popup)
 
 
 def rest_alpha(widget):
@@ -468,6 +502,10 @@ class PopupMotionFilter(QtCore.QObject):
             theme_utils.apply_titlebar_theme(obj)
 
         if type(obj).__name__ == "QComboBoxPrivateContainer":
+            if _ROUND_VIA_DWM:
+                if et == QtCore.QEvent.Type.Show:
+                    _round_popup_via_dwm(obj)
+                return False
             if et == QtCore.QEvent.Type.Polish:
                 if not obj.testAttribute(
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground):
@@ -482,6 +520,13 @@ class PopupMotionFilter(QtCore.QObject):
             return False
 
         if isinstance(obj, QtWidgets.QMenu):
+            # Windows: no translucency (it would only blacken the corners) and
+            # no mask (it would only stair-step them) — DWM rounds the window
+            # itself once it exists, which is Show, not Polish.
+            if _ROUND_VIA_DWM:
+                if et == QtCore.QEvent.Type.Show:
+                    _round_popup_via_dwm(obj)
+                return False
             if et == QtCore.QEvent.Type.Polish:
                 # Set translucency BEFORE the native popup window is created.
                 # A post-show attribute change (or setMask) is ignored once the
@@ -495,8 +540,6 @@ class PopupMotionFilter(QtCore.QObject):
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground):
                     obj.setAttribute(
                         QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
-                # Kill the Windows CS_DROPSHADOW outline (see
-                # make_menu_rounded); no-op elsewhere.
                 obj.setWindowFlag(
                     QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
             elif et == QtCore.QEvent.Type.Show:
