@@ -565,8 +565,31 @@ class Convert:
             log.error('d_cosim: could not stage vvp for "%s": %s'
                       % (model_name, str(e)))
 
+        # On Windows, ivlng's default VPI-module location is its compile-time
+        # NGSPICELIBDIR -- a build-machine path that does not exist on user
+        # installs. ivlng does add_module_path(".") (the project dir, ngspice's
+        # cwd), so stage ivlng.vpi next to the netlist like the vvp above and
+        # point lib_args[1] at the bare module name. lib_args[0] must be a
+        # non-empty value (ngspice drops empty strings from the vector,
+        # shifting the args); "libvvp" = ivlng's own default, resolved via the
+        # OS loader path the launcher already sets. Both names are relative,
+        # so the netlist stays machine-portable.
+        lib_args = ''
+        if os.name == 'nt':
+            cmdir = CosimConfig.ngspice_codemodel_dir()
+            vpi_src = os.path.join(cmdir, 'ivlng.vpi') if cmdir else None
+            try:
+                if vpi_src and os.path.isfile(vpi_src):
+                    shutil.copy(vpi_src, os.path.join(proj_dir, 'ivlng.vpi'))
+                    lib_args = 'lib_args=["libvvp", "ivlng"] '
+                else:
+                    log.error('d_cosim: ivlng.vpi not found at %s'
+                              % str(vpi_src))
+            except OSError as e:
+                log.error('d_cosim: could not stage ivlng.vpi: %s' % str(e))
+
         return ('.model ' + comp_name + ' d_cosim simulation="ivlng" '
-                'sim_args=["' + model_name + '"] ')
+                + lib_args + 'sim_args=["' + model_name + '"] ')
 
     def addMicrocontrollerParameter(self, schematicInfo):
         """

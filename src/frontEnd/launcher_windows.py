@@ -44,6 +44,12 @@ def setup_environment(root=None):
     nghdl_bin = os.path.join(tools, "nghdl", "install_dir", "bin")
     if os.path.isfile(os.path.join(nghdl_bin, "ngspice.exe")):
         _prepend_path(nghdl_bin)
+        # lib\ngspice also goes on PATH: it holds ivlng.dll, which d_cosim's
+        # cosim_dlopen resolves via a plain LoadLibrary("ivlng") (PATH
+        # search) before falling back to its compile-time NGSPICELIBDIR --
+        # a build-machine path that does not exist on user installs.
+        _prepend_path(os.path.join(
+            tools, "nghdl", "install_dir", "lib", "ngspice"))
         # Where this ngspice finds spinit (and the .cm code models).
         os.environ["SPICE_LIB_DIR"] = os.path.join(
             tools, "nghdl", "install_dir", "share", "ngspice")

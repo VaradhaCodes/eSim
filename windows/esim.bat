@@ -15,7 +15,11 @@ rem Bundled tools first on PATH: the custom eSim ngspice (d_cosim/ivlng/
 rem ghdl.cm) wins over the official fallback copy.
 set "PATH=%ESIM_HOME%\tools\ngspice\bin;%PATH%"
 if exist "%ESIM_HOME%\tools\nghdl\install_dir\bin\ngspice.exe" (
-    set "PATH=%ESIM_HOME%\tools\nghdl\install_dir\bin;%PATH%"
+    rem lib\ngspice also goes on PATH: it holds ivlng.dll, which d_cosim's
+    rem cosim_dlopen resolves via a plain LoadLibrary("ivlng") (PATH search)
+    rem before falling back to its compile-time NGSPICELIBDIR -- a build-
+    rem machine path that does not exist on user installs.
+    set "PATH=%ESIM_HOME%\tools\nghdl\install_dir\bin;%ESIM_HOME%\tools\nghdl\install_dir\lib\ngspice;%PATH%"
     rem Where this ngspice finds spinit (and through it the .cm code models,
     rem whose paths windows_bootstrap.py rewrites for this install).
     set "SPICE_LIB_DIR=%ESIM_HOME%\tools\nghdl\install_dir\share\ngspice"

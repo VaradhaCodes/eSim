@@ -207,9 +207,23 @@ class NgspiceWidget(QtWidgets.QWidget):
     def _add_iverilog_libpath(self) -> None:
         """Prepend the iverilog lib dir (libvvp) to the dynamic-loader search
         path so ngspice's ivlng adapter can load it. Cross-platform: PATH on
-        Windows, LD_LIBRARY_PATH elsewhere."""
+        Windows, LD_LIBRARY_PATH elsewhere.
+
+        On Windows the codemodel dir (lib\\ngspice) is prepended too: it holds
+        ivlng.dll itself, which d_cosim's cosim_dlopen resolves via a plain
+        LoadLibrary("ivlng") (PATH search) before falling back to its
+        compile-time NGSPICELIBDIR -- a build-machine path that does not exist
+        on user installs. The launcher already puts it on PATH; this keeps
+        d_cosim working even when eSim is started some other way."""
+        dirs = []
+        if os.name == 'nt':
+            cmdir = CosimConfig.ngspice_codemodel_dir()
+            if cmdir:
+                dirs.append(cmdir)
         lib = CosimConfig.iverilog_libdir()
-        if not lib:
+        if lib:
+            dirs.append(lib)
+        if not dirs:
             return
         var = CosimConfig.loader_path_var()
         # Extend any environment already set on the process (_add_msys_paths
@@ -218,7 +232,8 @@ class NgspiceWidget(QtWidgets.QWidget):
         if env.isEmpty():
             env = QtCore.QProcessEnvironment.systemEnvironment()
         existing = env.value(var, "")
-        env.insert(var, lib + (os.pathsep + existing if existing else ""))
+        prefix = os.pathsep.join(dirs)
+        env.insert(var, prefix + (os.pathsep + existing if existing else ""))
         self.process.setProcessEnvironment(env)
 
     def _add_msys_paths(self) -> None:
@@ -447,13 +462,14 @@ class NgspiceWidget(QtWidgets.QWidget):
                 self.plot_process.errorOccurred.connect(
                     lambda err: logger.error(f"ngspice_gui plot error: {err}"))
                 env = QtCore.QProcessEnvironment.systemEnvironment()
-                # d_cosim re-runs need libvvp on the loader path (PATH on nt)
-                # for ngspice's ivlng adapter, exactly like the batch run.
+                # d_cosim re-runs need ivlng.dll (codemodel dir) and libvvp
+                # on the loader path (PATH on nt), exactly like the batch run.
                 if self.uses_dcosim:
-                    iv_lib = CosimConfig.iverilog_libdir()
-                    if iv_lib:
-                        env.insert('PATH', iv_lib + os.pathsep +
-                                   env.value('PATH', ''))
+                    for extra in (CosimConfig.iverilog_libdir(),
+                                  CosimConfig.ngspice_codemodel_dir()):
+                        if extra:
+                            env.insert('PATH', extra + os.pathsep +
+                                       env.value('PATH', ''))
                 # mintty/bash for any NGHDL testbench relaunched by the model.
                 msys_home = CosimConfig.nghdl_cfg('COMPILER', 'MSYS_HOME')
                 if msys_home and os.path.isdir(msys_home):
