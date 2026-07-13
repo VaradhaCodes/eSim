@@ -447,12 +447,11 @@ function Stage-SimToolchain {
             "LIBS='-lws2_32 -lpsapi -lshlwapi' && " +
             # -j2 NOT -j`$(nproc): MSYS2's fork() emulation collapses under heavy
             # parallel libtool/sh spawning (dofork: child died 0xC0000142, EAGAIN).
-            "make -j2 && make install && " +
             # ngspice.exe (and the .cm/ivlng DLLs it loads) depend on MinGW
-            # runtime DLLs (gomp/readline/termcap/stdc++/gcc_s/winpthread).
-            # Ship the transitive closure next to the exe so the simulator runs
-            # WITHOUT tools\msys64 on PATH (Compact installs, plain sims).
-            "sh `"`$(cygpath -u '$dllShU')`" `"`$(cygpath -u '$toolsU')/nghdl`""
+            # runtime DLLs (gomp/readline/termcap/stdc++/gcc_s/winpthread);
+            # their closure is staged by the always-run block below, which the
+            # "already staged" fast path also goes through.
+            "make -j2 && make install"
         ) 'custom ngspice build failed'
     }
     if (-not (Test-Path $ngspiceExe)) { Die 'ngspice.exe missing after custom build' }
@@ -495,8 +494,14 @@ function Stage-SimToolchain {
     # Always ensure the MinGW runtime-DLL closure is present (idempotent, and
     # the "already staged" fast path must not skip it): without it the
     # verification below hard-hangs on Windows' missing-DLL error dialog.
+    # (The iverilog .vpi modules are added as extra seeds for this same dir
+    # further down, once the Icarus tree is staged -- ngspice's ivlng bridge
+    # LoadLibrary's them at d_cosim simulation time, and their dependencies
+    # resolve from ngspice.exe's OWN dir, never the .vpi's.)
     Invoke-MsysBash (
-        "sh `"`$(cygpath -u '$dllShU')`" `"`$(cygpath -u '$toolsU')/nghdl`""
+        "nb=`"`$(cygpath -u '$toolsU')/nghdl/install_dir`"; " +
+        "sh `"`$(cygpath -u '$dllShU')`" `"`$nb/bin`" " +
+        "`"`$nb`"/bin/*.exe `"`$nb`"/lib/ngspice/ivlng.dll `"`$nb`"/lib/ngspice/*.cm"
     ) 'runtime DLL closure staging failed'
 
     # Hard verification: version answers, the code models d_cosim/NGHDL need
@@ -567,7 +572,53 @@ function Stage-SimToolchain {
     if (-not (Test-Path $vvpPlain)) {
         Die "libvvp.dll (unversioned, dlopen-ed by ngspice ivlng) missing under $ivDst\bin"
     }
-    Log 'Icarus Verilog (with libvvp) staged'
+
+    # --- runtime-DLL closure for the Icarus tree -----------------------------
+    # iverilog.exe itself imports only system DLLs, but everything under it
+    # does not: ivl.exe/vhdlpp.exe link the MinGW runtime, and the .vpi
+    # modules (system.vpi adds libbz2 + zlib1 on top) are LoadLibrary'd by
+    # ivl.exe at COMPILE time (system-function discovery), by vvp.exe at sim
+    # time, and by ngspice's ivlng bridge at d_cosim time. Windows resolves a
+    # loaded module's dependencies from the loading EXE's dir + PATH -- never
+    # from the module's own dir -- so the closure must sit in all three exe
+    # dirs. Without it a fresh machine (no MinGW DLLs anywhere on PATH) dies
+    # with "Failed to open ...system.vpi: The specified module could not be
+    # found" -- and iverilog still exits 0, so the break used to surface only
+    # at simulation time (now also caught in code by icarus.vpi_load_failed).
+    $ivU = $ivDst -replace '\\', '/'
+    Invoke-MsysBash (
+        "iv=`"`$(cygpath -u '$ivU')`"; " +
+        "nb=`"`$(cygpath -u '$toolsU')/nghdl/install_dir/bin`"; " +
+        "cl=`"`$(cygpath -u '$dllShU')`"; " +
+        "seeds=`"`$iv/bin/*.exe `$iv/bin/*.dll `$iv/lib/ivl/*.exe `$iv/lib/ivl/*.tgt `$iv/lib/ivl/*.vpi`"; " +
+        "sh `"`$cl`" `"`$iv/bin`" `$seeds && " +
+        "sh `"`$cl`" `"`$iv/lib/ivl`" `$seeds && " +
+        "sh `"`$cl`" `"`$nb`" `$iv/lib/ivl/*.vpi `$iv/bin/libvvp-1.dll"
+    ) 'iverilog runtime DLL closure staging failed'
+
+    # Hard verification under a bare PATH (all a fresh user machine has):
+    # compile AND vvp-run a module that uses a $-task, failing the build on
+    # any VPI load error. `iverilog -V` cannot catch this class -- the driver
+    # exe has no MinGW imports and never loads a .vpi.
+    $vDir = Join-Path $Build 'iverilog-verify'
+    New-Item -ItemType Directory -Force $vDir | Out-Null
+    Set-Content (Join-Path $vDir 't.v') `
+        "module t; initial begin `$display(""vpi-ok""); `$finish; end endmodule"
+    $oldPath = $env:PATH
+    try {
+        $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+        $cOut = & (Join-Path $ivDst 'bin\iverilog.exe') '-g2012' `
+            '-o' (Join-Path $vDir 't.out') (Join-Path $vDir 't.v') 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $cOut -match 'Failed to open') {
+            Die "bare-PATH iverilog compile failed (rc=$LASTEXITCODE): $cOut"
+        }
+        $sOut = & (Join-Path $ivDst 'bin\vvp.exe') (Join-Path $vDir 't.out') 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $sOut -notmatch 'vpi-ok') {
+            Die "bare-PATH vvp run failed (rc=$LASTEXITCODE): $sOut"
+        }
+    }
+    finally { $env:PATH = $oldPath }
+    Log 'Icarus Verilog (with libvvp) staged; bare-PATH compile+sim verified'
 }
 
 # The official KiCad NSIS payload directories that do NOT ship inside the
@@ -731,6 +782,21 @@ function Optimize-Stage {
         Log ('iverilog stripped: {0:N1} MB -> {1:N1} MB' -f ($before / 1MB), ($after / 1MB))
         & "$iv\bin\iverilog.exe" -V | Out-Null
         if ($LASTEXITCODE -ne 0) { Die 'stripped iverilog.exe no longer answers -V' }
+        # Strip touched the runtime DLLs and .vpi modules too -- re-prove the
+        # bare-PATH compile Stage-SimToolchain verified (VPI loads intact).
+        $vSrc = Join-Path $Build 'iverilog-verify\t.v'
+        if (Test-Path $vSrc) {
+            $oldPath = $env:PATH
+            try {
+                $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+                $cOut = & "$iv\bin\iverilog.exe" '-g2012' `
+                    '-o' (Join-Path $Build 'iverilog-verify\t2.out') $vSrc 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 0 -or $cOut -match 'Failed to open') {
+                    Die "stripped iverilog fails bare-PATH compile (rc=$LASTEXITCODE): $cOut"
+                }
+            }
+            finally { $env:PATH = $oldPath }
+        }
     }
 
     # --- 2) prune the PyQt6 wheel to the modules eSim imports ---------------

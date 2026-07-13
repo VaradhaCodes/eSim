@@ -73,6 +73,38 @@ def test_compile_error_is_reported(tmp_path):
     assert res.out_path is None
 
 
+def test_vpi_load_failure_detected():
+    # The exact shape Icarus emits when a .vpi's runtime DLL is missing
+    # (fresh Windows machine, MinGW closure absent). Icarus exits 0 anyway,
+    # so this detector is the only thing standing between that state and a
+    # bogus "build succeeded".
+    msg = ("error: Failed to open "
+           r"'C:\FOSSEE\eSim\library\bin\iverilog\lib\ivl\system.vpi'"
+           " because:\n     : The specified module could not be found.\n")
+    assert icarus.vpi_load_failed(msg) is True
+    assert icarus.vpi_load_failed("") is False
+    assert icarus.vpi_load_failed("t.v:3: error: Failed to open include") is False
+    assert icarus.vpi_load_failed("loaded system.vpi fine") is False
+
+
+def test_vpi_load_failure_fails_compile(tmp_path, monkeypatch):
+    # rc=0 AND artifact present AND vpi-load error in stderr -> ok must be
+    # False (the artifact cannot simulate: the same load fails under vvp and
+    # under ngspice's ivlng).
+    out_path = tmp_path / "m.out"
+
+    def fake_run(cmd, cwd, timeout, cancel, env=None):
+        out_path.write_bytes(b"#! vvp\n")
+        return 0, "", ("error: Failed to open 'x/system.vpi' because:\n"
+                       "     : The specified module could not be found.\n")
+
+    monkeypatch.setattr(icarus, "_run_cmd", fake_run)
+    res = icarus.run_iverilog("iverilog", ["m.v"], str(out_path))
+    assert res.ok is False
+    assert res.returncode == 0
+    assert res.out_path is None
+
+
 @needs_iverilog
 def test_compile_ok(tmp_path):
     res = icarus.compile_design(

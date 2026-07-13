@@ -20,6 +20,17 @@ from typing import List, Optional, Sequence, Tuple
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
+def vpi_load_failed(output: str) -> bool:
+    """True when iverilog/vvp reported a VPI module it could not load, e.g.
+    "error: Failed to open '...\\system.vpi' because: The specified module
+    could not be found." (a runtime DLL of the .vpi missing from the loading
+    exe's dir/PATH). Icarus treats this as NON-fatal -- it still exits 0 and
+    writes an artifact -- but every $-task is broken and the same load fails
+    again inside ngspice at d_cosim time, so eSim must treat it as a hard
+    toolchain failure instead of reporting a bogus success."""
+    return 'Failed to open' in output and '.vpi' in output
+
+
 @dataclass
 class CompileResult:
     """Outcome of an ``iverilog`` invocation."""
@@ -130,7 +141,8 @@ def run_iverilog(
     cmd += ["-o", out_path] + list(src_paths)
 
     rc, out, err = _run_cmd(cmd, cwd, timeout, cancel)
-    ok = rc == 0 and os.path.isfile(out_path)
+    ok = (rc == 0 and os.path.isfile(out_path)
+          and not vpi_load_failed((out or "") + (err or "")))
     return CompileResult(
         ok=ok, returncode=rc, stdout=out, stderr=err,
         out_path=out_path if ok else None, cmd=cmd, written=list(src_paths))
@@ -188,8 +200,9 @@ def simulate(
     rc, out, err = _run_cmd(
         [vvp_bin, out_path], workdir, timeout, cancel, env=env)
     vcd = os.path.join(workdir, vcd_name)
+    ok = rc == 0 and not vpi_load_failed((out or "") + (err or ""))
     return SimResult(
-        ok=rc == 0, returncode=rc, stdout=out, stderr=err,
+        ok=ok, returncode=rc, stdout=out, stderr=err,
         vcd_path=vcd if os.path.isfile(vcd) else None)
 
 

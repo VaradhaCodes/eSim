@@ -1,29 +1,31 @@
 #!/bin/sh
-# Copy the transitive MinGW runtime-DLL closure of the custom eSim ngspice
-# (exe + code models + ivlng) into install_dir/bin, so the simulator runs
-# WITHOUT tools\msys64 on PATH (Compact installs, plain simulations) -- the
-# same trick the official ngspice Windows zip uses. Run inside MINGW64.
+# Copy the transitive MinGW runtime-DLL closure of the given seed binaries
+# into <dest-dir>, so they run WITHOUT tools\msys64 on PATH -- the same
+# trick the official ngspice Windows zip uses. Run inside MINGW64.
 #
-#   usage: msys-dll-closure.sh <nghdl-root>   (the dir holding install_dir/)
+# Windows resolves the dependencies of a LoadLibrary'd module (a .vpi, .tgt
+# or .cm) from the loading EXE's directory and PATH -- never from the
+# module's own directory. So the closure must land in every directory that
+# hosts a loading exe: ngspice's install_dir/bin, iverilog's bin (vvp.exe)
+# and iverilog's lib/ivl (ivl.exe, vhdlpp.exe).
+#
+#   usage: msys-dll-closure.sh <dest-dir> <seed-file>...
 set -e
-root="$1"
-[ -n "$root" ] || { echo "usage: $0 <nghdl-root>" >&2; exit 2; }
-BIN="$root/install_dir/bin"
-CM="$root/install_dir/lib/ngspice"
+dest="$1"; shift
+[ -n "$dest" ] && [ -d "$dest" ] || { echo "usage: $0 <dest-dir> <seed-file>..." >&2; exit 2; }
+[ $# -gt 0 ] || { echo "$0: no seed files given" >&2; exit 2; }
 
 deps() { objdump -p "$@" 2>/dev/null | grep 'DLL Name' | awk '{print $3}' | sort -u; }
 
 seen=""
-# Every exe in bin/, not just ngspice.exe: ngspice_gui.exe (the wingui twin
-# used for interactive plots) links the same runtime and must resolve it too.
-queue=$(deps "$BIN"/*.exe "$CM/ivlng.dll" "$CM"/*.cm)
+queue=$(deps "$@")
 while [ -n "$queue" ]; do
     next=""
     for d in $queue; do
         case " $seen " in *" $d "*) continue ;; esac
         seen="$seen $d"
         if [ -f "/mingw64/bin/$d" ]; then
-            cp -n "/mingw64/bin/$d" "$BIN/" && echo "staged runtime DLL: $d"
+            cp -n "/mingw64/bin/$d" "$dest/" && echo "staged runtime DLL: $dest/$d"
             next="$next $(deps /mingw64/bin/$d)"
         fi
     done

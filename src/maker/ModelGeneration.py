@@ -641,8 +641,15 @@ class ModelGeneration(QtWidgets.QWidget):
             if not res.ok:
                 log.error("d_cosim model build FAILED (rc=%d)."
                           % res.returncode)
-                log.fix("Check the compiler errors above (syntax, missing "
-                        "module, or a construct Icarus -g2012 rejects).")
+                if icarus.vpi_load_failed(res.output):
+                    log.fix("A VPI module (e.g. system.vpi) failed to load: "
+                            "the MinGW runtime DLLs next to iverilog are "
+                            "missing or shadowed. Reinstall eSim -- the "
+                            "installer ships them beside iverilog's binaries "
+                            "(bin and lib\\ivl).")
+                else:
+                    log.fix("Check the compiler errors above (syntax, missing "
+                            "module, or a construct Icarus -g2012 rejects).")
                 return "Error"
             log.ok("Built d_cosim model: %s (%d bytes)"
                    % (out, os.path.getsize(out)))
