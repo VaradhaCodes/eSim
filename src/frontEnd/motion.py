@@ -124,14 +124,15 @@ def apply_menu_rounded_mask(menu, radius=14):
     compositor needed — so the rounding shows everywhere. Re-applied on each
     Show because a QMenu sizes to its content (the mask must match its size).
     The radius matches the QMenu QSS ``border-radius`` (14px).
+
+    Windows is NOT exempt: with the Fusion base style Qt never marks the popup
+    window layered (WS_EX_LAYERED stays clear), so the raster backing store
+    flushes the "transparent" corners as opaque black — WA_TranslucentBackground
+    alone rounds nothing. (A DWM-rounded corner under the default windows11
+    style is what made translucency look like it worked.) Only this mask
+    produces round corners here, same as on a compositor-less X11.
     """
     if menu is None:
-        return
-    # Windows: DWM composites every top-level window, so the translucent
-    # surface always has alpha and the QSS border-radius corners are already
-    # genuine. The bitmap mask would only hard-clip the antialiased border
-    # into stair-steps — skip it entirely.
-    if sys.platform == "win32":
         return
     try:
         size = menu.size()
