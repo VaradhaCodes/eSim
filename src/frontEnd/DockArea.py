@@ -900,15 +900,16 @@ class DockArea(QtWidgets.QMainWindow):
         dockName = f'Model Creation-{projName}-'
 
         # Single instance per project: both launchers (Makerchip and NGHDL)
-        # share the one Flow Navigator dock -- a re-click raises it, and the
-        # NGHDL launcher additionally jumps it onto the VHDL path.
+        # share the one Flow Navigator dock -- a re-click raises it and puts it
+        # back on that launcher's path (NGHDL -> VHDL, Makerchip -> Verilog),
+        # so the two toolbar buttons keep switching sides once the dock is up.
         existing = self._live_tool_dock('model-creation', projDir)
         if existing is not None:
-            if select_vhdl:
-                try:
-                    existing._tool_widget.flow._select_mode("vhdl")
-                except Exception:
-                    pass
+            try:
+                existing._tool_widget.flow._select_mode(
+                    "vhdl" if select_vhdl else "verilog")
+            except Exception:
+                pass
             self._focus_dock(existing)
             return
 
