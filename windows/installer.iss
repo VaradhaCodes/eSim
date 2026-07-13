@@ -103,8 +103,25 @@ Name: "{app}"; Permissions: users-modify
 ;    python (same version, same wheel set).
 ;  * scipy: nothing in the tree imports it (also gone from
 ;    requirements-windows.txt; this catches stages provisioned before that).
+;  * developer/repo files a user install has no use for (leading backslash =
+;    rooted at {app}, so e.g. \scripts does NOT touch python\Scripts, and
+;    \docs does not shadow anything deeper):
+;      - build/porting notes + packaging docs (WINDOWS-*.md, PACKAGING.md,
+;        MAINTAINERS-PACKAGING.md), contributor/repo docs (CONTRIBUTION.md,
+;        SECURITY.md, INSTALL -- Ubuntu instructions), Sphinx sources
+;        (\code, \conf.py, \index.rst), Linux-only trees (\ihp, \patches,
+;        \scripts, \docs, make-release.sh), and pip metadata for the bundled
+;        interpreter (setup.py, requirements.txt, python-wheels.lock).
+;      - unrooted `tests`: every dir named tests outside msys64 is dev-only
+;        (src\*\tests, site-packages numpy/matplotlib/colorama tests, kicad
+;        stdlib tests) -- verified by find before adding. `test` likewise
+;        (kicad stdlib ctypes/tkinter/unittest test dirs). msys64 and the
+;        nghdl src/release trees have their OWN [Files] entries, so these
+;        unrooted patterns cannot reach the toolchain.
+;    windows\windows_bootstrap.py STAYS: launcher_windows imports it on
+;    every launch. README.md, LICENSE, VERSION, RELEASE stay (user-facing).
 Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
-    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*,tools\nghdl.old\*,tools\nghdl\examples,tools\nghdl\tests,tools\nghdl\autom4te.cache,tools\nghdl\visualc,tools\nghdl\man,tools\ngspice\examples,tools\ngspice\docs,python\Lib\site-packages\pip,python\Lib\site-packages\pip-*,python\Lib\site-packages\pytest,python\Lib\site-packages\_pytest,python\Lib\site-packages\pytest-*,python\Lib\site-packages\pytest_timeout*,python\Lib\site-packages\iniconfig*,python\Lib\site-packages\pluggy*,python\Lib\site-packages\scipy,python\Lib\site-packages\scipy.libs,python\Lib\site-packages\scipy-*,python\Scripts\pip.exe,python\Scripts\pip3.exe,python\Scripts\pip3.12.exe,python\Scripts\pytest.exe,python\Scripts\py.test.exe,python\Scripts\f2py.exe,python\Scripts\numpy-config.exe"; \
+    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*,tools\nghdl.old\*,tools\nghdl\examples,tools\nghdl\tests,tools\nghdl\autom4te.cache,tools\nghdl\visualc,tools\nghdl\man,tools\ngspice\examples,tools\ngspice\docs,python\Lib\site-packages\pip,python\Lib\site-packages\pip-*,python\Lib\site-packages\pytest,python\Lib\site-packages\_pytest,python\Lib\site-packages\pytest-*,python\Lib\site-packages\pytest_timeout*,python\Lib\site-packages\iniconfig*,python\Lib\site-packages\pluggy*,python\Lib\site-packages\scipy,python\Lib\site-packages\scipy.libs,python\Lib\site-packages\scipy-*,python\Scripts\pip.exe,python\Scripts\pip3.exe,python\Scripts\pip3.12.exe,python\Scripts\pytest.exe,python\Scripts\py.test.exe,python\Scripts\f2py.exe,python\Scripts\numpy-config.exe,\WINDOWS-BUILD-PORTING-NOTES.md,\WINDOWS-PERF-AUDIT.md,\WINDOWS-PERF-AUDIT-PROGRESS.md,\PACKAGING.md,\MAINTAINERS-PACKAGING.md,\CONTRIBUTION.md,\SECURITY.md,\INSTALL,\make-release.sh,\setup.py,\conf.py,\index.rst,\requirements.txt,\python-wheels.lock,\code,\docs,\ihp,\patches,\scripts,\src\conftest.py,tests,test"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 ; MSYS2 ship-size excludes, verified against what runtime model builds use:
 ;  * pacman download cache (var\cache) and locale/man/doc/info trees.
