@@ -65,3 +65,6 @@ plot_data_*.txt                  export-ignore
 # Case-only twin. Every reference in src/ is to the capital-S tree; this one is
 # unreachable. (Upstream carries a remove-duplicate-subcircuitlibrary branch.)
 /library/subcircuitLibrary/       export-ignore
+
+# MSYS2 sh runs these; CRLF from autocrlf checkout breaks them on fresh clones.
+windows/*.sh text eol=lf
