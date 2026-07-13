@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 import shutil
@@ -1039,25 +1040,72 @@ class VerilogVerifier(QtWidgets.QWidget):
             return
         self.update_hierarchy_list(order_modules(named_codes))
 
-    def log(self, text):
-        """Append a tool status line in muted text."""
+    # Console palette. One colour per semantic level so runs read like a real
+    # tool console instead of a uniform gray wall.
+    _LOG_COLORS = {
+        'info':    "#57606A",   # tool chatter: paths, progress, load/save
+        'ok':      "#1A7F37",   # outcomes that mean "you're good"
+        'error':   "#CF222E",   # failures
+        'warn':    "#9A6700",   # cancellations, notes, hints
+        'head':    "#0969DA",   # section headings (Diagnostics:)
+        'output':  "#24292E",   # raw simulator stdout ($display et al.)
+    }
+
+    def _append_console(self, text, color, bold=False):
         cursor = self.console.textCursor()
         cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
         fmt = QtGui.QTextCharFormat()
-        fmt.setForeground(QtGui.QColor("#3A4858"))
+        fmt.setForeground(QtGui.QColor(color))
+        if bold:
+            fmt.setFontWeight(QtGui.QFont.Weight.DemiBold)
         cursor.insertText(text.rstrip("\n") + "\n", fmt)
         self.console.setTextCursor(cursor)
         self.console.ensureCursorVisible()
 
+    @staticmethod
+    def _classify_log(text):
+        """Infer a semantic level from the message so the ~30 existing call
+        sites colour themselves without each one being touched."""
+        t = text.strip().lower()
+        if t.startswith(("error", "failed")) or " error:" in t \
+                or t.endswith(("errors:", "failed:")):
+            return 'error'
+        if t.startswith("note:") or "cancell" in t:
+            return 'warn'
+        if t.startswith(("syntax ok", "waveform ready", "successfully",
+                         "generated testbench")) or t.endswith("tools ready."):
+            return 'ok'
+        if t.endswith(":") and " " not in t:   # bare headings e.g. "Diagnostics:"
+            return 'head'
+        return 'info'
+
+    def log(self, text, level=None):
+        """Append a status line, coloured by semantic level. When level is
+        omitted it is inferred from the message text."""
+        level = level or self._classify_log(text)
+        self._append_console(text, self._LOG_COLORS[level],
+                             bold=(level in ('ok', 'error', 'head')))
+
+    def log_section(self, title):
+        """Visual break between runs: a dim rule with the action name, so
+        consecutive Check Syntax / Simulate runs don't blur together."""
+        stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        if self.console.toPlainText().strip():
+            self._append_console("", self._LOG_COLORS['info'])
+        self._append_console(f"─── {title} · {stamp} " + "─" * 40,
+                             self._LOG_COLORS['info'])
+
     def log_sim(self, text):
-        """Append raw simulator output at full text contrast."""
-        cursor = self.console.textCursor()
-        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-        fmt = QtGui.QTextCharFormat()
-        fmt.setForeground(QtGui.QColor("#24292E"))
-        cursor.insertText(text.rstrip("\n") + "\n", fmt)
-        self.console.setTextCursor(cursor)
-        self.console.ensureCursorVisible()
+        """Append raw tool output, colouring diagnostics per line: error lines
+        red, warnings amber, everything else full contrast."""
+        for line in text.rstrip("\n").split("\n"):
+            low = line.lower()
+            if "error" in low:
+                self._append_console(line, self._LOG_COLORS['error'])
+            elif "warning" in low:
+                self._append_console(line, self._LOG_COLORS['warn'])
+            else:
+                self._append_console(line, self._LOG_COLORS['output'])
 
     def clear_waveform_state(self):
         """Reset the 'have waveform data' state. The plot itself now lives in a
@@ -1459,6 +1507,7 @@ class VerilogVerifier(QtWidgets.QWidget):
     def check_syntax(self):
         if self._job_running():
             return
+        self.log_section("Check Syntax")
         self.log("Checking syntax...")
 
         # Clear previous error highlights
@@ -1568,6 +1617,7 @@ class VerilogVerifier(QtWidgets.QWidget):
     def simulate_and_wave(self):
         if self._job_running():
             return
+        self.log_section("Simulate")
         self.log("Running simulation...")
 
         design_code = self.get_design_code()
