@@ -107,7 +107,7 @@ class Mainwindow(QtWidgets.QWidget):
         self.removebtn = QtWidgets.QPushButton('Remove')
         self.removebtn.setToolTip(
             "Remove the selected file(s) from this list. Does NOT uninstall a "
-            "built model — use “Uninstall Models…” below.")
+            "built model — use “Uninstall Models” above.")
         self.removebtn.setEnabled(False)
         self.removebtn.clicked.connect(self.removeFiles)
 
@@ -171,10 +171,8 @@ class Mainwindow(QtWidgets.QWidget):
         pagetitle = QtWidgets.QLabel("Build an NGHDL model from VHDL")
         pagetitle.setObjectName("pagetitle")
 
-        self.removemodelbtn = QtWidgets.QPushButton(' Uninstall Models…')
+        self.removemodelbtn = QtWidgets.QPushButton('Uninstall Models')
         self.removemodelbtn.setObjectName("uninstall")
-        self.removemodelbtn.setIcon(self.style().standardIcon(
-            QtWidgets.QStyle.StandardPixmap.SP_TrashIcon))
         self.removemodelbtn.setMinimumHeight(30)
         self.removemodelbtn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.removemodelbtn.setToolTip(

@@ -268,7 +268,7 @@ class NgVeri(QtWidgets.QWidget):
             Slot for ModelGeneration.phase (queued from the build worker):
             name the step currently running under the spinning bar.
         '''
-        self.buildStatus.setText("⏳ " + phase)
+        self.buildStatus.setText(phase)
 
     def _flush_build_logs(self, logs):
         '''
