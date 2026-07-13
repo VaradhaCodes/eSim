@@ -218,6 +218,10 @@ class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
 class HeroBanner(QtWidgets.QFrame):
     """A wide, gradient hero panel used at the top of the welcome page."""
 
+    # Must track the border-radius of QFrame#welcomeHero in the .qss files,
+    # otherwise the orb overlay paints square corners over the rounded panel.
+    RADIUS = 18
+
     def __init__(self):
         super().__init__()
         self.setObjectName('welcomeHero')
@@ -291,6 +295,9 @@ class HeroBanner(QtWidgets.QFrame):
         orb.setColorAt(0.0, accent)
         orb.setColorAt(0.45, violet)
         orb.setColorAt(1.0, QtCore.Qt.GlobalColor.transparent)
+        clip = QtGui.QPainterPath()
+        clip.addRoundedRect(QtCore.QRectF(rect), self.RADIUS, self.RADIUS)
+        painter.setClipPath(clip)
         painter.fillRect(rect, orb)
         painter.end()
         super().paintEvent(event)
