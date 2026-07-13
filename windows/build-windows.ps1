@@ -698,6 +698,85 @@ function Stage-Launcher {
     if (-not (Test-Path $out)) { Die 'eSim.exe was not produced' }
 }
 
+function Optimize-Stage {
+    <# Ship-size trims applied IN the stage, all behaviour-preserving and
+       idempotent (safe on cache-hit re-runs). Trims that would break the
+       stage's own build role (autotools, gnat, gdb feed source rebuilds
+       here) live in installer.iss Excludes instead, so only the SHIPPED
+       tree loses them.
+       1) strip iverilog: the source build inherits autoconf's default
+          CFLAGS (-g -O2), shipping ~100 MB of DWARF -- ivl.exe alone is
+          57 MB and strips to 2.4 MB. Verified: stripped copies behave
+          identically (PE, no .debug sections referenced at runtime).
+       2) PyQt6: the wheel bundles the entire Qt runtime (Quick, Qml,
+          Multimedia + ffmpeg, Designer, Pdf, 3D, ...). eSim imports only
+          QtCore/QtGui/QtWidgets/QtPrintSupport(Qsci dep)/QtSvg + Qsci --
+          dependency-walked with objdump: the kept .pyds and the
+          platforms/styles/imageformats/iconengines plugins need exactly
+          the kept DLL set plus the wheel's VC runtime. 214 -> ~60 MB.
+       3) scipy: imported nowhere; gone from requirements-windows.txt, this
+          purges stages provisioned before that change. #>
+    Log 'Optimizing stage (strip iverilog, prune PyQt6, purge scipy)'
+
+    # --- 1) strip the iverilog source build ---------------------------------
+    $strip = Join-Path $Stage 'tools\msys64\mingw64\bin\strip.exe'
+    $iv = Join-Path $Stage 'library\bin\iverilog'
+    if ((Test-Path $strip) -and (Test-Path $iv)) {
+        $targets = @(Get-ChildItem "$iv\bin", "$iv\lib\ivl" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in '.exe', '.dll', '.tgt', '.vpi' })
+        $before = ($targets | Measure-Object Length -Sum).Sum
+        foreach ($t in $targets) { & $strip --strip-unneeded $t.FullName }
+        $after = (($targets | ForEach-Object { Get-Item $_.FullName }) |
+            Measure-Object Length -Sum).Sum
+        Log ('iverilog stripped: {0:N1} MB -> {1:N1} MB' -f ($before / 1MB), ($after / 1MB))
+        & "$iv\bin\iverilog.exe" -V | Out-Null
+        if ($LASTEXITCODE -ne 0) { Die 'stripped iverilog.exe no longer answers -V' }
+    }
+
+    # --- 2) prune the PyQt6 wheel to the modules eSim imports ---------------
+    $pyqt = Join-Path $Stage 'python\Lib\site-packages\PyQt6'
+    if (Test-Path "$pyqt\Qt6\bin") {
+        $keepMods = @('QtCore', 'QtGui', 'QtWidgets', 'QtPrintSupport', 'QtSvg', 'Qsci', 'sip')
+        $keepDlls = @('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'Qt6PrintSupport.dll',
+                      'Qt6Svg.dll',
+                      # VC runtime the wheel carries; every kept binary links it
+                      'concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+                      'msvcp140_atomic_wait.dll', 'msvcp140_codecvt_ids.dll', 'vccorlib140.dll',
+                      'vcruntime140.dll', 'vcruntime140_1.dll', 'vcruntime140_threads.dll')
+        $keepPlugins = @('platforms', 'styles', 'imageformats', 'iconengines', 'generic')
+        Get-ChildItem "$pyqt\Qt6\bin" -File |
+            Where-Object { $keepDlls -notcontains $_.Name } | Remove-Item -Force
+        Get-ChildItem "$pyqt\Qt6\plugins" -Directory |
+            Where-Object { $keepPlugins -notcontains $_.Name } | Remove-Item -Recurse -Force
+        # qpdf imageformat links the deleted Qt6Pdf.dll
+        Remove-Item "$pyqt\Qt6\plugins\imageformats\qpdf.dll" -Force -ErrorAction SilentlyContinue
+        # qml runtime, Qt UI translations, .sip build files, lupdate tooling
+        foreach ($d in @("$pyqt\Qt6\qml", "$pyqt\Qt6\translations", "$pyqt\bindings", "$pyqt\lupdate")) {
+            Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        # bindings (+stubs) for Qt modules eSim never imports
+        Get-ChildItem $pyqt -File |
+            Where-Object { $_.Extension -in '.pyd', '.pyi' } |
+            Where-Object { $keepMods -notcontains ($_.BaseName -replace '\.cp\d.*$', '') } |
+            Remove-Item -Force
+
+        # The GUI stack must still come up on the pruned set (offscreen uses
+        # the kept qoffscreen platform plugin; matplotlib exercises the Agg
+        # canvas import chain).
+        $pyexe = Join-Path $Stage 'python\python.exe'
+        $env:QT_QPA_PLATFORM = 'offscreen'
+        try {
+            & $pyexe -c 'from PyQt6.QtWidgets import QApplication; import PyQt6.Qsci; from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg; QApplication([]); print("pyqt-prune-ok")'
+            if ($LASTEXITCODE -ne 0) { Die 'PyQt6 prune broke the GUI stack (offscreen import check)' }
+        }
+        finally { Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue }
+    }
+
+    # --- 3) purge scipy from pre-existing stages -----------------------------
+    Get-ChildItem (Join-Path $Stage 'python\Lib\site-packages') -Filter 'scipy*' -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force
+}
+
 # ----------------------------------------------------------------- main ----
 if ($Clean) { Remove-Item $Build, $Dist -Recurse -Force -ErrorAction SilentlyContinue }
 $7z = Resolve-7z
@@ -711,6 +790,7 @@ Stage-Ngspice        # official build: Compact fallback (+ shim on -SkipSimBuild
 Stage-Iverilog       # Bleyer fallback, only on -SkipSimBuild
 Stage-Kicad          # pruned official KiCad payload -> tools\kicad (bundled)
 Stage-Launcher       # eSim.exe (native shortcut target; after Stage-App's /MIR)
+Optimize-Stage       # strip iverilog + prune PyQt6/scipy (idempotent, last)
 
 Log 'Compiling installer (Inno Setup)'
 $Iscc = Resolve-Iscc

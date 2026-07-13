@@ -90,10 +90,36 @@ Name: "{app}"; Permissions: users-modify
 ; survives in the stage across incremental builds (nothing in the pipeline
 ; creates or purges it) and rode into the last release as 127 MB of dead
 ; weight. Belt and braces -- the build script now deletes it as well.
+;
+; Ship-size excludes (the stage keeps all of this -- source rebuilds there
+; need the full toolchain; only the SHIPPED tree is trimmed):
+;  * tools\nghdl\{examples,tests,autom4te.cache,visualc,man}: ngspice source
+;    tarball baggage; runtime model builds touch only src\ headers, release\
+;    and install_dir\.
+;  * tools\ngspice\{examples,docs}: official-zip baggage, ~26 MB.
+;  * pip/pytest and friends: installed into the stage python for build-time
+;    testing; the app imports none of them. NOTE the installed tree therefore
+;    has no pip/pytest -- run the suite against an install with the STAGE
+;    python (same version, same wheel set).
+;  * scipy: nothing in the tree imports it (also gone from
+;    requirements-windows.txt; this catches stages provisioned before that).
 Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
-    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*,tools\nghdl.old\*"; \
+    Excludes: "tools\msys64\*,tools\nghdl\src\*,tools\nghdl\release\*,tools\nghdl\release_gui\*,tools\nghdl.old\*,tools\nghdl\examples,tools\nghdl\tests,tools\nghdl\autom4te.cache,tools\nghdl\visualc,tools\nghdl\man,tools\ngspice\examples,tools\ngspice\docs,python\Lib\site-packages\pip,python\Lib\site-packages\pip-*,python\Lib\site-packages\pytest,python\Lib\site-packages\_pytest,python\Lib\site-packages\pytest-*,python\Lib\site-packages\pytest_timeout*,python\Lib\site-packages\iniconfig*,python\Lib\site-packages\pluggy*,python\Lib\site-packages\scipy,python\Lib\site-packages\scipy.libs,python\Lib\site-packages\scipy-*,python\Scripts\pip.exe,python\Scripts\pip3.exe,python\Scripts\pip3.12.exe,python\Scripts\pytest.exe,python\Scripts\py.test.exe,python\Scripts\f2py.exe,python\Scripts\numpy-config.exe"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
+; MSYS2 ship-size excludes, verified against what runtime model builds use:
+;  * pacman download cache (var\cache) and locale/man/doc/info trees.
+;  * gdb + its private python (mingw64\lib\python3.14 is gdb's scripting
+;    runtime, nothing else links it).
+;  * gnat*.exe + adainclude: the Ada COMPILER that built ghdl. ghdl.exe is
+;    statically linked (imports only system DLLs) and never compiles Ada at
+;    runtime. adalib STAYS: lib\ghdl\grt.lst passes -L...\adalib\ at VHDL
+;    elaboration, so NGHDL links against it on user machines.
+;  * autotools (autoconf x6, automake x8, aclocal): configure ran at package
+;    time; runtime model builds only ever run make. perl STAYS -- the
+;    verilator driver is a perl script.
+;  * verilator debug twins (only `verilator --debug` loads them).
 Source: "{#StageDir}\tools\msys64\*"; DestDir: "{app}\tools\msys64"; Components: hdl; \
+    Excludes: "var\cache,usr\share\locale,usr\share\man,usr\share\doc,usr\share\info,usr\share\bash-completion,mingw64\share\man,mingw64\share\doc,mingw64\share\info,mingw64\share\locale,mingw64\share\gtk-doc,mingw64\share\gdb,mingw64\lib\python3.14,mingw64\include\python3.14,libpython3.14.dll,libpython3.14.dll.a,gdb.exe,gdbserver.exe,gdb-add-index,gnat*.exe,adainclude,verilator_bin_dbg.exe,verilator_coverage_bin_dbg.exe,usr\bin\autoconf*,usr\bin\autoheader*,usr\bin\autom4te*,usr\bin\automake*,usr\bin\autoreconf*,usr\bin\autoscan*,usr\bin\autoupdate*,usr\bin\autopoint,usr\bin\aclocal*,usr\bin\ifnames,usr\share\autoconf*,usr\share\automake*,usr\share\aclocal*"; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 Source: "{#StageDir}\tools\nghdl\src\*"; DestDir: "{app}\tools\nghdl\src"; Components: hdl; \
     Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
