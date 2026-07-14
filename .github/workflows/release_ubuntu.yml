@@ -21,6 +21,10 @@ on:
   push:
     tags:
       - 'v*'
+      # v2.6-win marks which commit a Windows installer was built from; the
+      # exe is uploaded by hand. Without this exclusion the tag push mints a
+      # spurious "eSim vX.Y-win" release carrying only the Ubuntu zip.
+      - '!v*-win'
   workflow_dispatch:
 
 permissions:
