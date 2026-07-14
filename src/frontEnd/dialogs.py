@@ -103,7 +103,7 @@ def ask_ngspice_plots(parent):
     return flag
 
 
-ESIM_VERSION = "2.5.0"
+ESIM_VERSION = "2.6.0"
 
 
 def _about_palette(parent):

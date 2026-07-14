@@ -140,7 +140,7 @@ class Appconfig:
     def __init__(self):
         # Application Details
         self._APPLICATION = 'eSim'
-        self._VERSION = '2.5'
+        self._VERSION = '2.6'
         self._AUTHOR = 'Fahim'
         self._REVISION = 'Rahul, Sumanto'
 
