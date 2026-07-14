@@ -1718,7 +1718,7 @@ def main(args):
         # Bundled Inter font for the Aurora type scale (QSS has fallbacks).
         font_path = os.path.join(
             os.path.dirname(__file__), '..', '..', 'images', 'fonts',
-            'Inter-VariableFont_slnt,wght.ttf'
+            'Inter-VariableFont_opsz,wght.ttf'
         )
         if os.path.exists(font_path):
             QtGui.QFontDatabase.addApplicationFont(font_path)

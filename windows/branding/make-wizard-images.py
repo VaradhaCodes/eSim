@@ -42,7 +42,7 @@ def asset(name):
 
 def font(size, bold=False):
     for path, kw in (
-        (os.path.join(IMAGES, "fonts", "Inter-VariableFont_slnt,wght.ttf"),
+        (os.path.join(IMAGES, "fonts", "Inter-VariableFont_opsz,wght.ttf"),
          {"variation": "SemiBold" if bold else "Regular"}),
         (r"C:\Windows\Fonts\seguisb.ttf" if bold else r"C:\Windows\Fonts\segoeui.ttf",
          {}),
