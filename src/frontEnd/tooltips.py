@@ -164,8 +164,14 @@ class _ToolTipFilter(QtCore.QObject):
             view = view.parent()
         if not isinstance(view, QtWidgets.QAbstractItemView):
             return ""
-        pos = view.viewport().mapFromGlobal(global_pos)
-        idx = view.indexAt(pos)
+        try:
+            pos = view.viewport().mapFromGlobal(global_pos)
+            idx = view.indexAt(pos)
+        except RuntimeError:
+            # PyQt6 refuses (some) virtual calls on views it did not create
+            # (Qt-internal C++ views such as a combo box's popup list); treat
+            # those as having no item tip and let the widget fallback run.
+            return ""
         if not idx.isValid():
             return ""
         data = idx.data(QtCore.Qt.ItemDataRole.ToolTipRole)
