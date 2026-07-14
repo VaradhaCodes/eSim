@@ -15,7 +15,7 @@ It is an integrated tool build using open source softwares such as KiCad, Ngspic
 
 ## Releases and Installation
 eSim is released for the following operating systems:
-* Ubuntu 24.04 LTS and 26.04 LTS (23.04 / 25.04 best-effort) — native installer
+* Ubuntu 24.04 LTS, 25.04 and 26.04 LTS — native installer
 * Microsoft Windows 10 and 11
 
 **Ubuntu quick install** — paste this in a terminal:
@@ -41,7 +41,6 @@ See [INSTALL](INSTALL) for detailed installation instructions for all platforms.
 * Perform Layout Design.
 * Model and Subcircuit builder.
 * Support for Mixed-Signal Simulations including Microcontrollers.
-* eSim has been successfully ported to low cost FOSSEE [laptop](https://laptop.fossee.in/)
 
 ## Open-Source Softwares Used
 * [Python](https://www.python.org/)
