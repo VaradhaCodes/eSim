@@ -21,7 +21,7 @@ eSim is released for the following operating systems:
 **Ubuntu quick install** — paste this in a terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/windows-test/Ubuntu/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/dev/Ubuntu/bootstrap.sh | bash
 ```
 
 (Downloads eSim to `~/eSim` and runs the installer. Re-run the same line to

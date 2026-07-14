@@ -16,7 +16,7 @@ There is also a zero-download-page install path for Ubuntu:
 `Ubuntu/install-eSim.sh` there — it contains NO install logic of its own, so
 it needs no per-release work beyond keeping its default `ESIM_BRANCH`/
 `ESIM_REPO` pointed at the branch users should get (currently
-`windows-test`; flip to the release branch/`master` when this work merges).
+`dev`; flip to the release branch/`master` when this work merges).
 
 ---
 

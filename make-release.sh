@@ -3,7 +3,7 @@
 #          FILE: make-release.sh
 #
 #         USAGE: ./make-release.sh [<ref>]     # default: HEAD
-#                ./make-release.sh origin/windows-test
+#                ./make-release.sh origin/dev
 #                ./make-release.sh --dirty     # include uncommitted edits
 #
 #   DESCRIPTION: Freeze a COMMITTED eSim tree into a versioned, self-contained
