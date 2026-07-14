@@ -251,13 +251,14 @@ class Appconfig:
     def load_preferences(self):
         """Return the persisted Aurora theme preferences, with safe defaults
         when ~/.esim/preferences.json is absent or unreadable."""
-        # enable_motion defaults OFF on Windows (CPU-blurred graphics effects
-        # are the biggest structural drag there), ON elsewhere. Preferences
-        # overrides it either way.
+        # enable_motion defaults ON everywhere, Windows included: only the
+        # hovered button carries a blur now (see frontEnd/motion.py), so the
+        # per-button CPU blur that made it a drag on Windows is gone. Keep this
+        # in step with motion._MOTION_DEFAULT. Preferences overrides it.
         prefs = {"theme_mode": "System", "accent_color": "default",
                  "secondary_accent_color": "system",
                  "internal_bg_color": "system",
-                 "enable_motion": os.name != "nt"}
+                 "enable_motion": True}
         try:
             path = paths.esim_config_path("preferences.json")
             if os.path.exists(path):
