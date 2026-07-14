@@ -171,7 +171,7 @@ class Mainwindow(QtWidgets.QWidget):
         pagetitle = QtWidgets.QLabel("Build an NGHDL model from VHDL")
         pagetitle.setObjectName("pagetitle")
 
-        self.removemodelbtn = QtWidgets.QPushButton('Uninstall Models')
+        self.removemodelbtn = QtWidgets.QPushButton('Uninstall Models…')
         self.removemodelbtn.setObjectName("uninstall")
         self.removemodelbtn.setMinimumHeight(30)
         self.removemodelbtn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)

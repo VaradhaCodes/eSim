@@ -510,13 +510,13 @@ class NgVeri(QtWidgets.QWidget):
         util_row = QtWidgets.QHBoxLayout()
         util_row.setSpacing(8)
 
-        self.addfilebutton = QtWidgets.QPushButton("Add dependency files")
+        self.addfilebutton = QtWidgets.QPushButton("Add dependency files…")
         self.addfilebutton.setSizePolicy(expanding, fixed)
         self.optionsgroupbtn.addButton(self.addfilebutton)
         self.addfilebutton.clicked.connect(self.addfile)
         util_row.addWidget(self.addfilebutton, 1)
 
-        self.addfolderbutton = QtWidgets.QPushButton("Add dependency folder")
+        self.addfolderbutton = QtWidgets.QPushButton("Add dependency folder…")
         self.addfolderbutton.setSizePolicy(expanding, fixed)
         self.optionsgroupbtn.addButton(self.addfolderbutton)
         self.addfolderbutton.clicked.connect(self.addfolder)
@@ -1013,7 +1013,7 @@ class NgVeri(QtWidgets.QWidget):
         # giant QComboBox -- whose popup, crippled by the groupbox stylesheet,
         # listed every model with no scrollbar and deleted one at a time.
         self.entry_var[self.count] = QtWidgets.QPushButton(
-            "Remove Verilog Models")
+            "Remove Verilog Models…")
         self.entry_var[self.count].clicked.connect(self.open_remove_models)
         controls.addWidget(self.entry_var[self.count])
         self.count += 1
