@@ -299,8 +299,13 @@ class AutoSchematic(QtWidgets.QWidget):
             creating the symbol
             (pins snapped to KiCad grid)
         '''
-        self.grid = 0.635
-        self.dist_port = 4 * self.grid      # Distance between two ports # 100 mil (= 2.54 mm)
+        # Rounding quantum for every coordinate written below. It must be the
+        # KiCad placement grid itself (100 mil = 2.54 mm): a smaller quantum
+        # (it used to be 0.635 = 25 mil) lets pins settle on half-grid points
+        # such as y=80.645, which no schematic grid ever hits, so wires cannot
+        # be attached to them.
+        self.grid = 2.54
+        self.dist_port = self.grid          # Distance between two ports # 100 mil (= 2.54 mm)
         self.inc_size = self.dist_port      # Increment size of a block
 
         def snap(val):
@@ -335,6 +340,10 @@ class AutoSchematic(QtWidgets.QWidget):
             "comp_name", f"{self.modelname}_0_1"
         ).split()
 
+        # Body width (7) and height (8) are snapped too, so the body edges land
+        # on the grid and the pin roots meet them exactly instead of overshoot-
+        # ing the outline by a fraction of a mm.
+        draw_pos[7] = snap(draw_pos[7])
         draw_pos[8] = snap(
             float(draw_pos[8]) + self.findBlockSize() * self.inc_size
         )

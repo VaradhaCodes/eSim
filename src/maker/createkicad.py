@@ -257,8 +257,12 @@ class AutoSchematic:
             re-serializes a valid file — no raw byte/line surgery, so the
             library can never be left glued or unbalanced.
         '''
-        self.grid = 0.635
-        self.dist_port = 4 * self.grid         # Distance between two ports # 100 mil (= 2.54 mm)
+        # Rounding quantum for every coordinate written below. It must be the
+        # KiCad placement grid itself (100 mil = 2.54 mm): a smaller quantum
+        # (it used to be 0.635 = 25 mil) lets pins settle on half-grid points
+        # that no schematic grid ever hits, so wires cannot be attached to them.
+        self.grid = 2.54
+        self.dist_port = self.grid          # Distance between two ports # 100 mil (= 2.54 mm)
         self.inc_size = self.dist_port      # Increment size of a block (mil)
         def snap(val):
                 snapped = round(float(val) / self.grid) * self.grid
@@ -300,6 +304,10 @@ class AutoSchematic:
 
         draw_pos = \
             [w.replace('comp_name', f"{self.modelname}_0_1") for w in draw_pos]
+        # Body width (7) and height (8) are snapped too, so the body edges land
+        # on the grid and the pin roots meet them exactly instead of overshoot-
+        # ing the outline by a fraction of a mm.
+        draw_pos[7] = snap(draw_pos[7])
         draw_pos[8] = snap(float(draw_pos[8]) +           # previously it is (-)
                           float(self.findBlockSize() * self.inc_size))
         draw_pos_rec = draw_pos[8]
