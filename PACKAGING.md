@@ -138,7 +138,11 @@ Design decisions:
 * **The custom eSim ngspice is built from source on Windows too.**
   `Stage-SimToolchain` compiles `nghdl/nghdl-simulator-source.tar.xz`
   (ngspice-45.2 + the nghdl delta baked in — no separate patch) inside
-  the staged MSYS2 (mingw64) with the same flags as
+  the staged MSYS2 (mingw64). That tarball's canonical home is the
+  [VaradhaCodes/nghdl](https://github.com/VaradhaCodes/nghdl) `windows`
+  branch, whose `windows/make_tarball.sh` regenerates it reproducibly from
+  the pristine ngspice release; the copy here is a synced snapshot. It is
+  compiled with the same flags as
   `install-nghdl.sh` on Ubuntu, into `tools\nghdl\{src,release,install_dir}` —
   the exact `$HOME/nghdl-simulator` layout, so every `~/.nghdl/config.ini`
   key means the same thing on both OSes. The official ngspice zip is staged
