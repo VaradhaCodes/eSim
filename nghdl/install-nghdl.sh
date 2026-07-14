@@ -97,14 +97,22 @@ detect_profile() {
 preflight() {
     log "Preflight checks"
 
-    # ~6 GB: ngspice source tree + build objects + iverilog build. df -P for
+    # ~2 GB: the measured peak for the ngspice-45.2 --disable-debug build is
+    # about 1 GB in $HOME (extracted source ~150 MB, build objects ~120 MB,
+    # staged install ~15 MB, Icarus build dir ~400 MB — deleted after), so
+    # 2 GB is 2x margin. Do NOT raise this without re-measuring: the old 6 GB
+    # figure was a fossil from the ngspice-35 / source-built-GHDL / debug era
+    # and refused machines that would have built fine. apt package space is
+    # on / and is budgeted by install-eSim.sh's own preflight. df -P for
     # portable output; check the filesystem $HOME lives on (build target).
-    local free_kb need_kb=6000000
+    local free_kb need_kb=2000000
     free_kb=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
-    if [ -n "$free_kb" ] && [ "$free_kb" -lt "$need_kb" ]; then
-        echo "ERROR: less than 6 GB free on $HOME ($((free_kb / 1024)) MB)."
-        echo "       The nghdl-simulator + Icarus builds need ~6 GB. Free up"
-        echo "       space and re-run."
+    if [ -z "${ESIM_SKIP_DISK_CHECK:-}" ] \
+       && [ -n "$free_kb" ] && [ "$free_kb" -lt "$need_kb" ]; then
+        echo "ERROR: less than 2 GB free on $HOME ($((free_kb / 1024)) MB free)."
+        echo "       The nghdl-simulator + Icarus builds need ~1 GB of scratch"
+        echo "       space plus margin. Free up space and re-run."
+        echo "       (ESIM_SKIP_DISK_CHECK=1 bypasses this check.)"
         exit 1
     fi
 
@@ -130,9 +138,12 @@ preflight() {
 
 installDependency() {
     log "Installing build dependencies"
+    # xz-utils: install-eSim.sh provides it on the normal path, but this
+    # script's standalone --install mode must be self-sufficient (the
+    # simulator source ships as .tar.xz).
     sudo apt-get install -y \
         make autoconf g++ flex bison \
-        git gperf \
+        git gperf xz-utils \
         zlib1g-dev libreadline-dev \
         libxaw7 libxaw7-dev \
         $GTK_CANBERRA

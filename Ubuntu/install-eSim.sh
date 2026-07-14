@@ -75,6 +75,52 @@ resolve_esim_home() {
        cd into the top-level eSim directory and run ./install-eSim.sh again."
 }
 
+# Fail fast on insufficient disk BEFORE any apt work, with a message that
+# says exactly how much to free. A fresh install needs roughly (measured on
+# real 24.04/26.04 installs):
+#   /      ~3.5 GB  apt payloads (KiCad ~0.5 GB, GHDL+LLVM ~0.7 GB, Qt/python/
+#                   build tools, deb download cache) + SKY130 PDK ~0.7 GB
+#   $HOME  ~1.5 GB  eSim tree + venv + nghdl build scratch (~1 GB peak)
+# On a RE-install most of that is already on disk, so low space only warns.
+# Without this check the install used to run for 20 minutes and then quietly
+# skip the simulator build — see installNghdl(), which is now fatal instead.
+preflightDisk() {
+    if [ -n "${ESIM_SKIP_DISK_CHECK:-}" ]; then
+        warn "ESIM_SKIP_DISK_CHECK set — skipping the disk-space preflight."
+        return 0
+    fi
+
+    local root_fs home_fs free_root free_home short=""
+    root_fs=$(df -Pk /       | awk 'NR==2 {print $1}')
+    home_fs=$(df -Pk "$HOME" | awk 'NR==2 {print $1}')
+    free_root=$(df -Pk /       | awk 'NR==2 {print $4}')
+    free_home=$(df -Pk "$HOME" | awk 'NR==2 {print $4}')
+    # df failed or gave nothing parseable — don't block the install on it.
+    [ -n "$free_root" ] && [ -n "$free_home" ] || return 0
+
+    if [ "$root_fs" = "$home_fs" ]; then
+        [ "$free_home" -lt 5000000 ] && short="$((free_home / 1024)) MB free \
+on $HOME — a fresh install needs ~5 GB (apt packages + PDKs + simulator build)"
+    else
+        [ "$free_root" -lt 3500000 ] && short="$((free_root / 1024)) MB free \
+on / — apt packages + PDKs need ~3.5 GB"
+        [ -z "$short" ] && [ "$free_home" -lt 1500000 ] && \
+            short="$((free_home / 1024)) MB free on $HOME — the simulator \
+build needs ~1.5 GB"
+    fi
+    [ -z "$short" ] && return 0
+
+    if [ -f "$config_dir/$config_file" ]; then
+        warn "Low disk space: $short."
+        warn "Continuing because an existing eSim install was found (re-installs"
+        warn "reuse most of it), but watch for out-of-space failures below."
+        return 0
+    fi
+    die "Not enough disk space: $short.
+       Free up space and re-run ./install-eSim.sh --install.
+       (ESIM_SKIP_DISK_CHECK=1 bypasses this check.)"
+}
+
 # Set per-version profile variables. Single source of truth for what differs
 # between Ubuntu releases.
 detect_profile() {
@@ -179,10 +225,16 @@ cleanLegacyEsim() {
     sudo rm -f /usr/local/bin/nghdl 2>/dev/null || true
 
     # Purely informational — old trees that are no longer referenced once
-    # this install repoints the launcher and ~/.esim/config.ini.
+    # this install repoints the launcher and ~/.esim/config.ini. Dirs only
+    # (the glob would otherwise flag the user's freshly-downloaded release
+    # .zip/.sha256), and never the tree we are installing FROM: the release
+    # zip extracts to eSim-2.x/, so $eSim_Home itself matches the glob —
+    # telling the user their live install is "safe to delete" broke installs.
     local d
     for d in "$HOME/ngspice-nghdl" "$HOME"/eSim-2.* "$HOME"/Downloads/eSim-2.*; do
-        [ -e "$d" ] && warn "Old eSim-era directory found: $d (unused after this install — safe to delete)"
+        [ -d "$d" ] || continue
+        [ "$(realpath "$d" 2>/dev/null)" = "$(realpath "$eSim_Home" 2>/dev/null)" ] && continue
+        warn "Old eSim-era directory found: $d (unused after this install — safe to delete)"
     done
     return 0
 }
@@ -370,19 +422,27 @@ installNghdl() {
         unzip -o "$eSim_Home/nghdl.zip" -d "$eSim_Home" >/dev/null
     fi
 
+    # NGHDL is NOT optional: it is the only step that provides ngspice (no
+    # apt line in this script installs a simulator), so an eSim without it
+    # launches and draws schematics but cannot simulate ANYTHING. It used to
+    # be treated as a skippable extra — which shipped exactly that broken
+    # install, with a success banner and exit 0. Fail loudly instead.
     local nd="$eSim_Home/nghdl"
     if [ ! -d "$nd" ]; then
-        warn "nghdl not found (no nghdl/ dir, no nghdl.zip) — skipping co-simulation"
-        return 0
+        die "nghdl not found (no nghdl/ dir, no nghdl.zip) in $eSim_Home.
+       NGHDL provides ngspice itself — without it eSim cannot simulate.
+       The download/zip is incomplete; re-download and re-run."
     fi
     if [ ! -f "$nd/nghdl-simulator-source.tar.xz" ]; then
-        warn "nghdl/nghdl-simulator-source.tar.xz missing — skipping co-simulation"
-        return 0
+        die "nghdl/nghdl-simulator-source.tar.xz missing from $eSim_Home.
+       NGHDL provides ngspice itself — without it eSim cannot simulate.
+       The download/zip is incomplete; re-download and re-run."
     fi
 
     chmod +x "$nd/install-nghdl.sh" 2>/dev/null || true
 
-    # NGHDL is optional: never abort the whole eSim install if it fails.
+    # Run without the ERR trap so a failure reaches the clear message below
+    # instead of the generic abort text.
     set +e; trap "" ERR
     ( cd "$nd" && ./install-nghdl.sh --install )
     local rc=$?
@@ -391,7 +451,12 @@ installNghdl() {
     if [ $rc -eq 0 ]; then
         log "NGHDL installed"
     else
-        warn "NGHDL install failed (exit $rc) — GHDL co-simulation unavailable; eSim still works"
+        die "NGHDL install failed (exit $rc).
+       NGHDL provides ngspice — without it eSim cannot run any simulation,
+       so this install is aborted rather than shipped broken. Fix the error
+       above (usually disk space or network), then re-run
+       ./install-eSim.sh --install — re-running is safe and keeps everything
+       already installed."
     fi
 }
 
@@ -582,7 +647,7 @@ print_plan() {
  sky130 PDK       : $( [ -f "$eSim_Home/library/sky130_fd_pr.tar.xz" ] && echo "present" || echo "MISSING" )
  kicad symbols    : 14 static -> /usr/share/kicad/symbols (root); 3 generated -> $config_dir/kicad_symbols (user)
  Steps            : config -> deps+venv -> PyQt6+QScintilla -> KiCad -> kicadLib
-                    -> nghdl(optional) -> sky130 -> ihp(prompt) -> launcher
+                    -> nghdl(required: provides ngspice) -> sky130 -> ihp(prompt) -> launcher
 =============================================================
 
 EOF
@@ -614,6 +679,7 @@ case "$option" in
         exec > >(tee "$HOME/eSim-install.log") 2>&1
         echo ">>> Logging to $HOME/eSim-install.log"
         set -e; set -E; trap error_exit ERR
+        preflightDisk
         setupProxy
         cleanLegacyEsim
         createConfigFile

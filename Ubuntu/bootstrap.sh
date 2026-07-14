@@ -38,8 +38,22 @@ _tmpdirs=()
 cleanup() { rm -rf "${_tmpdirs[@]}" 2>/dev/null || true; }
 trap cleanup EXIT
 
+# A tree is valid in either layout: the git/tarball layout keeps the
+# installer under Ubuntu/, the release zip hoists it to the root. Accepting
+# both lets `--uninstall` recognise a zip-installed tree instead of
+# downloading a fresh copy just to run its uninstaller.
 is_esim_tree() {
-    [ -f "$1/VERSION" ] && [ -d "$1/src" ] && [ -f "$1/Ubuntu/install-eSim.sh" ]
+    [ -f "$1/VERSION" ] && [ -d "$1/src" ] \
+        && { [ -f "$1/Ubuntu/install-eSim.sh" ] || [ -f "$1/install-eSim.sh" ]; }
+}
+
+# Relative path of the installer inside a valid tree (layout-dependent).
+installer_path() {
+    if [ -f "$1/Ubuntu/install-eSim.sh" ]; then
+        echo "Ubuntu/install-eSim.sh"
+    else
+        echo "install-eSim.sh"
+    fi
 }
 
 # install/uninstall prompt for proxy, sudo password, IHP, etc. Under
@@ -162,11 +176,11 @@ main() {
             require_tty
             ensure_tree
             log "Handing off to install-eSim.sh --install"
-            ( cd "$ESIM_DIR" && bash Ubuntu/install-eSim.sh --install < /dev/tty )
+            ( cd "$ESIM_DIR" && bash "$(installer_path "$ESIM_DIR")" --install < /dev/tty )
             ;;
         --dry-run)
             ensure_tree
-            ( cd "$ESIM_DIR" && bash Ubuntu/install-eSim.sh --dry-run < /dev/null )
+            ( cd "$ESIM_DIR" && bash "$(installer_path "$ESIM_DIR")" --dry-run < /dev/null )
             ;;
         --uninstall)
             require_tty
@@ -178,7 +192,7 @@ main() {
                 log "No local eSim tree found — fetching one just to run its uninstaller"
                 fetch_tree; tree="$FETCHED_TREE"
             fi
-            ( cd "$tree" && bash Ubuntu/install-eSim.sh --uninstall < /dev/tty )
+            ( cd "$tree" && bash "$(installer_path "$tree")" --uninstall < /dev/tty )
             ;;
     esac
 }
