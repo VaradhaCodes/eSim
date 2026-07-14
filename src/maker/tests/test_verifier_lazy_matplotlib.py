@@ -1,4 +1,4 @@
-"""P1.7: importing the Verilog verifier must not pull matplotlib.
+"""Importing the Verilog verifier must not pull matplotlib.
 
 VerilogVerifier used to subclass plotWindow at module scope, so
 `import maker.VerilogVerifier` dragged in matplotlib (+numpy) -- the first

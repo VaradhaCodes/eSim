@@ -1,4 +1,4 @@
-"""P1.4: simulation console is a bounded QPlainTextEdit fed by coalesced writes.
+"""Simulation console is a bounded QPlainTextEdit fed by coalesced writes.
 
 The console used to be an unbounded rich-text QTextEdit written per readyRead
 burst -- every insert relaid the whole document and memory grew without limit

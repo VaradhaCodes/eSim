@@ -1,4 +1,4 @@
-"""P2.4: the main window is maximized when the workspace flow reveals it, not
+"""The main window is maximized when the workspace flow reveals it, not
 in Application.__init__ (which runs behind the splash and is then hidden).
 
 Pins that _finish_workspace_change maximizes the captured view exactly once, so

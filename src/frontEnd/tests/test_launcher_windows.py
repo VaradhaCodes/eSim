@@ -1,4 +1,4 @@
-"""P2.1: in-process Windows environment setup (replaces esim.bat's second
+"""In-process Windows environment setup (replaces esim.bat's second
 interpreter for windows_bootstrap).
 
 Pins that setup_environment prepends the tool dirs in the order esim.bat did

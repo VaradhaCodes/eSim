@@ -1,4 +1,4 @@
-"""P1.1 regression: install_button_motion must be idempotent.
+"""Regression: install_button_motion must be idempotent.
 
 apply_fullscreen_feature calls install_button_motion(self) on EVERY dock open.
 It used to build a fresh TactileButtonFilter each call and installEventFilter it

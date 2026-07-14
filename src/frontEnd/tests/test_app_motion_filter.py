@@ -1,4 +1,4 @@
-"""P1.2: the two app-wide event filters merged into one, gated on event type.
+"""The two app-wide event filters merged into one, gated on event type.
 
 PopupMotionFilter (menu/combo/tree rounding) and EffectShowRefreshFilter
 (drop-shadow revalidate on Show) were both installed application-wide, so every

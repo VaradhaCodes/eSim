@@ -1,4 +1,4 @@
-"""P0.1: _app_teardown quiesces animation/timer/figure state at exit.
+"""_app_teardown quiesces animation/timer/figure state at exit.
 
 The recurring 0xc0000005 in sip at teardown is a use-after-free: animations and
 timers tick against graphics effects/canvases Qt is freeing. _app_teardown stops

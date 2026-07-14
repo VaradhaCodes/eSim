@@ -2,8 +2,10 @@
 =============================================================================
           FILE: build-windows.ps1
 
-         USAGE: powershell -ExecutionPolicy Bypass -File windows\build-windows.ps1
+         USAGE: pwsh -ExecutionPolicy Bypass -File windows\build-windows.ps1
                     [-SkipMsys] [-AcceptNewHashes] [-Clean]
+
+                Needs PowerShell 7+ (pwsh), NOT Windows PowerShell 5.1.
 
    DESCRIPTION: Reproducible Windows packaging for eSim. Runs on a Windows
                 build machine (or windows-latest CI runner). Produces:
@@ -62,6 +64,16 @@ param(
     [switch]$Clean
 )
 if ($SkipMsys) { $SkipSimBuild = $true }   # no MSYS2 -> nothing to build with
+
+# PowerShell 7+, not the Windows PowerShell 5.1 that ships with Windows: this
+# script uses PS7-only syntax (Get-Date -AsUTC, ${env:ProgramFiles(x86)}), and
+# under 5.1 it dies with a parse error that reads like a bug in the script.
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error ("This build needs PowerShell 7+ (running $($PSVersionTable.PSVersion)). " +
+                 "Install it (winget install Microsoft.PowerShell), then re-run with pwsh:`n" +
+                 "    pwsh -ExecutionPolicy Bypass -File windows\build-windows.ps1")
+    exit 1
+}
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # 10x faster Invoke-WebRequest

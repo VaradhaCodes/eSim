@@ -173,11 +173,13 @@ Design decisions:
 
 ### Build
 
-On a Windows machine (or `windows-latest` CI runner) with 7-Zip installed:
+On a Windows machine (or `windows-latest` CI runner) with 7-Zip and
+**PowerShell 7+** (`pwsh`) installed. The stock Windows PowerShell 5.1 cannot
+run the build — the script checks and refuses:
 
 ```powershell
 git clone <repo> ; cd eSim
-powershell -ExecutionPolicy Bypass -File windows\build-windows.ps1
+pwsh -ExecutionPolicy Bypass -File windows\build-windows.ps1
 # variants:
 #   -SkipMsys           no MSYS2 component at all (implies -SkipSimBuild)
 #   -SkipSimBuild       skip the source builds; official-ngspice shim +
@@ -210,11 +212,11 @@ to see the live truth for that machine.
 ### Windows shakedown (first VM run)
 
 Copy-pasteable loop for the first build + test round on a Windows 10/11 box
-with 7-Zip and git:
+with 7-Zip, git and PowerShell 7+:
 
 ```powershell
 git clone <repo> ; cd eSim
-powershell -ExecutionPolicy Bypass -File windows\build-windows.ps1 -AcceptNewHashes
+pwsh -ExecutionPolicy Bypass -File windows\build-windows.ps1 -AcceptNewHashes
 # (verify the recorded hashes in windows\deps-manifest.json against upstream,
 #  then commit them)
 windows\dist\eSim-<VERSION>-installer.exe     # choose Full

@@ -1,4 +1,4 @@
-"""P3.3/P3.4: preference writes merge (no key loss) and are atomic.
+"""Preference writes merge (no key loss) and are atomic.
 
 Appconfig.save_preferences used to rewrite preferences.json with only its four
 theme keys, silently dropping zoom_level / enable_motion / any future key.

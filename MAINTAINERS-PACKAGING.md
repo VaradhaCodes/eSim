@@ -1,6 +1,6 @@
 # Cutting an eSim release — maintainer cookbook
 
-Audience: a FOSSEE maintainer (or an AI session) with **zero prior context**.
+Audience: a FOSSEE maintainer with **zero prior context**.
 Design and rationale live in [PACKAGING.md](PACKAGING.md); this file is the
 "run these commands, tick these boxes" guide.
 

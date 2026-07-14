@@ -1,4 +1,4 @@
-"""P0.3: terminate_all bounds exit to a shared wait budget.
+"""terminate_all bounds exit to a shared wait budget.
 
 Calling terminate_handle in a loop serialised its per-child terminate->wait(2s)
 ->kill->wait(1s) escalation, so N open external windows froze the GUI thread for

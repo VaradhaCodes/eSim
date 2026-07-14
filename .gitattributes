@@ -18,10 +18,7 @@
 # Ubuntu/ (bootstrap.sh's is_esim_tree() requires Ubuntu/install-eSim.sh),
 # README.md, LICENSE, INSTALL.
 
-# ---- packaging / porting notes (maintainer-facing) ----
-/WINDOWS-BUILD-PORTING-NOTES.md  export-ignore
-/WINDOWS-PERF-AUDIT.md           export-ignore
-/WINDOWS-PERF-AUDIT-PROGRESS.md  export-ignore
+# ---- packaging notes (maintainer-facing) ----
 /PACKAGING.md                    export-ignore
 /MAINTAINERS-PACKAGING.md        export-ignore
 
