@@ -1,6 +1,20 @@
-import sys
 import os
+import re
 from xml.etree import ElementTree as ET
+
+from configuration import paths
+
+
+class UndefinedParametersError(RuntimeError):
+    """Raised once per netlist when schematic parameters lack definitions."""
+
+    def __init__(self, parameters):
+        self.parameters = tuple(parameters)
+        names = ", ".join(self.parameters)
+        super().__init__(
+            f"Undefined parameters: {names} — define them with a .param "
+            "directive or text field in the schematic."
+        )
 
 
 class PrcocessNetlist:
@@ -8,11 +22,10 @@ class PrcocessNetlist:
     - This class include all the function required for pre-proccessing of
       netlist before converting to Ngspice Netlist.
     """
-    init_path = '../../'
-    if os.name == 'nt':
-        init_path = ''
-
-    modelxmlDIR = init_path + 'library/modelParamXML'
+    # Anchored to the install root via configuration.paths, never the process
+    # CWD — a wrong CWD used to make os.walk see an empty tree and flag every
+    # model as "unknown".
+    modelxmlDIR = paths.library_path('modelParamXML')
 
     def __init__(self):
         pass
@@ -61,24 +74,19 @@ class PrcocessNetlist:
         - Separate infoline (first line) from the rest of netlist
         """
         netlist = []
+        unresolved = []
         for eachline in kicadNetlist:
             # Remove leading and trailing blanks spaces from line
             eachline = eachline.strip()
             # Remove special character $
             eachline = eachline.replace('$', '')
             # Replace parameter with values
-            for subParam in eachline.split():
-                if '}' in subParam:
-                    key = subParam.split()[0]
-                    key = key.strip('{')
-                    key = key.strip('}')
-                    if key in param:
-                        eachline = eachline.replace(
-                            '{' + key + '}', param[key])
-                    else:
-                        print("Parameter " + key + " does not exists")
-                        value = input('Enter parameter value: ')
-                        eachline = eachline.replace('{' + key + '}', value)
+            for key in re.findall(r'\{([^{}]+)\}', eachline):
+                if key in param:
+                    eachline = eachline.replace(
+                        '{' + key + '}', param[key])
+                elif key not in unresolved:
+                    unresolved.append(key)
             # Convert netlist into lower case letter
             eachline = eachline.lower()
             # Construct netlist
@@ -87,6 +95,9 @@ class PrcocessNetlist:
                     netlist.append(netlist.pop() + eachline.replace('+', ' '))
                 else:
                     netlist.append(eachline)
+        if unresolved:
+            raise UndefinedParametersError(unresolved)
+
         # Copy information line
         infoline = netlist[0]
         netlist.remove(netlist[0])
@@ -256,7 +267,24 @@ class PrcocessNetlist:
             'plot_phase']
         interMediateNodeCount = 1
         k = 1
-        for compline in schematicInfo:
+        # Index modelParamXML ONCE up front: {filename: [full paths]}. Each u*
+        # component then resolves its model with an O(1) dict lookup instead of
+        # a fresh os.walk + per-directory os.listdir. A 20-IC schematic used to
+        # re-walk the whole tree 20 times -- disk-bound on cold NTFS with
+        # Defender. Built per call (not cached on the class) so a model created
+        # earlier this session is still seen.
+        model_xml_index = {}
+        for _dirpath, _dirs, _files in os.walk(PrcocessNetlist.modelxmlDIR):
+            for _fname in _files:
+                if _fname.endswith(".xml"):
+                    model_xml_index.setdefault(_fname, []).append(
+                        os.path.join(_dirpath, _fname))
+        # Iterate a snapshot: the body remove()s the current line and reinserts
+        # a comment / appends model lines into schematicInfo. Walking the live
+        # list while mutating it skips the element after any net removal (two
+        # adjacent IC components would drop the second) and needlessly re-walks
+        # the appended a*/v_ lines. The snapshot pins the original components.
+        for compline in list(schematicInfo):
             words = compline.split()
             compName = words[0]
             # print "Compline----------------->",compline
@@ -280,15 +308,11 @@ class PrcocessNetlist:
                         compType not in plotList and \
                         compType != 'transfo':
                     xmlfile = compType + ".xml"  # XML Model File
-                    count = 0  # Check if model of same name is present
-                    modelPath = []
-                    all_dir = [x[0]
-                               for x in os.walk(PrcocessNetlist.modelxmlDIR)]
-                    for each_dir in all_dir:
-                        all_file = os.listdir(each_dir)
-                        if xmlfile in all_file:
-                            count += 1
-                            modelPath.append(os.path.join(each_dir, xmlfile))
+                    # O(1) lookup into the prebuilt index (copy so the stored
+                    # list is never mutated downstream). count keeps the same
+                    # meaning: how many dirs hold a model of this name.
+                    modelPath = list(model_xml_index.get(xmlfile, []))
+                    count = len(modelPath)
 
                     if count > 1:
                         multipleModelList.append(modelPath)
@@ -392,11 +416,13 @@ class PrcocessNetlist:
                                                 modelLine += words[pos] + " "
                                                 pos += 1
 
-                                    except BaseException:
-                                        print(
-                                            "There is error while processing\
-                                             Vector Details")
-                                        sys.exit(2)
+                                    except Exception as exc:
+                                        raise RuntimeError(
+                                            "Invalid vector details for "
+                                            f"component '{compName}' in model "
+                                            f"'{compType}' ({modelPath[0]}): "
+                                            f"{item!r}"
+                                        ) from exc
                                 modelLine += compName
 
                             # print "Final Model Line :",modelLine
@@ -417,12 +443,12 @@ class PrcocessNetlist:
                             modelList.append(
                                 [index, compline, modelname, compName,
                                  comment, title, type, paramDict])
-                        except Exception as e:
-                            print(
-                                "Unable to parse the model, \
-                                Please check your your XML file")
-                            print("Exception Message : ", str(e))
-                            sys.exit(2)
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"Unable to parse model '{compType}' for "
+                                f"component '{compName}' from "
+                                f"'{modelPath[0]}': {exc}"
+                            ) from exc
                 elif compType == "ic":
                     schematicInfo.insert(index, "* " + compline)
                     modelname = "ic"

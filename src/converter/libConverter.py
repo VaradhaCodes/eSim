@@ -1,6 +1,8 @@
 import os
+import sys
 import subprocess
 from PyQt6.QtWidgets import QMessageBox
+from configuration import Dialogs
 
 class PspiceLibConverter:
     def __init__(self, parent):
@@ -27,13 +29,16 @@ class PspiceLibConverter:
             # Prepare the command as a list
             output_dir = os.path.dirname(file_path)
 
-            command = ["python3", "libparser.py", file_path, output_dir]
+            command = [sys.executable, "libparser.py", file_path, output_dir]
             print(f"Running command: {' '.join(command)} in directory: {parser_path}")
 
             try:
-                subprocess.run(command, check=True, cwd=parser_path)
+                subprocess.run(command, check=True, cwd=parser_path,
+                               capture_output=True, text=True,
+                               creationflags=getattr(
+                                   subprocess, 'CREATE_NO_WINDOW', 0))
                 # Message box with the conversion success message
-                msg_box = QMessageBox()
+                msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Information)
                 msg_box.setWindowTitle("Conversion Successful")
                 msg_box.setText("The file has been converted successfully.")
@@ -41,11 +46,16 @@ class PspiceLibConverter:
                 print("Conversion of Pspice library is Successful")
 
             except subprocess.CalledProcessError as e:
-                print("Error:", e)
+                detail = (e.stderr or e.stdout or str(e)).strip()
+                print("Error:", detail)
+                Dialogs.critical(
+                    self.parent, "Conversion failed",
+                    "PSpice library conversion failed:\n\n"
+                    + "\n".join(detail.splitlines()[:15]))
         else:
             print("File is empty. Cannot perform conversion.")
             # A message box indicating that the file is empty
-            msg_box = QMessageBox()
+            msg_box = Dialogs.make_message_box(self.parent)
             msg_box.setIcon(QMessageBox.Icon.Warning)
             msg_box.setWindowTitle("Empty File")
             msg_box.setText("The selected file is empty. Conversion cannot be performed.")
@@ -57,7 +67,7 @@ class PspiceLibConverter:
             # Check if the file path contains spaces
             if ' ' in file_path:
                 # Show a message box indicating that spaces are not allowed
-                msg_box = QMessageBox()
+                msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Warning)
                 msg_box.setWindowTitle("Invalid File Path")
                 msg_box.setText("Spaces are not allowed in the file path.")
@@ -69,7 +79,7 @@ class PspiceLibConverter:
                 print(file_path)
                 self.convert(file_path)
             else:
-                msg_box = QMessageBox()
+                msg_box = Dialogs.make_message_box(self.parent)
                 msg_box.setIcon(QMessageBox.Icon.Warning)
                 msg_box.setWindowTitle("Invalid File Path")
                 msg_box.setText("Only .slb file can be converted.")
@@ -81,7 +91,7 @@ class PspiceLibConverter:
             print("No file selected.")
 
             # Message box indicating that no file is selected
-            msg_box = QMessageBox()
+            msg_box = Dialogs.make_message_box(self.parent)
             msg_box.setIcon(QMessageBox.Icon.Warning)
             msg_box.setWindowTitle("No File Selected")
             msg_box.setText("Please select a file before uploading.")

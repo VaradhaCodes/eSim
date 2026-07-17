@@ -1,6 +1,6 @@
-import os
 from PyQt6 import QtWidgets
 from . import TrackWidget
+from projManagement.projectPaths import previous_values_path
 from xml.etree import ElementTree as ET
 
 
@@ -9,9 +9,12 @@ class Source(QtWidgets.QWidget):
     This class create Source Tab of KicadtoNgSpice Window.
     """
 
-    def __init__(self, sourcelist, sourcelisttrack, clarg1):
+    def __init__(self, sourcelist, sourcelisttrack, clarg1, track=None):
         QtWidgets.QWidget.__init__(self)
-        self.obj_track = TrackWidget.TrackWidget()
+        # Shared per-conversion data bus, injected by the converter window; a
+        # standalone construction falls back to its own instance.
+        self.obj_track = track if track is not None else \
+            TrackWidget.TrackWidget()
         # Variables
         self.count = 1
         self.clarg1 = clarg1
@@ -49,22 +52,17 @@ class Source(QtWidgets.QWidget):
         print("SOURCE LIST", sourcelist)
         print("===========================================================")"""
         kicadFile = self.clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
 
         try:
             f = open(
-                os.path.join(
-                    projpath,
-                    project_name +
-                    "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 'r')
             tree = ET.parse(f)
             parent_root = tree.getroot()
             for child in parent_root:
                 if child.tag == "source":
                     root = child
-        except BaseException:
+        except Exception:
             print("Source Previous Values XML is Empty")
 
         self.grid = QtWidgets.QGridLayout()
@@ -105,7 +103,7 @@ class Source(QtWidgets.QWidget):
                                     .setText(child[0].text)
                                 self.entry_var[self.count + 1] \
                                     .setText(child[1].text)
-                    except BaseException:
+                    except Exception:
                         pass
                     # Value Need to check previuouse value
                     # self.entry_var[self.count].setText("")
@@ -149,7 +147,7 @@ class Source(QtWidgets.QWidget):
                                     and child.text == line[2]:
                                 self.entry_var[self.count] \
                                     .setText(child[0].text)
-                    except BaseException:
+                    except Exception:
                         pass
 
                     self.row = self.row + 1
@@ -193,7 +191,7 @@ class Source(QtWidgets.QWidget):
                                         and child.text == line[2]:
                                     self.entry_var[self.count] \
                                         .setText(child[it-4].text)
-                        except BaseException:
+                        except Exception:
                             pass
 
                         self.row = self.row + 1
@@ -236,7 +234,7 @@ class Source(QtWidgets.QWidget):
                                         and child.text == line[2]:
                                     self.entry_var[self.count] \
                                         .setText(child[it-4].text)
-                        except BaseException:
+                        except Exception:
                             pass
 
                         self.row = self.row + 1
@@ -276,7 +274,7 @@ class Source(QtWidgets.QWidget):
                                     and child.text == line[2]:
                                 self.entry_var[self.count] \
                                     .setText(child[0].text)
-                    except BaseException:
+                    except Exception:
                         pass
 
                     self.row = self.row + 1
@@ -319,7 +317,7 @@ class Source(QtWidgets.QWidget):
                                         and child.text == line[2]:
                                     self.entry_var[self.count] \
                                         .setText(child[it-4].text)
-                        except BaseException:
+                        except Exception:
                             pass
 
                         self.row = self.row + 1
@@ -349,4 +347,3 @@ class Source(QtWidgets.QWidget):
         # This is used to keep the track of dynamically created widget
         self.obj_track.sourcelisttrack["ITEMS"] = sourcelisttrack
         self.obj_track.source_entry_var["ITEMS"] = self.entry_var
-        self.show()

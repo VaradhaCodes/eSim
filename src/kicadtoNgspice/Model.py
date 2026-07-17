@@ -1,10 +1,10 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-import os
 from xml.etree import ElementTree as ET
 from PyQt6 import QtWidgets
 
 from . import TrackWidget
+from projManagement.projectPaths import previous_values_path
 
 
 class Model(QtWidgets.QWidget):
@@ -17,18 +17,17 @@ class Model(QtWidgets.QWidget):
             schematicInfo,
             modelList,
             clarg1,
+            track=None,
     ):
 
         QtWidgets.QWidget.__init__(self)
 
         # Processing for getting previous values
         kicadFile = clarg1
-        (projpath, filename) = os.path.split(kicadFile)
-        project_name = os.path.basename(projpath)
         check = 1
         try:
             f = open(
-                os.path.join(projpath, project_name + "_Previous_Values.xml"),
+                previous_values_path(kicadFile),
                 "r",
             )
             tree = ET.parse(f)
@@ -36,11 +35,13 @@ class Model(QtWidgets.QWidget):
             for child in parent_root:
                 if child.tag == "model":
                     root = child
-        except BaseException:
+        except Exception:
             check = 0
 
-        # Creating track widget object
-        self.obj_trac = TrackWidget.TrackWidget()
+        # Shared per-conversion data bus, injected by the converter window; a
+        # standalone construction falls back to its own instance.
+        self.obj_trac = track if track is not None else \
+            TrackWidget.TrackWidget()
 
         # for increasing row and counting/tracking line edit widget
         self.nextrow = 0
@@ -93,7 +94,7 @@ class Model(QtWidgets.QWidget):
                                 if child.text == line[2] and child.tag == line[3]:
                                     le.setText(child[i].text)
                                     i += 1
-                        except BaseException:
+                        except Exception:
                             pass
 
                         # add exactly one widget per row
@@ -119,7 +120,7 @@ class Model(QtWidgets.QWidget):
                             if child.text == line[2] and child.tag == line[3]:
                                 le.setText(child[i].text)
                                 i += 1
-                    except BaseException:
+                    except Exception:
                         pass
 
                     modelgrid.addWidget(le, self.nextrow, 1)
@@ -163,7 +164,6 @@ class Model(QtWidgets.QWidget):
             if check == 0:
                 self.obj_trac.modelTrack.append(lst)
 
-        self.show()
 
     def add_hex_btn(self, modelgrid, modelbox):
         self.addbtn = QtWidgets.QPushButton("Add Hex File")

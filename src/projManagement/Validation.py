@@ -21,6 +21,8 @@ import os
 import re
 import shutil
 
+from .projectPaths import find_anchors, resolve_stem
+
 
 class Validation:
     """
@@ -45,13 +47,10 @@ class Validation:
             False       => If the folder doesn't contain projName.proj file
         """
         print("Function: Validating Open Project Information")
-        projName = os.path.basename(str(projDir))
-        lookProj = os.path.join(str(projDir), projName + ".proj")
-        # Check existence of project
-        if os.path.exists(lookProj):
-            return True
-        else:
-            return False
+        # A folder is a valid project if it contains any .proj anchor file,
+        # regardless of whether its name matches the folder name. The exact
+        # stem is resolved separately (see projectPaths.resolve_stem).
+        return len(find_anchors(str(projDir), 'proj')) >= 1
 
     def validateNewproj(self, projDir):
         """
@@ -101,20 +100,22 @@ class Validation:
         else:
             return True
 
-    def validateCir(self, projDir):
+    def validateCir(self, projDir, stem=None):
         """
-        Validate if cir file present in the directory with the appropriate .cir
-        file name, same as the project directory base
+        Validate if the project's .cir netlist is present.
 
         @params
-            :projDir    => the path to the project diretory
+            :projDir    => the path to the project directory
+            :stem        => resolved project stem; if omitted it is resolved
+                            from the .proj anchor instead of the folder name
 
         @return
             True
             False
         """
-        projName = os.path.basename(str(projDir))
-        lookCir = os.path.join(str(projDir), projName + ".cir")
+        if stem is None:
+            stem, _status = resolve_stem(str(projDir), 'proj')
+        lookCir = os.path.join(str(projDir), str(stem) + ".cir")
         # Check existence of project
         if os.path.exists(lookCir):
             return True
@@ -132,12 +133,14 @@ class Validation:
                 validation
 
         @return
-            True
-            PORT
-            DIREC
+            "True"     => a matching .subckt with the expected port count
+            "PORT"     => .subckt found but port count differs
+            "DIREC"    => no .sub file in the directory
+            "NOSUBCKT" => .sub file exists but contains no .subckt line
         """
-        subName = os.path.basename(str(subDir))
-        lookSub = os.path.join(str(subDir), subName + ".sub")
+        # Resolve the subcircuit stem from its .sub anchor, not the folder name.
+        subName, _status = resolve_stem(str(subDir), 'sub')
+        lookSub = os.path.join(str(subDir), str(subName) + ".sub")
         # Check existence of project
         if os.path.exists(lookSub):
             f = open(lookSub)
@@ -160,13 +163,18 @@ class Validation:
                         return "PORT"
                     else:
                         return "True"
+            # .sub file exists but no ".subckt" line was found — an explicit
+            # terminal value beats falling off the end returning None (which
+            # callers string-compare into a confusing wrong-branch message).
+            return "NOSUBCKT"
         else:
             return "DIREC"
 
-    def validateCirOut(self, projDir):
+    def validateCirOut(self, projDir, stem=None):
         """This function checks if ".cir.out" file is present."""
-        projName = os.path.basename(str(projDir))
-        lookCirOut = os.path.join(str(projDir), projName + ".cir.out")
+        if stem is None:
+            stem, _status = resolve_stem(str(projDir), 'proj')
+        lookCirOut = os.path.join(str(projDir), str(stem) + ".cir.out")
         # Check existence of project
         if os.path.exists(lookCirOut):
             return True
@@ -207,7 +215,8 @@ class Validation:
                 if len(word) == 0 or word[0][0] == "*":
                     continue
                 if first:
-                    if word[0] == ".subckt" and word[1] == fileName:
+                    if (len(word) >= 2 and word[0] == ".subckt"
+                            and word[1] == fileName):
                         first = False
                     else:
                         print("First line not found:", word)

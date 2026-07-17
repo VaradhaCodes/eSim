@@ -18,9 +18,10 @@
 
 from PyQt6 import QtWidgets
 from .Validation import Validation
+from .projectPaths import canonical_path, save_project_explorer
 from configuration.Appconfig import Appconfig
+from configuration import Dialogs
 import os
-import json
 
 
 class NewProjectInfo(QtWidgets.QWidget):
@@ -86,22 +87,23 @@ class NewProjectInfo(QtWidgets.QWidget):
                     self.projDir, self.projName + ".proj")
                 f = open(self.projFile, "w")
 
-            except BaseException:
-                self.msg = QtWidgets.QErrorMessage(self)
-                self.msg.setModal(True)
-                self.msg.setWindowTitle("Error Message")
-                self.msg.showMessage(
+            except Exception:
+                Dialogs.critical(
+                    self, "Error Message",
                     'Unable to create project. Please make sure you have ' +
-                    'write permission on ' + self.workspace
-                )
-                self.msg.exec()
+                    'write permission on ' + self.workspace)
                 return None, None
 
             # New KiCad v6 file extension
             f.write("schematicFile " + self.projName + ".kicad_sch\n")
             f.close()
 
-            # Now Change the current working project
+            # Now Change the current working project. Canonicalise the folder
+            # to its identity key (see projectPaths.canonical_path) before it
+            # becomes the project_explorer/current_project key, so a project is
+            # registered under one form -- matching what openProject and the
+            # project tree compare against.
+            self.projDir = canonical_path(self.projDir)
             newprojlist = []
             # self.obj_appconfig = Appconfig()
             self.obj_appconfig.current_project['ProjectName'] = self.projDir
@@ -113,38 +115,28 @@ class NewProjectInfo(QtWidgets.QWidget):
             self.obj_appconfig.print_info(
                 'Current project is : ' + self.projDir)
 
-            json.dump(
-                self.obj_appconfig.project_explorer, open(
-                    self.obj_appconfig.dictPath["path"], 'w'))
+            save_project_explorer(
+                self.obj_appconfig.dictPath["path"],
+                self.obj_appconfig.project_explorer)
             return self.projDir, newprojlist
 
         elif self.reply == "CHECKEXIST":
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
+            Dialogs.critical(
+                self, "Error Message",
                 'The project "' + self.projName +
                 '" already exist.Please select the different name or delete' +
-                ' existing project'
-            )
-            self.msg.exec()
+                ' existing project')
             return None, None
 
         elif self.reply == "CHECKNAME":
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
+            Dialogs.critical(
+                self, "Error Message",
                 'The project name should not contain space between them')
-            self.msg.exec()
             return None, None
 
         elif self.reply == "NONE":
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage('The project name cannot be empty')
-            self.msg.exec()
+            Dialogs.critical(
+                self, "Error Message", 'The project name cannot be empty')
             return None, None
 
     def cancelProject(self):
