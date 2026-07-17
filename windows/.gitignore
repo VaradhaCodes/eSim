@@ -1,0 +1,5 @@
+build/
+downloads/
+dist/
+# compiled by Stage-Launcher (a local test compile may drop one here too)
+launcher/eSim.exe

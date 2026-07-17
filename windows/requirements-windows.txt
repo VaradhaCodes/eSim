@@ -1,0 +1,25 @@
+# Python packages pip-installed into the PRIVATE bundled Python on Windows.
+#
+# On Ubuntu the heavy native deps (PyQt6, matplotlib, numpy) come from
+# apt so they stay ABI-consistent with the system Qt. On Windows there is no
+# system Qt: the PyQt6 wheel bundles its own Qt runtime, so pip wheels are the
+# right source for everything. Keep loose (>=) pins like requirements.txt --
+# the release build freezes whatever it resolved into the installer, and
+# MAINTAINERS-PACKAGING.md says to record `pip freeze` output per release.
+#
+# scipy is deliberately absent: nothing in the tree imports it (verified
+# repo-wide) and it cost 128 MB installed. requirements.txt still lists it
+# for Ubuntu until the same audit lands there; Optimize-Stage purges it from
+# stages provisioned before this change.
+PyQt6>=6.6
+PyQt6-QScintilla>=2.14
+matplotlib>=3.8
+numpy>=1.26
+psutil>=5.9
+watchdog>=3.0
+# HDL / Makerchip flow (same set install-eSim.sh installs; each is optional at
+# runtime -- eSim degrades gracefully when absent).
+https://github.com/hdl/pyhdlparser/tarball/master
+makerchip-app
+sandpiper-saas
+volare
