@@ -29,27 +29,27 @@
 # importing the files and libraries
 import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtWidgets
-from PyQt6.QtCore import QThread, pyqtSignal
+from configuration import Dialogs
+from configuration import paths
 from configuration.Appconfig import Appconfig
 import os
-import watchdog.events
-import watchdog.observers
+import shutil
 from os.path import expanduser
+from .DesignBus import DesignBus
+from .VerilogVerifier import HdlEditor
 home = expanduser("~")
-# import inotify.adapters
 
 # declaring the global variables
-# verilogfile stores the name of the file
-# toggle flag stores the object of the toggling button
+# verilogFile[filecount] mirrors each design's path on disk. The DesignBus that
+# owns the design is its one writer; NgVeri / ModelGeneration read this slot.
 verilogFile = []
-toggle_flag = []
 
 
 # This function is called to accept TOS of makerchip
 def makerchipTOSAccepted(display=True):
     if not os.path.isfile(home + "/.makerchip_accepted"):
         if display:
-            reply = QtWidgets.QMessageBox.warning(
+            reply = Dialogs.warning(
                 None, "Terms of Service", "Please review the Makerchip \
                        Terms of Service \
                        (<a href='https://www.makerchip.com/terms/'>\
@@ -72,17 +72,24 @@ def makerchipTOSAccepted(display=True):
 class Maker(QtWidgets.QWidget):
 
     # initailising the varaibles
-    def __init__(self, filecount):
-        print(self)
-
+    def __init__(self, filecount, bus=None):
         QtWidgets.QWidget.__init__(self)
         self.count = 0
         self.text = ""
+        self.verilogfile = ""
         self.filecount = filecount
         self.entry_var = {}
+        self._applying = False
+        self.bus = None
+        self._owns_bus = False
         self.createMakerWidget()
         self.obj_Appconfig = Appconfig()
         verilogFile.append("")
+        # The design lives in a DesignBus. The Flow Navigator injects a shared
+        # one so Author/Verify/Convert are views on one design; standalone Maker
+        # owns its own.
+        self.set_design_bus(bus or DesignBus(self.filecount),
+                            take_ownership=bus is None)
 
     # Creating the various components of the Widget(Maker Tab)
     def createMakerWidget(self):
@@ -93,43 +100,65 @@ class Maker(QtWidgets.QWidget):
         self.grid.addWidget(self.createoptionsBox(), 0, 0, QtCore.Qt.AlignmentFlag.AlignTop)
         self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
         # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
-        self.show()
 
-    def _stop_current_toggle(self):
-        global toggle_flag
-        if self.refreshoption in toggle_flag:
-            toggle_flag.remove(self.refreshoption)
-        if hasattr(self, 'event_handler') and self.event_handler.toggle.isRunning():
-            self.event_handler.toggle.requestInterruption()
-            self.event_handler.toggle.wait(2000)
+    def set_design_bus(self, bus, take_ownership=False):
+        """Bind this Author view to a shared design. Disconnects any previous
+        bus, subscribes the editor, and renders the current design. The Flow
+        Navigator calls this to make all stages share one design."""
+        if self.bus is bus:
+            return
+        if self.bus is not None:
+            try:
+                self.bus.contentChanged.disconnect(self._render_from_bus)
+            except (TypeError, RuntimeError):
+                pass
+            if self._owns_bus:
+                self.bus.close()
+        self.bus = bus
+        self._owns_bus = take_ownership
+        self.bus.contentChanged.connect(self._render_from_bus)
+        self._render_from_bus(self.bus.get_content())
+
+    def _on_editor_changed(self):
+        """Editor edits flow straight into the shared design (in memory). Guarded
+        so rendering the bus back into the editor cannot loop."""
+        if self._applying or self.bus is None:
+            return
+        self.bus.set_content(self.entry_var[1].toPlainText())
+
+    def _render_from_bus(self, text):
+        """Show the shared design's current text + path. Guarded against the
+        editor's own textChanged echoing back into the bus."""
+        self.verilogfile = self.bus.path if self.bus is not None else ""
+        self._applying = True
+        try:
+            if self.entry_var[1].toPlainText() != text:
+                self.entry_var[1].setText(text)
+            self.entry_var[0].setText(
+                self.verilogfile or "(no file yet — use Save to create one)")
+        finally:
+            self._applying = False
 
     def closeEvent(self, event):
-        self._stop_current_toggle()
-        if hasattr(self, '_rc_toggle') and self._rc_toggle.isRunning():
-            self._rc_toggle.requestInterruption()
-            self._rc_toggle.wait(2000)
-        if hasattr(self, 'observer') and self.observer.is_alive():
-            self.observer.stop()
+        if self.bus is not None and self._owns_bus:
+            self.bus.close()
         super().closeEvent(event)
 
     # This function is to Add new verilog file
     def addverilog(self):
 
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
         self.verilogfile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
                 self, "Open Verilog Directory",
-                init_path + "home", "*v"
+                os.path.join(paths.repo_root(), "home"), "*v"
             )[0]
         )
         if self.verilogfile == "":
             self.verilogfile = self.entry_var[0].text()
 
         if self.verilogfile == "":
-            reply = QtWidgets.QMessageBox.critical(
-                None,
+            reply = Dialogs.critical(
+                self,
                 "Error Message",
                 "<b>No Verilog File Chosen. \
                 Please choose a verilog file.</b>",
@@ -147,84 +176,33 @@ class Maker(QtWidgets.QWidget):
                 self.obj_Appconfig.print_info('No Verilog File Chosen')
                 return
 
-        self.text = open(self.verilogfile).read()
-        self.entry_var[0].setText(self.verilogfile)
-        self.entry_var[1].setText(self.text)
-        global verilogFile
+        # Loading routes through the shared design; the bus reads the file,
+        # mirrors the slot, arms the external-edit watch, and renders the editor.
+        self.bus.load_from_disk(self.verilogfile)
 
-        verilogFile[self.filecount] = self.verilogfile
-        self._stop_current_toggle()
-
-        self.observer = watchdog.observers.Observer()
-        self.event_handler = Handler(
-            self.verilogfile,
-            self.refreshoption,
-            self.observer)
-
-        self.observer.schedule(
-            self.event_handler,
-            path=self.verilogfile,
-            recursive=True)
-        self.observer.start()
-        # self.notify=notify(self.verilogfile,self.refreshoption)
-        # self.notify.start()
-        # open("filepath.txt","w").write(self.verilogfile)
-
-    # This function is used to call refresh while
-    # running Ngspice to Verilog Converter
-    # (as the original one gets destroyed)
-    def refresh_change(self):
-        if self.refreshoption in toggle_flag:
-            if hasattr(self, '_rc_toggle') and self._rc_toggle.isRunning():
-                return
-            self._rc_toggle = toggle(self.refreshoption)
-            self._rc_toggle.start()
-
-    # It is used to refresh the file in eSim if its edited anywhere else
-    def refresh(self):
-        if not hasattr(self, 'verilogfile'):
-            return
-        self.text = open(self.verilogfile).read()
-        self.entry_var[1].setText(self.text)
-        print("NgVeri File: " + self.verilogfile + " Refreshed")
-        self.obj_Appconfig.print_info(
-            "NgVeri File: " + self.verilogfile + " Refreshed")
-        self._stop_current_toggle()
-        self.observer = watchdog.observers.Observer()
-        self.event_handler = Handler(
-            self.verilogfile,
-            self.refreshoption,
-            self.observer)
-
-        self.observer.schedule(
-            self.event_handler,
-            path=self.verilogfile,
-            recursive=True)
-        self.observer.start()
+    def load_verilog(self, filepath):
+        self.bus.load_from_disk(filepath)
 
     # This function is used to save the edited file in eSim
     def save(self):
-        try:
-            wr = self.entry_var[1].toPlainText()
-            open(self.verilogfile, "w+").write(wr)
-        except BaseException as err:
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
-                "Error in saving verilog file. Please check if it is chosen."
-            )
-            self.msg.exec()
-            print("Error in saving verilog file: " + str(err))
+        if self.bus is None:
+            return
+        self.bus.set_content(self.entry_var[1].toPlainText())
+        if not self.bus.save_to_disk():
+            Dialogs.critical(
+                self, "Error Message",
+                "Error in saving verilog file. Please check if it is chosen.")
 
     # This is used to run the makerchip-app
     def runmakerchip(self):
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
         try:
             if not makerchipTOSAccepted(True):
                 return
+
+            # Makerchip reads the design off disk; flush any in-editor edits
+            # first so it sees the current text, not a stale file.
+            if self.bus is not None:
+                self.bus.materialize()
 
             print("Running Makerchip IDE...........................")
             # self.file = open(self.verilogfile,"w")
@@ -232,8 +210,8 @@ class Maker(QtWidgets.QWidget):
             # self.file.close()
             filename = self.verilogfile
             if self.verilogfile.split('.')[-1] != "tlv":
-                reply = QtWidgets.QMessageBox.warning(
-                    None,
+                reply = Dialogs.warning(
+                    self,
                     "Do you want to automate the top module? ",
                     "<b>Click on YES button if you want the top module \
                     to be added automatically. A .tlv file will be created \
@@ -249,20 +227,43 @@ class Maker(QtWidgets.QWidget):
                 if reply == QtWidgets.QMessageBox.StandardButton.Cancel:
                     return
                 if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-                    code = open(self.verilogfile).read()
+                    with open(self.verilogfile) as fh:
+                        code = fh.read()
                     text = code
                     filename = '.'.join(
                         self.verilogfile.split('.')[:-1]) + ".tlv"
                     file = os.path.basename('.'.join(
                         self.verilogfile.split('.')[:-1]))
-                    f = open(filename, 'w')
                     code = code.replace(" wire ", " ")
                     code = code.replace(" reg ", " ")
                     vlog_ex = vlog.VerilogExtractor()
                     vlog_mods = vlog_ex.extract_objects_from_source(code)
-                    lint_off = open(
-                        init_path + "library/tlv/lint_off.txt"
-                    ).readlines()
+
+                    # Find the module matching the file name up front. An empty
+                    # or failed parse, or a name mismatch, is now reported
+                    # clearly here instead of crashing later on a loop variable
+                    # referenced after its loop.
+                    module = None
+                    for m in vlog_mods:
+                        if m.name.lower() == file.lower():
+                            module = m
+                            break
+                    if module is None:
+                        Dialogs.critical(
+                            self,
+                            "Error Message",
+                            "<b>Error: File name and module \
+                            name are not same. Please \
+                            ensure that they are same.</b>",
+                            QtWidgets.QMessageBox.StandardButton.Ok)
+                        self.obj_Appconfig.print_info(
+                            'NgVeri stopped due to file \
+name and module name not matching error')
+                        return
+
+                    with open(
+                            paths.library_path("tlv/lint_off.txt")) as fh:
+                        lint_off = fh.readlines()
                     string = '''\\TLV_version 1d: tl-x.org\n\\SV\n'''
                     for item in lint_off:
                         string += "/* verilator lint_off " + \
@@ -285,19 +286,6 @@ output logic passed, output logic failed);\n'''
                                         p.name) != "failed":
                                     string += '\t\tlogic ' + p.data_type\
                                      + " " + p.name + ";//" + p.mode + "\n"
-                    if m.name.lower() != file.lower():
-                        QtWidgets.QMessageBox.critical(
-                            None,
-                            "Error Message",
-                            "<b>Error: File name and module \
-                            name are not same. Please \
-                            ensure that they are same.</b>",
-                            QtWidgets.QMessageBox.StandardButton.Ok)
-
-                        self.obj_Appconfig.print_info(
-                            'NgVeri stopped due to file \
-name and module name not matching error')
-                        return
                     string += "//The $random() can be replaced \
 if user wants to assign values\n"
                     for m in vlog_mods:
@@ -328,24 +316,36 @@ Add \\TLV here if desired\
                                      \n\\SV\nendmodule\n\n"
                                 else:
                                     string += ", "
-                    f.write(string)
+                    # Write the .tlv only now that generation has fully
+                    # succeeded, so a failure/return above never leaves a
+                    # half-written, corrupt file on disk.
+                    with open(filename, 'w') as f:
+                        f.write(string)
 
+            makerchip_bin = shutil.which('makerchip')
+            if makerchip_bin is None:
+                Dialogs.critical(
+                    self, "Error Message",
+                    "<b>Makerchip was not found on your system.</b><br/>"
+                    "Install it with <i>pip install makerchip-app</i> and "
+                    "make sure it is on your PATH, then try again.",
+                    QtWidgets.QMessageBox.StandardButton.Ok)
+                return
             self.process = QtCore.QProcess(self)
-            cmd = 'makerchip ' + filename
+            self.process.errorOccurred.connect(self._makerchip_launch_error)
             print("File: " + filename)
-            self.process.start(cmd)
+            # Pass the file name as a separate argument (not one space-joined
+            # string) so a path containing spaces is not split into pieces.
+            self.process.start(makerchip_bin, [filename])
             print(
                 "Makerchip IDE command process pid ---------->",
                 self.process.processId())
-        except BaseException as e:
+        except Exception as e:
             print(e)
-            self.msg = QtWidgets.QErrorMessage(self)
-            self.msg.setModal(True)
-            self.msg.setWindowTitle("Error Message")
-            self.msg.showMessage(
-                "Error in running Makerchip IDE. \
-Please check if verilog file is chosen.")
-            self.msg.exec()
+            Dialogs.critical(
+                self, "Error Message",
+                "Error in running Makerchip IDE. "
+                "Please check if verilog file is chosen.")
             print("Error in running Makerchip IDE. \
 Please check if verilog file is chosen.")
         #   initial = self.read_file()
@@ -361,6 +361,17 @@ Please check if verilog file is chosen.")
         # self.processfile.start("python3 notify.py")
         # print(self.processfile.readChannel())
 
+    def _makerchip_launch_error(self, _error):
+        '''
+            Called by QProcess.errorOccurred if the Makerchip IDE fails to
+            start (e.g. not installed, or no working browser/network). Tells
+            the user instead of failing silently.
+        '''
+        Dialogs.critical(
+            self, "Error Message",
+            "Could not launch the Makerchip IDE. It needs the makerchip-app "
+            "installed, an active internet connection and a browser.")
+
     # This creates the buttons/options
 
     def createoptionsBox(self):
@@ -368,28 +379,32 @@ Please check if verilog file is chosen.")
         self.optionsbox = QtWidgets.QGroupBox()
         self.optionsbox.setTitle("Select Options")
         self.optionsgrid = QtWidgets.QGridLayout()
-        # self.optionsbox2 = QtWidgets.QGroupBox()
-        # self.optionsbox2.setTitle("Note: Please save the file once edited")
-        # self.optionsgrid2 = QtWidgets.QGridLayout()
+        # Even gutters + equal column stretch so the action row reads as one
+        # balanced toolbar instead of buttons drifting apart (the old layout
+        # left an empty column between "Add Top Level" and "Save").
+        self.optionsgrid.setHorizontalSpacing(12)
+        self.optionsgrid.setContentsMargins(4, 4, 4, 4)
         self.optionsgroupbtn = QtWidgets.QButtonGroup()
+
+        self.verifier_btn = QtWidgets.QPushButton("Verilog Simulator IDE")
+        # Aurora styles this primary launcher via the verifierPrimary accent
+        # instead of a hard-coded green that fought the cyan theme.
+        self.verifier_btn.setProperty("cssClass", "verifierPrimary")
+        self.optionsgroupbtn.addButton(self.verifier_btn)
+        self.verifier_btn.clicked.connect(self.open_verifier)
+
         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
         self.optionsgroupbtn.addButton(self.addoptions)
         self.addoptions.clicked.connect(self.addverilog)
-        self.optionsgrid.addWidget(self.addoptions, 0, 1)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0
-        self.refreshoption = QtWidgets.QPushButton("Refresh")
-        self.optionsgroupbtn.addButton(self.refreshoption)
-        self.refreshoption.clicked.connect(self.refresh)
-        self.optionsgrid.addWidget(self.refreshoption, 0, 2)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+
         self.saveoption = QtWidgets.QPushButton("Save")
+        # Save is the workhorse action here -- promote it to the cyan accent so
+        # the row has a clear anchor instead of three near-invisible white cards
+        # blending into the page.
+        self.saveoption.setProperty("cssClass", "primary")
         self.optionsgroupbtn.addButton(self.saveoption)
         self.saveoption.clicked.connect(self.save)
-        self.optionsgrid.addWidget(self.saveoption, 0, 3)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+
         self.runoptions = QtWidgets.QPushButton("Edit in Makerchip IDE")
         self.runoptions.setToolTip(
             "Requires internet connection and a browser"
@@ -397,169 +412,109 @@ Please check if verilog file is chosen.")
         self.runoptions.setToolTipDuration(5000)
         self.optionsgroupbtn.addButton(self.runoptions)
         self.runoptions.clicked.connect(self.runmakerchip)
-        self.optionsgrid.addWidget(self.runoptions, 0, 4)
-        # self.optionsbox.setLayout(self.optionsgrid)
-        # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+
+        # Lay the buttons out in contiguous, equally-stretched columns. Taller
+        # min-height gives the labels room to breathe (the old 32px buttons made
+        # the centred text look cramped on wide cards).
+        action_btns = [self.verifier_btn, self.addoptions,
+                       self.saveoption, self.runoptions]
         if not makerchipTOSAccepted(False):
             self.acceptTOS = QtWidgets.QPushButton("Accept Makerchip TOS")
             self.optionsgroupbtn.addButton(self.acceptTOS)
             self.acceptTOS.clicked.connect(lambda: makerchipTOSAccepted(True))
-            self.optionsgrid.addWidget(self.acceptTOS, 0, 5)
-            # self.optionsbox.setLayout(self.optionsgrid)
-            # self.grid.addWidget(self.creategroup(), 1, 0, 5, 0)
+            action_btns.append(self.acceptTOS)
+
+        for col, btn in enumerate(action_btns):
+            btn.setMinimumHeight(40)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                              QtWidgets.QSizePolicy.Policy.Fixed)
+            self.optionsgrid.addWidget(btn, 0, col)
+            self.optionsgrid.setColumnStretch(col, 1)
+
         self.optionsbox.setLayout(self.optionsgrid)
         return self.optionsbox
+
+    def open_verifier(self):
+        # When hosted in the Flow Navigator the Verilog Simulator IDE is a
+        # docked stage, not a flying dialog: hand off to the navigator instead
+        # of opening a top-level window. Standalone Maker keeps the dialog.
+        hook = getattr(self, '_verify_hook', None)
+        if hook is not None:
+            hook()
+            return
+        if not hasattr(self, 'verifier_win'):
+            from .VerilogVerifier import VerilogVerifier
+            self.verifier_win = QtWidgets.QDialog(self.window())
+            self.verifier_win.setWindowTitle("eSim-Verilog Simulator IDE")
+            self.verifier_win.setWindowFlags(
+                self.verifier_win.windowFlags()
+                | QtCore.Qt.WindowType.WindowMaximizeButtonHint
+                | QtCore.Qt.WindowType.WindowMinimizeButtonHint)
+            layout = QtWidgets.QVBoxLayout(self.verifier_win)
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.obj_VerilogVerifier = VerilogVerifier()
+
+            # Share the one design: the dialog reads from / writes to the same
+            # bus the Author editor uses, so there is no disk hand-off. Edits
+            # made here are collected into the bus when the dialog closes, and
+            # the Author editor -- which renders the bus live -- updates itself.
+            self.obj_VerilogVerifier.set_design_bus(self.bus)
+            self.verifier_win.finished.connect(
+                lambda _=0: self.obj_VerilogVerifier.collect_into_bus())
+
+            layout.addWidget(self.obj_VerilogVerifier)
+            self.verifier_win.resize(1000, 700)
+
+        self.obj_VerilogVerifier.render_from_bus()
+        self.verifier_win.show()
+        self.verifier_win.raise_()
+        self.verifier_win.activateWindow()
 
     # This function adds the other parts of widget like text box
     def creategroup(self):
         self.trbox = QtWidgets.QGroupBox()
         self.trbox.setTitle(".tlv file")
-        # self.trbox.setDisabled(True)
-        # self.trbox.setVisible(False)
-        self.trgrid = QtWidgets.QGridLayout()
+        # Stack the fields vertically with section headers above each one.
+        # The old two-column grid put the labels in column 0 next to a tall
+        # editor in column 1, so ".tlv code" floated halfway down the left edge
+        # and the empty path value sat with nothing beside it.
+        self.trgrid = QtWidgets.QVBoxLayout()
+        self.trgrid.setContentsMargins(12, 10, 12, 12)
+        self.trgrid.setSpacing(6)
         self.trbox.setLayout(self.trgrid)
 
-        self.start = QtWidgets.QLabel("Path to .tlv file")
-        self.trgrid.addWidget(self.start, 1, 0)
+        path_header = QtWidgets.QLabel("Path to .tlv file")
+        path_header.setProperty("cssClass", "caps")
+        self.trgrid.addWidget(path_header)
+
         self.count = 0
         self.entry_var[self.count] = QtWidgets.QLabel()
-        self.trgrid.addWidget(self.entry_var[self.count], 1, 1)
-        self.entry_var[self.count].setMaximumWidth(1000)
+        # Placeholder so the row isn't a blank gap before the file is saved.
+        self.entry_var[self.count].setText(
+            "(no file yet — use Save to create one)")
+        self.entry_var[self.count].setProperty("cssClass", "muted")
+        self.trgrid.addWidget(self.entry_var[self.count])
         self.count += 1
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # Border/title styling comes from the global Aurora QGroupBox QSS so
+        # the group reads with the same gradient hairline as the rest of eSim.
 
-        self.start = QtWidgets.QLabel(".tlv code")
-        # self.start2 = QtWidgets.QLabel("Note: \
-        # Please save the file once edited")
-        # self.start2.setStyleSheet("background-color: red")
-        self.trgrid.addWidget(self.start, 2, 0)
-        # self.trgrid.addWidget(self.start2, 3,0)
-        self.entry_var[self.count] = QtWidgets.QTextEdit()
-        self.trgrid.addWidget(self.entry_var[self.count], 2, 1)
-        self.entry_var[self.count].setMaximumWidth(1000)
-        self.entry_var[self.count].setMaximumHeight(1000)
-        # self.entry_var[self.count].textChanged.connect(self.save)
+        code_header = QtWidgets.QLabel(".tlv code")
+        code_header.setProperty("cssClass", "caps")
+        self.trgrid.addSpacing(4)
+        self.trgrid.addWidget(code_header)
+
+        # QsciScintilla-based Verilog editor (syntax highlight, line numbers,
+        # mono font, theme-aware) replacing the bare QTextEdit white box. It
+        # exposes toPlainText/setText aliases so existing call sites are
+        # unchanged.
+        self.entry_var[self.count] = HdlEditor("design.v")
+        self.trgrid.addWidget(self.entry_var[self.count], 1)
+        # Author edits stream into the shared design (see _on_editor_changed).
+        self.entry_var[self.count].textChanged.connect(self._on_editor_changed)
         self.count += 1
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
+        # Border/title styling comes from the global Aurora QGroupBox QSS so
+        # the group reads with the same gradient hairline as the rest of eSim.
 
         return self.trbox
-
-
-class _FileModifiedNotifier(QtCore.QObject):
-    """Bridges watchdog background thread to main thread for GUI notifications."""
-    modified = pyqtSignal(str)
-
-
-# The Handler class is used to create a watch on the files using WatchDog
-class Handler(watchdog.events.PatternMatchingEventHandler):
-    # this function initialisses the variable and the objects of watchdog
-    def __init__(self, verilogfile, refreshoption, observer):
-        # Set the patterns for PatternMatchingEventHandler
-        watchdog.events.PatternMatchingEventHandler.__init__(
-            self, ignore_directories=True, case_sensitive=False)
-        self.verilogfile = verilogfile
-        self.refreshoption = refreshoption
-        self.obj_Appconfig = Appconfig()
-        self.observer = observer
-        self.toggle = toggle(self.refreshoption)
-        self._notifier = _FileModifiedNotifier()
-        self._notifier.modified.connect(self._show_modified_dialog)
-
-    def _show_modified_dialog(self, verilogfile):
-        msg = QtWidgets.QErrorMessage()
-        msg.setWindowTitle("eSim Message")
-        msg.showMessage(
-            "NgVeri File: " + verilogfile + " modified. Please click on Refresh")
-        msg.exec()
-
-    # if a file is modified, toggle starts to toggle the refresh button
-    def on_modified(self, event):
-        print("Watchdog received modified event - % s." % event.src_path)
-        print("NgVeri File: " + self.verilogfile +
-              " modified. Please click on Refresh")
-        global toggle_flag
-        if self.refreshoption not in toggle_flag:
-            toggle_flag.append(self.refreshoption)
-        self.observer.stop()
-        if not self.toggle.isRunning():
-            self.toggle.start()
-        self._notifier.modified.emit(self.verilogfile)
-
-
-# class notify(QThread):
-#     def __init__(self,verilogfile,refreshoption):#,obj_Appconfig):
-#         QThread.__init__(self)
-#         self.verilogfile=verilogfile
-#         self.refreshoption=refreshoption
-#         self.obj_Appconfig = Appconfig()
-#         self.toggle=toggle(self.refreshoption)
-
-
-#     def __del__(self):
-#         self.wait()
-
-#     def run(self):
-#         i = inotify.adapters.Inotify()
-
-#         i.add_watch(self.verilogfile)
-
-#         for event in i.event_gen():
-#             if not self.refreshoption.isVisible():
-#                 break
-#             if event!=None:
-#                 print(event)
-#                 if "IN_CLOSE_WRITE" in event[1] :
-#                         msg = QtWidgets.QErrorMessage()
-#                         msg.setModal(True)
-#                         msg.setWindowTitle("eSim Message")
-#                         msg.showMessage(
-#                             "NgVeri File: "+self.verilogfile+"\
-# modified. Please click on Refresh")
-#                         msg.exec()
-#                         print("NgVeri File: "+self.verilogfile+"\
-# modified. Please click on Refresh")
-#                         # self.obj_Appconfig.print_info("NgVeri File: \
-# "+self.verilogfile+" modified. Please click on Refresh")
-#                         global toggle_flag
-#                         toggle_flag.append(self.refreshoption)
-#                         #i.rm_watch()
-#                         self.toggle.start()
-#                         break
-
-
-# This class is used to toggle a button(change colour by toggling)
-class toggle(QThread):
-    changeStyle = pyqtSignal(str)
-
-    # initialising the threads
-    def __init__(self, option):
-        QThread.__init__(self)
-        self.option = option
-        self.changeStyle.connect(option.setStyleSheet)
-
-    # running the thread to toggle
-    def run(self):
-        while not self.isInterruptionRequested():
-            self.changeStyle.emit("background-color: red")
-            self.msleep(1000)
-            if self.isInterruptionRequested():
-                break
-            self.changeStyle.emit("background-color: none")
-            self.msleep(1000)
-            if self.option not in toggle_flag:
-                break
-        self.changeStyle.emit("")

@@ -29,11 +29,19 @@
 
 import re
 import os
+import shutil
+import subprocess
+import threading
 from PyQt6 import QtCore, QtWidgets
+from configuration import Dialogs
+from configuration import paths
 from configparser import ConfigParser
 from configuration import Appconfig
 
 from . import createkicad
+from . import CosimConfig
+from .hdl import icarus
+from .CosimLogger import CosimLog
 import hdlparse.verilog_parser as vlog
 
 
@@ -41,8 +49,36 @@ class ModelGeneration(QtWidgets.QWidget):
     '''
         Class is used to generate the Ngspice Model
     '''
+
+    # Generous cap (seconds) so big verilator/make builds are not guillotined
+    # at the old 50 s limit, while a genuinely hung process is still killed and
+    # reported instead of either freezing the GUI forever or silently
+    # producing a half-built model. The whole legacy pipeline now runs off the
+    # GUI thread (NgVeri.addverilog), so a slow build no longer freezes eSim;
+    # this is only the per-step wall-clock safety net.
+    PROCESS_TIMEOUT = 600           # 10 minutes, in seconds (subprocess.run)
+
+    # eSim's GUI process has no console, so every console child (mingw32-make,
+    # verilator, gcc) would otherwise allocate its own visible console window
+    # -- a blank black box, since the output is piped. Worse than cosmetic:
+    # closing that mystery window sends CTRL_CLOSE_EVENT to the child, which
+    # aborts the build mid-link ("mingw32-make: *** Interrupt"). 0 on POSIX.
+    NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+    # Emitted for every line/block of build output. Connected to termedit in
+    # __init__; because the connection is auto-typed, calls from the GUI thread
+    # deliver synchronously while calls from the build worker thread are queued
+    # back onto the GUI thread -- so the subprocess pipeline can stream output
+    # without ever touching a widget off-thread.
+    line = QtCore.pyqtSignal(str)
+
+    # Emitted at the start of each build phase (the termtitle banner text) so
+    # the NgVeri tab can drive a live progress indicator naming the current
+    # step. Auto-typed like `line`: a call from the build worker thread is
+    # queued back onto the GUI thread, so updating the label/bar is safe.
+    phase = QtCore.pyqtSignal(str)
+
     def __init__(self, file, termedit):
-        QtWidgets.QWidget.__init__(self)
         super().__init__()
         self.obj_Appconfig = Appconfig.Appconfig()
         print("Argument is : ", file)
@@ -53,25 +89,231 @@ class ModelGeneration(QtWidgets.QWidget):
             self.file = file
 
         self.termedit = termedit
+        # Route every termtext/termtitle/_run write through the line signal so
+        # the same code path is safe whether it runs on the GUI thread (fast
+        # file-generation steps) or the build worker thread (verilator/make).
+        self.line.connect(self.termedit.append)
+        # Dual-sink d_cosim logger: same events to the NgVeri GUI terminal
+        # (this termedit) AND the OS terminal + ~/.esim/dcosim.log. Route the
+        # GUI sink through the `line` signal (not termedit.append directly) so
+        # build_cosim's log lines stay GUI-thread-safe when the build runs on a
+        # worker thread.
+        self.clog = CosimLog(termedit, sink=self.line.emit)
         self.cur_dir = os.getcwd()
         self.fname = os.path.basename(file)
         self.fname = self.fname.lower()
         print("Verilog/SystemVerilog/TL Verilog filename is : ", self.fname)
 
-        if os.name == 'nt':
-            self.home = os.path.join('library', 'config')
-        else:
-            self.home = os.path.expanduser('~')
-
+        # Keep a parser for the legacy build methods below, but all constructor
+        # values are read through CosimConfig's missing-safe boundary. This is
+        # crucial for d_cosim-only installs, which intentionally have no NGHDL
+        # config file.
         self.parser = ConfigParser()
-        self.parser.read(os.path.join(
-            self.home, os.path.join('.nghdl', 'config.ini')))
-        self.nghdl_home = self.parser.get('NGHDL', 'NGHDL_HOME')
-        self.release_dir = self.parser.get('NGHDL', 'RELEASE')
-        self.src_home = self.parser.get('SRC', 'SRC_HOME')
-        self.licensefile = self.parser.get('SRC', 'LICENSE')
-        self.digital_home = self.parser.get(
-                            'NGHDL', 'DIGITAL_MODEL') + "/Ngveri"
+        self.parser.read(CosimConfig.nghdl_config_path())
+        self.nghdl_home = CosimConfig.nghdl_cfg('NGHDL', 'NGHDL_HOME')
+        self.release_dir = CosimConfig.nghdl_cfg('NGHDL', 'RELEASE')
+        self.src_home = CosimConfig.nghdl_cfg('SRC', 'SRC_HOME')
+        self.licensefile = CosimConfig.nghdl_cfg('SRC', 'LICENSE')
+        self.digital_home = os.path.join(
+            CosimConfig.digital_model_root(), 'Ngveri')
+
+    def require_legacy_toolchain(self):
+        """Report a missing legacy toolchain cleanly instead of crashing.
+
+        Two layers: the cheap config check (NGHDL_HOME/RELEASE/SRC_HOME keys
+        present) and the full doctor probe (verilator/make/gcc/ngspice all
+        actually on disk), so a half-installed toolchain fails HERE with the
+        exact missing tool + fix hint instead of exploding mid-pipeline in
+        make."""
+        if not (self.nghdl_home and self.release_dir and self.src_home):
+            message = (
+                "NGHDL/NgVeri toolchain not configured — install NGHDL or "
+                "use Dual Co-sim."
+            )
+            self.termtext(message)
+            self.obj_Appconfig.print_error(message)
+            return False
+        from . import ToolchainCheck
+        message = ToolchainCheck.failure_message(ToolchainCheck.NGVERI)
+        if message:
+            self.termtext(message)
+            self.obj_Appconfig.print_error(message)
+            return False
+        return True
+
+    # ------------------------------------------------------------------ #
+    #  Cross-platform build-tool resolution (single source for every step)
+    # ------------------------------------------------------------------ #
+    def _msys_home(self):
+        return CosimConfig.nghdl_cfg('COMPILER', 'MSYS_HOME')
+
+    def _nt_build_env(self):
+        """Environment for build subprocesses on Windows: the MSYS2 mingw64
+        and usr/bin dirs go FIRST on PATH (make's child gcc/g++/ar and the
+        verilator wrapper resolve from there -- the eSim process itself never
+        has them on PATH), plus VERILATOR_ROOT for the model Makefiles.
+        Returns None on POSIX (inherit as-is)."""
+        if os.name != 'nt':
+            return None
+        env = os.environ.copy()
+        msys_home = self._msys_home()
+        if msys_home:
+            env["PATH"] = os.pathsep.join([
+                os.path.join(msys_home, 'mingw64', 'bin'),
+                os.path.join(msys_home, 'usr', 'bin'),
+            ]) + os.pathsep + env.get("PATH", "")
+            # MSYS2's verilator package keeps the runtime tree (include/
+            # verilated.cpp, verilated_std.sv, lint waivers) under
+            # share/verilator, not the mingw64 prefix itself -- pointing
+            # VERILATOR_ROOT at the prefix makes every verilator run fail with
+            # "Cannot find verilated_std_waiver.vlt".
+            # Forward slashes: the value is spliced into verilator's generated
+            # Makefile, where backslashes are escape characters (make eats
+            # them, e.g. C:\FOSSEE\... becomes C:FOSSEE... and the includer
+            # path collapses).
+            env["VERILATOR_ROOT"] = os.path.join(
+                msys_home, 'mingw64', 'share', 'verilator'
+            ).replace('\\', '/')
+        return env
+
+    def _make_binary(self):
+        """make (POSIX) / MSYS2 mingw32-make (Windows), or None with an
+        actionable terminal message naming the exact probed path."""
+        if os.name != 'nt':
+            return "make"
+        msys_home = self._msys_home()
+        cand = (os.path.join(msys_home, 'mingw64', 'bin',
+                             'mingw32-make.exe') if msys_home else '')
+        if cand and os.path.isfile(cand):
+            return cand
+        self.termtext(
+            "[NgVeri] mingw32-make not found (probed: " +
+            (cand or "~/.nghdl/config.ini [COMPILER] MSYS_HOME unset") +
+            "). Reinstall eSim with the HDL-toolchain (MSYS2) component.")
+        return None
+
+    def _verilator_binary(self):
+        """verilator (POSIX) / the MSYS2 mingw64 verilator (Windows), or None
+        with an actionable terminal message. On Windows the real binary is
+        verilator_bin.exe (the `verilator` front-end is a perl script); with
+        VERILATOR_ROOT set, invoking it directly is equivalent."""
+        if os.name != 'nt':
+            return "verilator"
+        msys_home = self._msys_home()
+        probed = []
+        for name in ('verilator_bin.exe', 'verilator.exe'):
+            cand = (os.path.join(msys_home, 'mingw64', 'bin', name)
+                    if msys_home else '')
+            probed.append(cand or name)
+            if cand and os.path.isfile(cand):
+                return cand
+        self.termtext(
+            "[NgVeri] Verilator not found (probed: " + ", ".join(probed) +
+            "). Reinstall eSim with the HDL-toolchain (MSYS2) component.")
+        return None
+
+    def _run(self, cmd, title, cwd=None, env=None):
+        '''
+            Run one step of the model-build pipeline and return True only when
+            the process exits cleanly with code 0.
+
+            `cmd` is an argument LIST (never a shell string): the process is
+            spawned directly, so a path with spaces or shell metacharacters can
+            neither split into extra arguments nor be interpreted -- the old
+            ``sh -c`` + string-concatenation was both fragile with spaced paths
+            and an injection surface. The working directory is passed as
+            ``cwd=`` instead of an ``os.chdir`` dance, so a failed step can
+            never strand the whole app inside a model sub-directory and no
+            longer races the CWD-relative paths elsewhere in eSim.
+
+            stdout is streamed into the NgVeri terminal line-by-line as the
+            tool produces it (via the ``line`` signal, so this is safe to call
+            from the build worker thread -- the signal is queued back onto the
+            GUI thread). A long make no longer looks like a hang: the user
+            watches the compile progress live. stderr is drained on a helper
+            thread (so neither pipe can fill up and deadlock the child) and
+            reported in red once the step finishes.
+        '''
+        self.termtitle(title)
+        self.termtext("Current Directory: " + (cwd or os.getcwd()))
+        self.termtext("Command: " + " ".join(cmd))
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=cwd, env=env, text=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=self.NO_WINDOW)
+        except OSError as err:
+            self.termtext("[NgVeri] '" + title + "' could not be started: " +
+                          str(err))
+            return False
+
+        def _drain_stderr():
+            # Stream stderr live (in red), line by line, instead of buffering
+            # the whole pipe and emitting it only after the step finishes.
+            # verilator, gcc and make write their progress + warnings to
+            # stderr, so buffering made a multi-minute step look frozen until
+            # it was already done. Runs on its own thread (kept off the stdout
+            # loop) so neither pipe can fill up and deadlock the child; every
+            # emit is queued to the GUI thread via the `line` signal.
+            try:
+                for err_line in proc.stderr:
+                    err_line = err_line.rstrip()
+                    if err_line:
+                        self._emit_error(err_line)
+            except Exception:
+                pass
+
+        drainer = threading.Thread(target=_drain_stderr, daemon=True)
+        drainer.start()
+
+        # Wall-clock safety net: unlike subprocess.run(timeout=...), a
+        # streaming read has no built-in deadline, so a watchdog kills a
+        # genuinely hung tool after PROCESS_TIMEOUT seconds.
+        timed_out = threading.Event()
+
+        def _kill_on_timeout():
+            timed_out.set()
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+        watchdog = threading.Timer(self.PROCESS_TIMEOUT, _kill_on_timeout)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            for out_line in proc.stdout:
+                out_line = out_line.rstrip()
+                if out_line:
+                    self.termtext(out_line)
+            proc.stdout.close()
+            returncode = proc.wait()
+        finally:
+            watchdog.cancel()
+            # Let the stderr streamer finish flushing the tail of the pipe
+            # before we judge the step; it emits live, so nothing is emitted
+            # here anymore.
+            drainer.join(timeout=5)
+
+        if timed_out.is_set():
+            self.termtext("[NgVeri] '" + title +
+                          "' timed out and was stopped.")
+            return False
+        if returncode != 0:
+            self.termtext("[NgVeri] '" + title + "' failed (exit code " +
+                          str(returncode) + ").")
+            return False
+        return True
+
+    def _emit_error(self, textin):
+        '''Append stderr text in red (theme-independent) to the terminal.'''
+        Text = "<span style=\"font-size:12pt; font-weight:1000; " \
+               "color:#ff0000;\">"
+        for ln in textin.split("\n"):
+            Text += "<br>" + ln
+        Text += "</span>"
+        self.line.emit(Text)
 
     def verilogfile(self):
         '''
@@ -84,83 +326,71 @@ class ModelGeneration(QtWidgets.QWidget):
         Text += "</span>"
         self.termedit.append(Text)
 
-        read_verilog = open(self.file, 'r')
-        verilog_data = read_verilog.readlines()
-        read_verilog.close()
-        self.modelpath = self.digital_home + \
-            "/" + self.fname.split('.')[0] + "/"
+        with open(self.file, 'r') as read_verilog:
+            verilog_data = read_verilog.readlines()
+        modname = os.path.splitext(self.fname)[0]
+        self.modelpath = self.digital_home + "/" + modname + "/"
         if not os.path.isdir(self.modelpath):
             os.mkdir(self.modelpath)
 
-        if self.fname.split('.')[1] == "tlv":
+        # os.path.splitext keeps the true extension even for dotted/no-dot
+        # names (the old .split('.')[1] IndexError'd on "counter" and read
+        # "v" from "model.v.bak").
+        if os.path.splitext(self.fname)[1] == ".tlv":
             self.sandpiper()
-            read_verilog = open(self.modelpath + self.fname, 'r')
-            verilog_data = read_verilog.readlines()
-            read_verilog.close()
-        f = open(self.modelpath + self.fname, 'w')
-
-        for item in verilog_data:
-            if self.fname.split('.')[1] == "sv":
-                string = item.replace("top", self.fname.split('.')[0])
-            else:
-                string = item
-            f.write(string)
-        f.write("\n")
-        f.close()
+            # sandpiper() rewrote self.fname to "<model>.sv"
+            modname = os.path.splitext(self.fname)[0]
+            with open(self.modelpath + self.fname, 'r') as read_verilog:
+                verilog_data = read_verilog.readlines()
+        is_sv = os.path.splitext(self.fname)[1] == ".sv"
+        with open(self.modelpath + self.fname, 'w') as f:
+            for item in verilog_data:
+                if is_sv:
+                    # Rename the SV top module to the file's stem. A bare
+                    # substring replace mangled any identifier CONTAINING
+                    # "top" (stop, laptop, top_val); a word-boundary regex
+                    # only touches the standalone token.
+                    string = re.sub(r'\btop\b', modname, item)
+                else:
+                    string = item
+                f.write(string)
+            f.write("\n")
 
     def sandpiper(self):
         '''
             This function calls the sandpiper to convert .tlv file to .sv file
         '''
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
         # Text="Running Sandpiper............"
         print("Running Sandpiper-Saas for TLV to SV Conversion")
-        self.cmd = "cp " + init_path + "library/tlv/clk_gate.v " + \
-                   init_path + "library/tlv/pseudo_rand.sv " + \
-                   init_path + "library/tlv/sandpiper.vh " + \
-                   init_path + "library/tlv/sandpiper_gen.vh " + \
-                   init_path + "library/tlv/sp_default.vh " + \
-                   init_path + "library/tlv/pseudo_rand_gen.sv " + \
-                   init_path + "library/tlv/pseudo_rand.m4out.tlv " + \
-                   self.file + " " + self.modelpath
-
-        self.process = QtCore.QProcess(self)
-        self.args = ['-c', self.cmd]
-        self.process.start('sh', self.args)
-        self.termedit.append("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        tlv = paths.library_path("tlv")
+        # Pure-Python copy: no sh quoting problem when tlv/ or the workspace
+        # sits under a spaced path (e.g. a "VLSI Lab" username on MSYS).
+        self.termtitle("COPY TLV FILES")
+        tlv_files = ["clk_gate.v", "pseudo_rand.sv", "sandpiper.vh",
+                     "sandpiper_gen.vh", "sp_default.vh", "pseudo_rand_gen.sv",
+                     "pseudo_rand.m4out.tlv"]
+        for name in tlv_files:
+            shutil.copy2(os.path.join(tlv, name), self.modelpath)
+        shutil.copy2(self.file, self.modelpath)
         print("Copied the files required for TLV successfully")
-        self.cur_dir = os.getcwd()
-        print("Running Sandpiper............")
-        os.chdir(self.modelpath)
-        self.cmd = "sandpiper-saas -i " + \
-            self.fname.split('.')[0] + ".tlv -o "\
-            + self.fname.split('.')[0] + ".sv"
-        # self.args = ['-c', self.cmd]
-        # self.process.start('sh', self.args)
-        self.process.start(self.cmd)
-        self.termtitle("RUN SANDPIPER-SAAS")
-        self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        # self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
-        print("Ran Sandpiper successfully")
-        os.chdir(self.cur_dir)
-        self.fname = self.fname.split('.')[0] + ".sv"
 
-    def verilogParse(self):
+        print("Running Sandpiper............")
+        model = os.path.splitext(self.fname)[0]
+        self._run(["sandpiper-saas", "-i", model + ".tlv",
+                   "-o", model + ".sv"],
+                  "RUN SANDPIPER-SAAS", cwd=self.modelpath)
+        print("Ran Sandpiper successfully")
+        self.fname = model + ".sv"
+
+    def verilogParse(self, make_symbol=True):
         '''
             This function parses the module name and
             input/output ports of verilog code using HDL parse
             and writes to the "connection_info.txt".
+
+            make_symbol=False skips creating the legacy "Ngveri" KiCad symbol,
+            so the d_cosim flow can reuse the port parsing and then create its
+            own "NgVeriCosim" symbol instead.
         '''
         with open(self.modelpath + self.fname, 'rt') as fh:
             code = fh.read()
@@ -170,45 +400,66 @@ class ModelGeneration(QtWidgets.QWidget):
                 
         header_re = re.compile(r'module\s+\w+\s*\((.*?)\)\s*;', re.S)
         def _split_ports(match):
-            # add a newline after every comma that is inside the header
-            return match.group(0).replace(',', ',\n')
+            # hdlparse only recognises a port declaration at the start of a
+            # line, so put every header port on its own line: newline after
+            # the opening '(' (else the FIRST port -- still on the "module"
+            # line -- is silently dropped) and after every comma.
+            return match.group(0).replace('(', '(\n', 1).replace(',', ',\n')
         code = header_re.sub(_split_ports, code)
         vlog_ex = vlog.VerilogExtractor()
         vlog_mods = vlog_ex.extract_objects_from_source(code)
-        f = open(self.modelpath + "connection_info.txt", 'w')
-        for m in vlog_mods:
-            if m.name.lower() == self.fname.split('.')[0]:
-                print(str(m.name) + " " + self.fname.split('.')[0])
-                for p in m.ports:
-                    print(p.data_type)
-                    if str(p.data_type).find(':') == -1:
-                        p.port_number = "1"
-                    else:
-                        x = p.data_type.split(":")
-                        print(x)
-                        y = x[0].split("[")
-                        z = x[1].split("]")
-                        z = int(y[1]) - int(z[0])
-                        p.port_number = z + 1
 
-        for m in vlog_mods:
-            if m.name.lower() == self.fname.split('.')[0]:
-                m.name = m.name.lower()
-                print('Module "{}":'.format(m.name))
-                for p in m.generics:
-                    print('\t{:20}{:8}{}'.format(p.name, p.mode, p.data_type))
-                print('  Ports:')
-                for p in m.ports:
-                    print(
-                        '\t{:20}{:8}{}'.format(
-                            p.name, p.mode, p.port_number))
-                    f.write(
-                        '\t{:20}{:8}{}\n'.format(
-                            p.name, p.mode, p.port_number))
-                break
-        f.close()
-        if m.name.lower() != self.fname.split(".")[0]:
-            QtWidgets.QMessageBox.critical(
+        modname = os.path.splitext(self.fname)[0]
+        # hdlparse returns nothing for an empty file, a syntax error or a
+        # construct it cannot parse. The old code then indexed a loop variable
+        # `m` that was never bound -> "NameError: m" instead of a useful
+        # message. Bail early with a clear error.
+        if not vlog_mods:
+            Dialogs.critical(
+                None, "Error Message",
+                "<b>Error: No Verilog module could be parsed from " +
+                self.fname + ". Check the file for syntax errors.</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            self.obj_Appconfig.print_info(
+                'NgVeri stopped: no parseable module in ' + self.fname)
+            return "Error"
+
+        matched = None
+        with open(self.modelpath + "connection_info.txt", 'w') as f:
+            for m in vlog_mods:
+                if m.name.lower() == modname:
+                    print(str(m.name) + " " + modname)
+                    for p in m.ports:
+                        print(p.data_type)
+                        if str(p.data_type).find(':') == -1:
+                            p.port_number = "1"
+                        else:
+                            x = p.data_type.split(":")
+                            print(x)
+                            y = x[0].split("[")
+                            z = x[1].split("]")
+                            z = int(y[1]) - int(z[0])
+                            p.port_number = z + 1
+
+            for m in vlog_mods:
+                if m.name.lower() == modname:
+                    m.name = m.name.lower()
+                    matched = m
+                    print('Module "{}":'.format(m.name))
+                    for p in m.generics:
+                        print('\t{:20}{:8}{}'.format(
+                            p.name, p.mode, p.data_type))
+                    print('  Ports:')
+                    for p in m.ports:
+                        print(
+                            '\t{:20}{:8}{}'.format(
+                                p.name, p.mode, p.port_number))
+                        f.write(
+                            '\t{:20}{:8}{}\n'.format(
+                                p.name, p.mode, p.port_number))
+                    break
+        if matched is None:
+            Dialogs.critical(
                 None,
                 "Error Message",
                 "<b>Error: File name and module \
@@ -219,12 +470,13 @@ class ModelGeneration(QtWidgets.QWidget):
                 'NgVeri stopped due to file \
                 name and module name not matching error')
             return "Error"
-        modelname = str(m.name)
-        schematicLib = createkicad.AutoSchematic()
-        schematicLib.init(modelname, self.modelpath)
-        error = schematicLib.createKicadSymbol()
-        if error == "Error":
-            return "Error"
+        if make_symbol:
+            modelname = str(matched.name)
+            schematicLib = createkicad.AutoSchematic()
+            schematicLib.init(modelname, self.modelpath)
+            error = schematicLib.createKicadSymbol()
+            if error == "Error":
+                return "Error"
         return "No Error"
 
     def getPortInfo(self):
@@ -232,8 +484,8 @@ class ModelGeneration(QtWidgets.QWidget):
             This function is used to get the port information
             from "connection_info.txt"
         '''
-        readfile = open(self.modelpath + 'connection_info.txt', 'r')
-        data = readfile.readlines()
+        with open(self.modelpath + 'connection_info.txt', 'r') as readfile:
+            data = readfile.readlines()
         self.input_list = []
         self.output_list = []
         for line in data:
@@ -264,6 +516,166 @@ class ModelGeneration(QtWidgets.QWidget):
             self.input_port.append(input[0] + ":" + input[2])
         for output in self.output_list:
             self.output_port.append(output[0] + ":" + output[2])
+
+    def build_cosim(self, engine="icarus"):
+        '''
+            Build a d_cosim digital artifact for this Verilog model and return
+            its absolute path (or "Error").
+
+            Uses ngspice's upstream d_cosim code model (ngspice >= 44): the
+            Verilog block is loaded at simulation time, so ngspice is never
+            rebuilt -- unlike the legacy static Ngveri.cm flow that runs
+            "make install".
+
+            Icarus engine (default): iverilog compiles <model>.v to a vvp-format
+            file named <model>. NO C/C++ compiler is needed on the user machine;
+            at simulation time ngspice's ivlng adapter + libvvp run the vvp. The
+            iverilog path is resolved via CosimConfig (env / config.ini / PATH),
+            never hardcoded. Requires self.modelpath populated by verilogfile().
+        '''
+        import subprocess
+        import tempfile
+        import time
+        import shlex
+
+        log = self.clog
+        log.phase("BUILD d_cosim MODEL (icarus)")
+
+        if engine != "icarus":
+            log.error("d_cosim engine '" + str(engine) + "' not supported. "
+                      "Only the Icarus Verilog engine is available.")
+            return "Error"
+
+        # ----- [1/4] Resolve toolchain -----
+        log.phase("[1/4] Resolve toolchain")
+        iverilog = CosimConfig.iverilog_binary()
+        if not iverilog or not CosimConfig.has_iverilog():
+            log.error("d_cosim build FAILED: " +
+                      (CosimConfig.missing_reason() or
+                       "iverilog with libvvp not found."))
+            log.fix("Install / rebuild Icarus Verilog with --enable-libvvp, "
+                    "then retry.")
+            return "Error"
+        log.info("iverilog: " + iverilog)
+        log.detail("version: " + self._tool_version(iverilog))
+
+        model = self.fname.split('.')[0]
+        src = os.path.abspath(os.path.join(self.modelpath, self.fname))
+        # Build the vvp at the ONE canonical location the netlister also
+        # derives (CosimConfig.cosim_vvp_path, keyed by the lowercased model
+        # name). Decoupling it from modelpath's case is what stops the compiled
+        # model from going missing at simulation time on case-sensitive
+        # filesystems (build wrote <Model>/<Model>, lookup read <model>/<model>).
+        out = CosimConfig.cosim_vvp_path(model.lower())
+        if out:
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+        else:
+            out = os.path.abspath(os.path.join(self.modelpath, model.lower()))
+        log.info("Model:       " + model)
+        log.info("Source:      " + src)
+        log.info("Output vvp:  " + out)
+
+        if not os.path.isfile(src):
+            log.error("d_cosim build FAILED: source Verilog not found at " +
+                      src)
+            log.fix("The model dir was not populated (or was removed after a "
+                    "backend switch). Re-run the build; verilogfile() should "
+                    "copy the .v in first.")
+            return "Error"
+
+        # eSim's port parser lumps `inout` into the input side, but d_cosim
+        # keeps a separate d_inout group -- warn rather than emit a wrong
+        # netlist silently. (Common no-inout modules are unaffected.)
+        try:
+            with open(os.path.join(self.modelpath, 'connection_info.txt')) as f:
+                if 'inout' in f.read().lower():
+                    log.warn("Module has inout port(s). d_cosim handling of "
+                             "inout is limited; results may be wrong.")
+                    log.fix("Use the legacy NgVeri flow if inout is required.")
+        except OSError:
+            pass
+
+        try:
+            # ----- [2/4] Prepare source -----
+            log.phase("[2/4] Prepare source")
+            # d_cosim/ivlng needs a `timescale to advance VVP ticks; without one
+            # the tick length defaults to 1 second and combinational logic never
+            # re-evaluates. Inject one transparently if the source lacks it.
+            with open(src, 'r') as fh:
+                verilog_text = fh.read()
+            compile_src = src
+            tmp_src = None
+            if '`timescale' not in verilog_text:
+                tmp_fd, tmp_src = tempfile.mkstemp(
+                    suffix='.v', dir=os.path.abspath(self.modelpath))
+                os.write(tmp_fd,
+                         ('`timescale 1ns/1ps\n' + verilog_text).encode())
+                os.close(tmp_fd)
+                compile_src = tmp_src
+                log.info("Injected `timescale 1ns/1ps (absent in source).")
+            else:
+                log.detail("`timescale present in source.")
+
+            # ----- [3/4] Compile -----
+            log.phase("[3/4] Compile")
+            cmd = [iverilog, "-g2012", "-o", out, compile_src]
+            log.info("$ " + " ".join(shlex.quote(c) for c in cmd))
+            start = time.monotonic()
+            try:
+                # Same iverilog invocation path as the Verilog Simulator IDE
+                # (hdl.icarus), so both features stay byte-for-byte consistent.
+                res = icarus.run_iverilog(
+                    iverilog, [compile_src], out,
+                    cwd=os.path.abspath(self.modelpath), timeout=300)
+            finally:
+                if tmp_src and os.path.isfile(tmp_src):
+                    os.remove(tmp_src)
+            elapsed = time.monotonic() - start
+            log.output(res.stdout, 'stdout')
+            log.output(res.stderr, 'stderr')
+            log.info("iverilog exited rc=%d in %.2fs"
+                     % (res.returncode, elapsed))
+
+            # ----- [4/4] Verify artifact -----
+            log.phase("[4/4] Verify artifact")
+            if not res.ok:
+                log.error("d_cosim model build FAILED (rc=%d)."
+                          % res.returncode)
+                if icarus.vpi_load_failed(res.output):
+                    log.fix("A VPI module (e.g. system.vpi) failed to load: "
+                            "the MinGW runtime DLLs next to iverilog are "
+                            "missing or shadowed. Reinstall eSim -- the "
+                            "installer ships them beside iverilog's binaries "
+                            "(bin and lib\\ivl).")
+                else:
+                    log.fix("Check the compiler errors above (syntax, missing "
+                            "module, or a construct Icarus -g2012 rejects).")
+                return "Error"
+            log.ok("Built d_cosim model: %s (%d bytes)"
+                   % (out, os.path.getsize(out)))
+            return out
+        except subprocess.TimeoutExpired:
+            log.error("iverilog timed out after 300s.")
+            log.fix("Simplify the design or raise the build timeout.")
+            return "Error"
+        except Exception as e:
+            log.error("d_cosim build error: " + str(e))
+            return "Error"
+
+    def _tool_version(self, binary):
+        '''
+            First line of "<binary> -V", or "unknown". Best-effort: identifies
+            which compiler actually ran, and never raises.
+        '''
+        try:
+            import subprocess
+            res = subprocess.run([binary, "-V"], capture_output=True,
+                                 text=True, timeout=10,
+                                 creationflags=self.NO_WINDOW)
+            lines = (res.stdout or res.stderr or "").strip().splitlines()
+            return lines[0] if lines and lines[0].strip() else "unknown"
+        except Exception:
+            return "unknown"
 
     def cfuncmod(self):
         '''
@@ -465,29 +877,6 @@ and set the load for input ports */
             cfunc.write(2 * "\t" + item)
             cfunc.write("\n")
         cfunc.write("\n")
-
-        # if os.name == 'nt':
-        #     digital_home = parser.get('NGHDL', 'DIGITAL_MODEL')
-        #     msys_home = parser.get('COMPILER', 'MSYS_HOME')
-        #     cmd_str2 = "/start_server.sh %d %s & read" + "\\" + "\"" + "\""
-        #     cmd_str1 = os.path.normpath(
-        #                         "\"" + digital_home + "/" +
-        #                         fname.split('.')[0] + "/DUTghdl/"
-        #     )
-        #     cmd_str1 = cmd_str1.replace("\\", "/")
-
-        #     cfunc.write(
-        #         '\t\tsnprintf(command,1024, "start mintty.exe -t ' +
-        #         '\\"VHDL-Testbench Logs\\" -h always bash.exe -c ' +
-        #         '\\' + cmd_str1 + cmd_str2 + ', sock_port, my_ip);'
-        #     )
-        # else:
-        #     cfunc.write(
-        #         '\t\tsnprintf(command,1024,"' + home +
-        #         '/nghdl-simulator/src/xspice/icm/ghdl/' +
-        #         fname.split('.')[0] +
-        #         '/DUTghdl/start_server.sh %d %s &", sock_port, my_ip);'
-        #     )
 
         cfunc.write("\n\t}")
         cfunc.write("\n")
@@ -732,6 +1121,12 @@ and set the load for input ports */
             count--;
             if (init==0)
             {
+                if (''' + self.fname.split('.')[0] + '''[count] != nullptr) {
+                    ''' + self.fname.split('.')[0] + '''[count]->final();
+                    delete ''' + self.fname.split('.')[0] + '''[count];
+                    ''' + self.fname.split('.')[0] + '''[count] = nullptr;
+                }
+                contextp->time(0);
                 ''' + self.fname.split('.')[0] + '''[count]=new V''' + \
             self.fname.split('.')[0] + '''{contextp};
                 contextp->traceEverOn(true);
@@ -823,162 +1218,182 @@ and set the load for input ports */
             This function creates modpathlst in Ngspice folder.
         '''
         print("Editing modpath.lst file")
-        mod = open(self.digital_home + '/modpath.lst', 'r')
-        text = mod.read()
-        mod.close()
-        mod = open(self.digital_home + '/modpath.lst', 'a+')
-        if not self.fname.split('.')[0] in text:
-            mod.write(self.fname.split('.')[0] + "\n")
-        mod.close()
+        with open(self.digital_home + '/modpath.lst', 'r') as mod:
+            text = mod.read()
+        # Exact-line membership: a plain "in text" substring test wrongly
+        # treats "divider" as already present because "divider_8bit" contains
+        # it, which silently drops the shorter model from Ngveri.cm.
+        modname = self.fname.split('.')[0]
+        with open(self.digital_home + '/modpath.lst', 'a+') as mod:
+            if modname not in text.split():
+                mod.write(modname + "\n")
+        # Self-heal: a stale entry whose build dir was deleted (e.g. the model
+        # was later removed via the d_cosim path, which nuked the shared
+        # <model>/ dir but not this list) makes cmpp abort the ENTIRE Ngveri.cm
+        # build -- "Unable to open <model>/ifspec.ifs". Drop such ghosts now so
+        # one dead entry can't take every other model down with it.
+        self.prune_modpathlst()
+
+    def prune_modpathlst(self):
+        '''
+            Rewrite modpath.lst keeping only entries whose build dir still has
+            an ifspec.ifs (what cmpp needs), and de-duplicating. Returns the
+            list of dropped (ghost / duplicate) names; logs each via clog.
+
+            This is the guard that keeps a single orphaned model -- the usual
+            fallout of switching a model between the d_cosim and legacy NgVeri
+            flows -- from breaking the build for all the others.
+        '''
+        path = self.digital_home + '/modpath.lst'
+        try:
+            with open(path) as f:
+                entries = [ln.strip() for ln in f]
+        except OSError:
+            return []
+
+        kept, dropped, seen = [], [], set()
+        for name in entries:
+            if not name:
+                continue
+            if name in seen:
+                dropped.append(name)        # duplicate line
+                continue
+            ifs = os.path.join(self.digital_home, name, 'ifspec.ifs')
+            if os.path.isfile(ifs):
+                kept.append(name)
+                seen.add(name)
+            else:
+                dropped.append(name)        # ghost: dir/ifspec.ifs gone
+
+        if dropped:
+            with open(path, 'w') as f:
+                for name in kept:
+                    f.write(name + "\n")
+            for name in dropped:
+                self.clog.warn(
+                    'Pruned stale model "' + name + '" from modpath.lst '
+                    '(its build dir / ifspec.ifs is missing).')
+        return dropped
 
     def run_verilator(self):
         '''
             This function is used to run the Verilator
             using the verilator commands.
         '''
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-
-        self.cur_dir = os.getcwd()
-        wno = " "
-        with open(init_path + "library/tlv/lint_off.txt") as file:
-            for item in file.readlines():
-                if item and item.strip():
-                    wno += " -Wno-" + item.strip("\n")
+        wno = []
+        try:
+            with open(paths.library_path("tlv/lint_off.txt")) as file:
+                for item in file.readlines():
+                    if item and item.strip():
+                        wno.append("-Wno-" + item.strip())
+        except OSError:
+            # A missing lint_off.txt should degrade to "no extra -Wno" rather
+            # than crash the whole verilator build with a raw exception.
+            wno = []
 
         print("Running Verilator.............")
-        os.chdir(self.modelpath)
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         # print(self.modelpath)
 
-        if os.name == 'nt':
-            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-            self.cmd = "export VERILATOR_ROOT=" + self.msys_home + "/mingw64; "
-        else:
-            self.cmd = ''
+        # Windows: VERILATOR_ROOT/PATH go into the environment (a shell
+        # `export` has no meaning for a direct exec) rather than being glued
+        # onto a `sh -c` string.
+        env = self._nt_build_env()
+        verilator = self._verilator_binary()
+        if not verilator:
+            return False
 
-        # self.cmd = self.cmd + "verilator -Wall " + wno + " \
-        # --cc --exe --no-MMD --Mdir . -CFLAGS -fPIC sim_main_" + \
-        #    self.fname.split('.')[0] + ".cpp " + self.fname
-        self.cmd = self.cmd + "verilator --stats -O3 -CFLAGS\
-         -O3 -LDFLAGS \"-static\" --x-assign fast \
-         --x-initial fast --noassert  --bbox-sys -Wall " + wno + "\
-         --cc --exe --no-MMD --Mdir . -CFLAGS\
-          -fPIC -output-split 0 sim_main_" + \
-            self.fname.split('.')[0] + ".cpp --autoflush  \
-            -DBSV_RESET_FIFO_HEAD -DBSV_RESET_FIFO_ARRAY  " + self.fname
-        self.process = QtCore.QProcess(self)
-        self.process.readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtitle("RUN VERILATOR")
-        self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        # self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
-        print("Verilator Executed")
-        os.chdir(self.cur_dir)
+        model = os.path.splitext(self.fname)[0]
+        # -DVL_TIME_CONTEXT: verilated.o is (re)built by the generated .mk
+        # with these CFLAGS. Without it verilated.cpp leaves the weak
+        # sc_time_stamp() reference undefined, which a Linux .so tolerates but
+        # the Windows Ngveri.cm DLL link rejects (undefined reference).
+        cmd = [
+            verilator, "--stats", "-O3",
+            "-CFLAGS", "-O3", "-CFLAGS", "-DVL_TIME_CONTEXT",
+            "-LDFLAGS", "-static", "--x-assign", "fast",
+            "--x-initial", "fast", "--noassert", "--bbox-sys", "-Wall",
+        ] + wno + [
+            "--cc", "--exe", "--no-MMD", "--Mdir", ".", "-CFLAGS", "-fPIC",
+            "-output-split", "0", "sim_main_" + model + ".cpp", "--autoflush",
+            "-DBSV_RESET_FIFO_HEAD", "-DBSV_RESET_FIFO_ARRAY", self.fname,
+        ]
+        return self._run(cmd, "RUN VERILATOR", cwd=self.modelpath, env=env)
 
     def make_verilator(self):
         '''
             Running make verilator using this function
         '''
-        self.cur_dir = os.getcwd()
         print("Make Verilator.............")
-        os.chdir(self.modelpath)
 
-        if os.path.exists(self.modelpath + "../verilated.o"):
-            os.remove(self.modelpath + "../verilated.o")
+        stale = os.path.join(self.modelpath, "..", "verilated.o")
+        if os.path.exists(stale):
+            os.remove(stale)
 
-        if os.name == 'nt':
-            # path to msys home directory
-            self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-            self.cmd = self.msys_home + "/mingw64/bin/mingw32-make.exe"
-        else:
-            self.cmd = "make"
+        make_bin = self._make_binary()
+        if not make_bin:
+            return False
 
-        self.cmd = self.cmd + " -f V" + self.fname.split('.')[0]\
-            + ".mk V" + self.fname.split(
-            '.')[0] + "__ALL.a sim_main_" \
-            + self.fname.split('.')[0] + ".o ../verilated.o"
-        self.process = QtCore.QProcess(self)
-        self.process.readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtitle("MAKE VERILATOR")
-        self.termtext("Current Directory: " + self.modelpath)
-        self.termtext("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process \
-            .readyReadStandardError.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
-
-        print("Make Verilator Executed")
-        os.chdir(self.cur_dir)
+        model = os.path.splitext(self.fname)[0]
+        # Purge make-generated aggregates from any earlier (possibly failed)
+        # build of this model: an interrupted verilator_includer leaves an
+        # empty V<model>__ALL.cpp that make then treats as up to date, and the
+        # resulting symbol-less archive only fails much later at the
+        # Ngveri.cm link.
+        for leftover in ("V" + model + "__ALL.cpp",
+                         "V" + model + "__ALL.o",
+                         "V" + model + "__ALL.a"):
+            p = os.path.join(self.modelpath, leftover)
+            if os.path.exists(p):
+                os.remove(p)
+        cmd = [make_bin, "-f", "V" + model + ".mk",
+               "V" + model + "__ALL.a",
+               "sim_main_" + model + ".o",
+               "../verilated.o", "../verilated_threads.o"]
+        return self._run(cmd, "MAKE VERILATOR", cwd=self.modelpath,
+                         env=self._nt_build_env())
 
     def copy_verilator(self):
         '''
             This function copies the verilator files/object files from
             "src/xspice/icm/Ngveri/ to release/src/xspice/icm/Ngveri/"
         '''
-        self.cur_dir = os.getcwd()
         print("Copying the required files to Release Folder.............")
-        os.chdir(self.modelpath)
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
-        path_icm = self.release_home + "/src/xspice/icm/Ngveri/"
-        if not os.path.isdir(path_icm + self.fname.split('.')[0]):
-            os.mkdir(path_icm + self.fname.split('.')[0])
-        path_icm = path_icm + self.fname.split('.')[0]
-        if os.path.exists(
-            path_icm +
-            "sim_main_" +
-            self.fname.split('.')[0] +
-                ".o"):
-            os.remove(path_icm + "sim_main_" + self.fname.split('.')[0] + ".o")
-        if os.path.exists(
-            self.release_home +
-            "src/xspice/icm/Ngveri/" +
-                "verilated.o"):
-            os.remove(
-                self.release_home + "src/xspice/icm/Ngveri/" + "verilated.o"
-            )
-        if os.path.exists(
-            path_icm +
-            "V" +
-            self.fname.split('.')[0] +
-                "__ALL.o"):
-            os.remove(path_icm + "V" + self.fname.split('.')[0] + "__ALL.o")
-        # print(self.modelpath)
+        ngveri_icm = self.release_home + "/src/xspice/icm/Ngveri/"
+        model = os.path.splitext(self.fname)[0]
+        # Per-model dir; keep a trailing slash so the os.remove guards below
+        # actually target real files. Without it the paths glued to
+        # ".../Ngveri/<model>sim_main_..." (note the missing slash), never
+        # existed, so the stale-artifact cleanup was a silent no-op.
+        path_icm = ngveri_icm + model + "/"
+        if not os.path.isdir(path_icm):
+            os.makedirs(path_icm, exist_ok=True)
+        for stale in (path_icm + "sim_main_" + model + ".o",
+                      ngveri_icm + "verilated.o",
+                      ngveri_icm + "verilated_threads.o",
+                      path_icm + "V" + model + "__ALL.a"):
+            if os.path.exists(stale):
+                os.remove(stale)
+        # shutil instead of `cp` via sh -c: no quoting hazard for spaced
+        # release paths, and a copy failure raises here (-> False) instead of
+        # a silent nonzero exit that the old success search would have missed.
+        self.termtitle("COPYING FILES")
         try:
-            self.cmd = "cp sim_main_" + \
-                self.fname.split('.')[0] + ".o V" + \
-                self.fname.split('.')[0] + "__ALL.o " + path_icm
-            self.process = QtCore.QProcess(self)
-            self.args = ['-c', self.cmd]
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.start('sh', self.args)
-            self.termtitle("COPYING FILES")
-            self.termtext("Current Directory: " + self.modelpath)
-            self.termtext("Command: " + self.cmd)
-            self.process.waitForFinished(50000)
-            self.cmd = "cp ../verilated.o " + self.release_home \
-                + "/src/xspice/icm/Ngveri/"
-            self.process.start('sh', ['-c', self.cmd])
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            print("Copied the files")
-            os.chdir(self.cur_dir)
-        except BaseException:
-            print("There is error in Copying Files ")
+            shutil.copy2(os.path.join(
+                self.modelpath, "sim_main_" + model + ".o"), path_icm)
+            shutil.copy2(os.path.join(
+                self.modelpath, "V" + model + "__ALL.a"), path_icm)
+            shutil.copy2(os.path.normpath(os.path.join(
+                self.modelpath, "..", "verilated.o")), ngveri_icm)
+            shutil.copy2(os.path.normpath(os.path.join(
+                self.modelpath, "..", "verilated_threads.o")), ngveri_icm)
+        except OSError as err:
+            self.termtext(
+                "[NgVeri] Copying build artifacts failed: " + str(err))
+            return False
+        print("Copied the files")
+        return True
 
     def runMake(self):
         '''
@@ -987,73 +1402,47 @@ and set the load for input ports */
         print("run Make Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
 
-        try:
-            if os.name == 'nt':
-                # path to msys home directory
-                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                self.cmd = self.msys_home + "/mingw64/bin/mingw32-make.exe"
-            else:
-                self.cmd = "make"
+        make_bin = self._make_binary()
+        if not make_bin:
+            return False
 
-            print("Running Make command in " + path_icm)
-            self.process = QtCore.QProcess(self)
-            self.process.start('sh', ['-c', self.cmd])
-            print("make command process pid ---------- >", self.process.processId())
-
-            self.termtitle("MAKE COMMAND")
-            self.termtext("Current Directory: " + path_icm)
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            os.chdir(self.cur_dir)
-        except BaseException:
-            print("There is error in 'make' ")
+        print("Running Make command in " + path_icm)
+        return self._run([make_bin], "MAKE COMMAND", cwd=path_icm,
+                         env=self._nt_build_env())
 
     def runMakeInstall(self):
         '''
             Running the make install command for Ngspice
         '''
-        self.cur_dir = os.getcwd()
         print("run Make Install Called")
         self.release_home = self.parser.get('NGHDL', 'RELEASE')
         path_icm = os.path.join(self.release_home, "src/xspice/icm")
-        os.chdir(path_icm)
 
-        try:
-            if os.name == 'nt':
-                self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
-                self.cmd = self.msys_home + \
-                    "/mingw64/bin/mingw32-make.exe install"
-            else:
-                self.cmd = "make install"
-            print("Running Make Install")
+        make_bin = self._make_binary()
+        if not make_bin:
+            return False
+        print("Running Make Install")
+        cmd = [make_bin, "install"]
+        if os.name == 'nt':
+            # The configured tree bakes the BUILD machine's absolute prefix
+            # into makedefs (pkglibdir/pkgdatadir), so a stock `make install`
+            # on an end-user PC would write the rebuilt code models into the
+            # packager's path instead of this install's install_dir. Override
+            # both on the command line from ~/.nghdl/config.ini (forward
+            # slashes: these values are make variables).
             try:
-                self.process.close()
-            except BaseException:
-                pass
-
-            self.process = QtCore.QProcess(self)
-            self.process.start('sh', ['-c', self.cmd])
-            # text="<span style=\" font-size:8pt; font-weight:600;
-            # color:#000000;\" >"
-            self.termtitle("MAKE INSTALL COMMAND")
-            self.termtext("Current Directory: " + path_icm)
-            self.termtext("Command: " + self.cmd)
-            self.process \
-                .readyReadStandardOutput.connect(self.readAllStandard)
-            self.process \
-                .readyReadStandardError.connect(self.readAllStandard)
-            self.process.waitForFinished(50000)
-            os.chdir(self.cur_dir)
-
-        except BaseException as e:
-            print(e)
-            print("There is error in 'make install' ")
+                nghdl_home = self.parser.get('NGHDL', 'NGHDL_HOME')
+            except Exception:
+                nghdl_home = ''
+            if nghdl_home:
+                inst = os.path.join(nghdl_home, 'install_dir').replace(
+                    '\\', '/')
+                cmd += ["pkglibdir=" + inst + "/lib/ngspice",
+                        "pkgdatadir=" + inst + "/share/ngspice"]
+        return self._run(cmd,
+                         "MAKE INSTALL COMMAND", cwd=path_icm,
+                         env=self._nt_build_env())
 
     def addfile(self):
         '''
@@ -1062,18 +1451,14 @@ and set the load for input ports */
         '''
         print("Adding the files required by the top level module file")
 
-        init_path = '../../'
-        if os.name == 'nt':
-            init_path = ''
-
         includefile = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getOpenFileName(
-                self,
+                Dialogs.resolve_parent(self),
                 "Open adding other necessary files to be included",
-                init_path + "home")[0])
+                os.path.join(paths.repo_root(), "home"))[0])
 
         if includefile == "":
-            reply = QtWidgets.QMessageBox.critical(
+            reply = Dialogs.critical(
                 None, "Error Message",
                 "<b>Error: No File Chosen. Please chose a file</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
@@ -1091,19 +1476,25 @@ and set the load for input ports */
                 self.obj_Appconfig.print_info('No File Chosen')
                 return
 
+        # Esc / window-X on the dialog matches neither branch; without this
+        # guard execution fell through with an empty path and wrote a blank
+        # include file.
+        if includefile == "":
+            return
+
         filename = os.path.basename(includefile)
         self.modelpath = self.digital_home + \
             "/" + self.fname.split('.')[0] + "/"
 
         if not os.path.isdir(self.modelpath):
             os.mkdir(self.modelpath)
-        text = open(includefile).read()
+        with open(includefile) as fh:
+            text = fh.read()
         text = text + '\n'
-        f = open(self.modelpath + filename, 'w')
-        for item in text:
-            f.write(item)
-        f.write("\n")
-        f.close()
+        with open(self.modelpath + filename, 'w') as f:
+            for item in text:
+                f.write(item)
+            f.write("\n")
         print("Added the File:" + filename)
         self.termtitle("Added the File:" + filename)
 
@@ -1117,12 +1508,12 @@ and set the load for input ports */
 
         includefolder = QtCore.QDir.toNativeSeparators(
             QtWidgets.QFileDialog.getExistingDirectory(
-                self, "open", "home"
+                Dialogs.resolve_parent(self), "open", "home"
             )
         )
 
         if includefolder == "":
-            reply = QtWidgets.QMessageBox.critical(
+            reply = Dialogs.critical(
                 None, "Error Message",
                 "<b>Error: No Folder Chosen. Please chose a folder</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
@@ -1140,10 +1531,17 @@ and set the load for input ports */
                 self.obj_Appconfig.print_info('No Folder Chosen')
                 return
 
-        self.modelpath = self.digital_home + \
-            "/" + self.fname.split('.')[0] + "/"
+        # Esc / window-X matches neither branch; guard against falling through
+        # with an empty path (would makedirs/copytree against a bad target).
+        if includefolder == "":
+            return
 
-        reply = QtWidgets.QMessageBox.question(
+        self.modelpath = self.digital_home + \
+            "/" + os.path.splitext(self.fname)[0] + "/"
+        if not os.path.isdir(self.modelpath):
+            os.makedirs(self.modelpath, exist_ok=True)
+
+        reply = Dialogs.question(
             None, "Message",
             '''<b>If you want only the contents\
              of the folder to be added press "Yes".\
@@ -1151,120 +1549,59 @@ and set the load for input ports */
                     to be added, press "No". </b>''',
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
         )
-        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            self.cmd = "cp -a " + includefolder + "/. " + self.modelpath
-            self.obj_Appconfig.print_info('Adding Contents of the Folder')
-        elif reply == QtWidgets.QMessageBox.StandardButton.No:
-            self.cmd = "cp -R " + includefolder + " " + self.modelpath
-            self.obj_Appconfig.print_info('Adding the Folder')
-
-        print("Adding the Folder:" + includefolder.split('/')[-1])
-        self.termtitle("Adding the Folder:" + includefolder.split('/')[-1])
-
-        self.process = QtCore.QProcess(self)
-        self.process.start('sh', ['-c', self.cmd])
-        self.termtext("Command: " + self.cmd)
-        self.process \
-            .readyReadStandardOutput.connect(self.readAllStandard)
-        self.process.waitForFinished(50000)
+        foldername = os.path.basename(os.path.normpath(includefolder))
+        self.termtitle("Adding the Folder: " + foldername)
+        # shutil.copytree instead of `cp` via sh -c: a user-picked folder with
+        # spaces/metacharacters can neither split nor execute. Esc / window-X
+        # returns neither Yes nor No -> do nothing, instead of the old code
+        # falling through and re-running a stale self.cmd from a prior action.
+        try:
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                shutil.copytree(includefolder, self.modelpath,
+                                dirs_exist_ok=True)
+                self.obj_Appconfig.print_info('Adding Contents of the Folder')
+            elif reply == QtWidgets.QMessageBox.StandardButton.No:
+                shutil.copytree(
+                    includefolder,
+                    os.path.join(self.modelpath, foldername),
+                    dirs_exist_ok=True)
+                self.obj_Appconfig.print_info('Adding the Folder')
+            else:
+                self.obj_Appconfig.print_info('Add Folder cancelled')
+                return
+        except OSError as err:
+            self.termtext("[NgVeri] Could not add folder '" +
+                          foldername + "': " + str(err))
+            return
         print("Added the folder")
-        # os.chdir(self.cur_dir)
 
     def termtitle(self, textin):
         '''
             This function is used to print the titles
-            in the terminal of Ngveri tab.
+            in the terminal of Ngveri tab. Emitted via the ``line`` signal so
+            it is safe from the build worker thread.
         '''
-        Text = "<span style=\" font-size:20pt; \
-        font-weight:1000; color:#0000FF;\" >"
+        # No hardcoded colour: the old #0000FF blue was near-invisible on the
+        # dark theme. Weight + rule bars carry the emphasis; the text inherits
+        # the palette so it reads in both themes.
+        Text = "<span style=\"font-size:20pt; font-weight:1000;\">"
         Text += "<br>================================<br>"
         Text += textin
         Text += "<br>================================<br>"
         Text += "</span>"
-        self.termedit.append(Text)
+        self.line.emit(Text)
+        # Drive the NgVeri progress indicator with the plain banner text.
+        self.phase.emit(textin)
 
     def termtext(self, textin):
         '''
             This function is used to print the text/commands
-            in the terminal of Ngveri tab.
+            in the terminal of Ngveri tab. Emitted via the ``line`` signal so
+            it is safe from the build worker thread.
         '''
-        Text = "<span style=\" font-size:12pt;\
-         font-weight:500; color:#000000;\" >"
+        # No hardcoded colour (was #000000, invisible on dark): inherit the
+        # palette. stderr keeps red via _emit_error.
+        Text = "<span style=\"font-size:12pt; font-weight:500;\">"
         Text += textin
         Text += "</span>"
-        self.termedit.append(Text)
-
-    @QtCore.pyqtSlot()
-    def readAllStandard(self):
-        '''
-            This function reads all the standard output data and
-            the errors from the process that are being run.
-        '''
-        # self.termedit = termedit
-        # self.termedit.append(str(self.process.readAll().data(),\
-        # encoding='utf-8'))
-        stdoutput = self.process.readAll()
-        TextStdOut = "<span style=\" font-size:12pt;\
-         font-weight:300; color:#000000;\" >"
-        for line in str(stdoutput.data(), encoding='utf-8').split("\n"):
-            TextStdOut += "<br>" + line
-        TextStdOut += "</span>"
-        self.termedit.append(TextStdOut)
-        # print(str(self.process.readAll().data(), encoding='utf-8'))
-
-        stderror = self.process.readAllStandardError()
-        if stderror.toUpper().contains(b"ERROR"):
-            self.errorFlag = True
-        TextErr = "<span style=\" font-size:12pt; \
-        font-weight:1000; color:#ff0000;\" >"
-        for line in str(stderror.data(), encoding='utf-8').split("\n"):
-            TextErr += "<br>" + line
-        TextErr += "</span>"
-        self.termedit.append(TextErr)
-
-    # @QtCore.pyqtSlot()
-    # def readAllStandard(self):
-    #     #self.termedit = termedit
-    #     self.termedit.append(str(self.process.\
-    #         readAll().data(), encoding='utf-8'))
-
-    #     print(str(self.process.readAll().data(), encoding='utf-8'))
-    #     stderror = self.process.readAllStandardError()
-    #     if stderror.toUpper().contains(b"ERROR"):
-    #         self.errorFlag = True
-    #     Text = "<span style=\" font-size:12pt;\
-    # font-weight:1000; color:#ff0000;\" >"
-    #     for line in str(stderror.data(), encoding='utf-8').split("\n"):
-    #         Text += "<br>"+line+"<br>"
-    #     Text += "</span>"
-    #     self.termedit.append(Text+"\n")
-
-    #     init_path = '../../'
-    #     if os.name == 'nt':
-    #         init_path = ''
-    #     includefile = QtCore.QDir.toNativeSeparators(\
-    #     QtWidgets.QFileDialog.getOpenFileName(
-    #             self, "Open adding other necessary files to be included",
-    #                 init_path + "home"
-    #            )[0]
-    #         )
-    #     if includefile=="":
-    #         reply=QtWidgets.QMessageBox.critical(
-    #                 None, "Error Message",
-    #                 "<b>Error: No File Chosen. Please chose a file</b>",
-    #                 QtWidgets.QMessageBox.StandardButton.Ok | QtWidgets.QMessageBox.StandardButton.Cancel
-    #             )
-    #         if reply == QtWidgets.QMessageBox.StandardButton.Ok:
-    #             self.addfile()
-    #             self.obj_Appconfig.print_info('Add Other Files Called')
-
-    #         elif reply == QtWidgets.QMessageBox.StandardButton.Cancel:
-    #             self.obj_Appconfig.print_info('No File Chosen')
-    #     filename = os.path.basename(includefile)
-    #     self.modelpath=self.digital_home+"/"+self.fname.split('.')[0]+"/"
-
-    #     if not os.path.isdir(self.modelpath):
-    #         os.mkdir(self.modelpath)
-    #     text = open(includefile).read()
-    #     open(self.modelpath+filename,'w').write(text)
-    #     includefile.close()
+        self.line.emit(Text)

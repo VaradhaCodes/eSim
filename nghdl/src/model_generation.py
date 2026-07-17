@@ -12,10 +12,11 @@ class ModelGeneration:
         self.fname = os.path.basename(file)
         print("VHDL filename is : ", self.fname)
 
-        if os.name == 'nt':
-            self.home = os.path.join('library', 'config')
-        else:
-            self.home = os.path.expanduser('~')
+        # Per-user config lives at ~/.nghdl/config.ini on EVERY platform (the
+        # Windows bootstrap writes it there too). The old nt branch read a
+        # CWD-relative 'library/config/.nghdl/config.ini', which only worked
+        # when eSim happened to be launched from its install root.
+        self.home = os.path.expanduser('~')
 
         self.parser = ConfigParser()
         self.parser.read(os.path.join(
@@ -376,7 +377,8 @@ class ModelGeneration:
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(sock_port);
             server_addr.sin_addr = *((struct in_addr *)host->h_addr);
-            bzero(&(server_addr.sin_zero),8);
+            /* memset, not bzero: MinGW (Windows) has no bzero */
+            memset(&(server_addr.sin_zero), 0, 8);
 
         '''
 
@@ -1072,6 +1074,12 @@ class ModelGeneration:
         )
 
         if os.name == 'nt':
+            # The script is spawned by the ghdl code model via
+            # `start mintty ... bash.exe -c ...` (a NON-login bash), so the
+            # MSYS2 mingw64 toolchain is not on PATH -- put it there before
+            # anything calls ghdl/gcc.
+            start_server.write(
+                "export PATH=/mingw64/bin:/usr/bin:$PATH\n")
             pathstr = self.digital_home + "/" + \
                 self.fname.split('.')[0] + "/DUTghdl/"
             pathstr = pathstr.replace("\\", "/")
@@ -1099,8 +1107,11 @@ class ModelGeneration:
         )
 
         if os.name == 'nt':
+            # -lws2_32: let the mingw linker resolve Winsock from its own
+            # library path. The old form linked a checked-in libws2_32.a copy
+            # that no longer ships (and would be toolchain-mismatched anyway).
             start_server.write("ghdl -e -Wl,ghdlserver.o " +
-                               "-Wl,libws2_32.a " +
+                               "-Wl,-lws2_32 " +
                                self.fname.split('.')[0] + "_tb &&\n")
             start_server.write("./" + self.fname.split('.')[0] + "_tb.exe")
         else:

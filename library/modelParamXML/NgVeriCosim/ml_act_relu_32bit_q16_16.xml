@@ -1,0 +1,1 @@
+<model><name>ml_act_relu_32bit_q16_16</name><type>NgVeriCosim</type><node_number>2</node_number><title>Add parameters for ml_act_relu_32bit_q16_16</title><split>32-V:32-V</split><param><instance_id default="1">Enter Instance ID (Between 0-99)</instance_id></param></model>
