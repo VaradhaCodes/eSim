@@ -1,0 +1,67 @@
+# What a USER download must not contain.
+#
+# `export-ignore` drops a path from every archive git generates from this
+# branch. That single fact covers BOTH ways eSim is handed to a user, so the
+# two can never drift apart:
+#
+#   1. curl one-liner  -> Ubuntu/bootstrap.sh fetches
+#      codeload.github.com/.../tar.gz/refs/heads/<branch>, which GitHub builds
+#      with `git archive`. It honours these lines server-side.
+#   2. release zip     -> make-release.sh archives the same commit locally.
+#
+# A `git clone` is NOT an archive, so developers still get everything below.
+# Nothing here is deleted from the branch -- it just stops shipping.
+#
+# Anything the installer touches at runtime MUST NOT be listed here. Verified
+# load-bearing, keep out of this file: VERSION, src/, library/, images/,
+# Examples/, nghdl/, ihp/ (install-eSim.sh runs ihp/ihp-install-script.sh),
+# Ubuntu/ (bootstrap.sh's is_esim_tree() requires Ubuntu/install-eSim.sh),
+# README.md, LICENSE, INSTALL.
+
+# ---- packaging notes (maintainer-facing) ----
+/PACKAGING.md                    export-ignore
+/MAINTAINERS-PACKAGING.md        export-ignore
+
+# ---- contributor / repo furniture ----
+/CONTRIBUTION.md                 export-ignore
+/SECURITY.md                     export-ignore
+/.github/                        export-ignore
+/.travis.yml                     export-ignore
+/.readthedocs.yaml               export-ignore
+/.gitignore                      export-ignore
+/.gitattributes                  export-ignore
+/.DS_Store                       export-ignore
+
+# ---- build & release tooling (the user runs install-eSim.sh, not these) ----
+/make-release.sh                 export-ignore
+/setup.py                        export-ignore
+/requirements.txt                export-ignore
+/patches/                        export-ignore
+/scripts/                        export-ignore
+
+# ---- Sphinx doc sources (the built manual is shipped, not its input) ----
+/conf.py                         export-ignore
+/index.rst                       export-ignore
+/code/                           export-ignore
+/docs/                           export-ignore
+
+# ---- Windows-only packaging tree; the curl/zip paths are Ubuntu-only ----
+/windows/                        export-ignore
+
+# ---- test suites ----
+/src/conftest.py                 export-ignore
+src/**/tests/                    export-ignore
+
+# ---- regeneratable ngspice output committed into the library ----
+# 427 MB of the 644 MB tree. eSim rewrites these the first time a circuit is
+# simulated; shipping them just makes the download four times bigger.
+*.raw                            export-ignore
+plot_data_*.txt                  export-ignore
+
+# ---- dead duplicate of library/SubcircuitLibrary (55 MB) ----
+# Case-only twin. Every reference in src/ is to the capital-S tree; this one is
+# unreachable. (Upstream carries a remove-duplicate-subcircuitlibrary branch.)
+/library/subcircuitLibrary/       export-ignore
+
+# MSYS2 sh runs these; CRLF from autocrlf checkout breaks them on fresh clones.
+windows/*.sh text eol=lf

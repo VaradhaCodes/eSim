@@ -317,8 +317,8 @@ src/
 | Platform | Method | Status |
 |:---------|:-------|:------:|
 | **All Linux** (Fedora, Ubuntu, openSUSE, Arch, etc.) | Flatpak | ✅ Recommended |
-| **Ubuntu** 22.04 / 23.04 / 24.04 LTS | Native Installer | ✅ Supported |
-| **Windows** 8 / 10 / 11 | Windows Installer | ✅ Supported |
+| **Ubuntu** 24.04 LTS / 25.04 / 26.04 LTS | Native Installer | ✅ Supported |
+| **Windows** 10 / 11 | Windows Installer | ✅ Supported |
 | **Docker** (any OS) | Docker Container | ✅ Supported |
 
 ### 🐧 Linux — Flatpak (Recommended for all distributions)
@@ -344,10 +344,23 @@ flatpak run org.fossee.eSim
 
 ### 🐧 Ubuntu — Native Installer
 
+**Quick install** — paste this in a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/dev/Ubuntu/bootstrap.sh | bash
+```
+
+Downloads eSim to `~/eSim` and runs the installer. Re-run the same line to
+update; add `-s -- --uninstall` to remove it. Upgrading from an older eSim
+2.x? Same line — the installer sweeps old-eSim artifacts and installs
+cleanly on top.
+
+Prefer a manual download? The zip flow below runs the exact same installer:
+
 ```bash
 # 1. Download and extract eSim
-unzip eSim-2.5.zip
-cd eSim-2.5
+unzip eSim-2.6.zip
+cd eSim-2.6
 
 # 2. Install eSim with all dependencies
 chmod +x install-eSim.sh
