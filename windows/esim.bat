@@ -43,11 +43,14 @@ if "%~1"=="--doctor" (
     exit /b %errorlevel%
 )
 
-rem pythonw = no console window. Fall back to python.exe for a visible
-rem traceback by running: esim.bat --debug
-if "%~1"=="--debug" (
-    "%ESIM_HOME%\python\python.exe"  "%ESIM_HOME%\src\frontEnd\Application.py"
-) else (
+rem Default: run under python.exe (-u = unbuffered) so eSim's stdout/stderr
+rem log stream stays visible in this console alongside the GUI -- the same
+rem experience as launching eSim from a Linux terminal. --no-console restores
+rem the old silent, detached pythonw launch (no window). --debug is a
+rem redundant alias of the default now.
+if "%~1"=="--no-console" (
     start "" "%ESIM_HOME%\python\pythonw.exe" "%ESIM_HOME%\src\frontEnd\Application.py"
+) else (
+    "%ESIM_HOME%\python\python.exe" -u "%ESIM_HOME%\src\frontEnd\Application.py" %*
 )
 endlocal

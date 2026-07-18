@@ -8,15 +8,18 @@
  * exactly, then hands off to the bundled python.
  *
  *   <root>\eSim.exe            (this file, at the install root)
- *   <root>\python\pythonw.exe  <root>\src\frontEnd\Application.py
+ *   <root>\python\python.exe   <root>\src\frontEnd\Application.py   (+ log console)
  *
  * esim.bat stays in the install for terminal use; both must keep making the
  * same environment decisions (see esim.bat for the reasoning per entry).
  *
- * Args: everything is forwarded to Application.py. `--debug` and `--doctor`
- * swap pythonw.exe for python.exe in a fresh console so output is visible
- * (--doctor additionally runs under `cmd /k` so its report stays readable
- * after the probe exits).
+ * Args: everything is forwarded to Application.py. By default eSim launches
+ * under python.exe in its OWN console, so its stdout/stderr log stream is
+ * visible alongside the GUI -- the same experience as starting eSim from a
+ * Linux terminal. `--no-console` restores the old silent pythonw launch (no
+ * window); `--debug` is a redundant alias of the default now. `--doctor`
+ * runs the toolchain report under `cmd /k` so it stays on screen after the
+ * probe exits.
  * ========================================================================== */
 
 #ifndef UNICODE
@@ -123,8 +126,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR pCmdLine, int nCmdSh
     SetEnvironmentVariableW(L"ESIM_ENV_READY", L"1");
 
     /* --- pick interpreter and build the command line --------------------- */
-    int debug  = wcsstr(pCmdLine, L"--debug")  != NULL;
-    int doctor = wcsstr(pCmdLine, L"--doctor") != NULL;
+    /* Default is a visible log console (python.exe in its own window),
+     * mirroring the Linux launch where eSim's stdout/stderr scroll in the
+     * terminal it was started from. `--no-console` opts back out to the old
+     * silent pythonw launch (no window). */
+    int no_console = wcsstr(pCmdLine, L"--no-console") != NULL;
+    int doctor     = wcsstr(pCmdLine, L"--doctor")     != NULL;
+    int console    = !no_console;   /* GUI + log window unless opted out */
 
     wchar_t *cmd = (wchar_t *)LocalAlloc(LPTR, ENVCAP * sizeof(wchar_t));
     if (!cmd)
@@ -136,8 +144,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR pCmdLine, int nCmdSh
             L"\"%s\\src\\frontEnd\\Application.py\" --doctor\"",
             root, root);
     } else {
-        wsprintfW(cmd, L"\"%s\\python\\%s\" \"%s\\src\\frontEnd\\Application.py\"",
-                  root, debug ? L"python.exe" : L"pythonw.exe", root);
+        /* -u under the console: unbuffered stdout/stderr, so the log appears
+         * line-by-line as it happens instead of in a lump when a pipe buffer
+         * fills. pythonw (opt-out) has nowhere to print, so it is left plain. */
+        wsprintfW(cmd, L"\"%s\\python\\%s\"%s \"%s\\src\\frontEnd\\Application.py\"",
+                  root, console ? L"python.exe" : L"pythonw.exe",
+                  console ? L" -u" : L"", root);
         if (*pCmdLine) {
             append(cmd, ENVCAP, L" ");
             append(cmd, ENVCAP, pCmdLine);
@@ -148,7 +160,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR pCmdLine, int nCmdSh
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
-    DWORD flags = (debug || doctor) ? CREATE_NEW_CONSOLE : 0;
+    /* Title the log window "eSim" instead of the raw python.exe path. */
+    si.lpTitle = (wchar_t *)L"eSim \x2014 log";
+    DWORD flags = (console || doctor) ? CREATE_NEW_CONSOLE : 0;
     if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, flags,
                         NULL, root, &si, &pi)) {
         fail(L"Could not start eSim.\n\n"

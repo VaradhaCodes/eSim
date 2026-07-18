@@ -148,13 +148,14 @@ Source: "{#StageDir}\tools\nghdl\release\*"; DestDir: "{app}\tools\nghdl\release
 
 [Icons]
 ; eSim.exe is a real GUI executable (windows\launcher) with the icon and
-; version info embedded: no console flash, proper identity in Windows search
-; and the taskbar. esim.bat remains in {app} for terminal use (--debug,
-; --doctor).
+; version info embedded: proper identity in Windows search and the taskbar.
+; By default it spawns eSim under python.exe in its own log console (the
+; stdout/stderr stream, Linux-like); pass --no-console for the silent pythonw
+; launch. esim.bat remains in {app} for terminal use (--no-console, --doctor).
 ; AppUserModelID matches SetCurrentProcessExplicitAppUserModelID in
-; Application.py: the running pythonw windows group under this shortcut, so
+; Application.py: the running python windows group under this shortcut, so
 ; the taskbar shows the eSim icon (and pinning works) instead of a blank
-; pythonw entry.
+; python entry.
 Name: "{autoprograms}\eSim"; Filename: "{app}\eSim.exe"; WorkingDir: "{app}"; AppUserModelID: "FOSSEE.eSim.2.5"
 Name: "{autodesktop}\eSim";  Filename: "{app}\eSim.exe"; WorkingDir: "{app}"; AppUserModelID: "FOSSEE.eSim.2.5"
 
