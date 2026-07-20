@@ -223,9 +223,24 @@ class WorkerThread(QtCore.QThread):
         # CREATE_NO_WINDOW: console children (python scripts, CLI tools) must
         # not flash a blank console; GUI children (eeschema, OMEdit) are
         # unaffected by the flag. 0 on POSIX.
-        proc = subprocess.Popen(
-            shlex.split(command),
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        argv = shlex.split(command)
+        try:
+            proc = subprocess.Popen(
+                argv,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except OSError as err:
+            # An absent external tool (KiCad's eeschema, OMEdit, OMOptim not on
+            # PATH) raises FileNotFoundError right here -- on the *worker*
+            # thread. Letting it escape run() dumps it into sys.excepthook off
+            # the GUI thread, which is the one place a dialog must never be
+            # born. Report through errorOccurred, whose slot is delivered
+            # queued to the GUI thread.
+            tool = argv[0] if argv else command
+            self.errorOccurred.emit(
+                'Could not launch "%s".\n\n%s\n\nCheck that the tool is '
+                'installed and on your PATH, then try again.'
+                % (tool, err))
+            return
 
         if 'nghdl' in command:
             return

@@ -9,12 +9,25 @@ mature built-in lexers.
 import os
 import re
 
-from PyQt6.Qsci import (
-    QsciLexerCustom,
-    QsciLexerVerilog,
-    QsciLexerVHDL,
-    QsciScintilla,
-)
+try:
+    from PyQt6.Qsci import (
+        QsciLexerCustom,
+        QsciLexerVerilog,
+        QsciLexerVHDL,
+        QsciScintilla,
+    )
+    HAS_QSCI = True
+except ImportError:               # QScintilla not installed / failed to load
+    # QScintilla is an *optional* dependency, but the pure-Python half of this
+    # module (language_for / is_generated / comment_token) is imported by
+    # PlainEditor -- the Qsci-free fallback editor -- which the project
+    # explorer, and therefore the whole app, pulls in at startup. An
+    # unguarded import here meant a missing Qsci.pyd never showed a window at
+    # all. Stand in placeholder bases so the class statements below still
+    # execute; they are never instantiated because make_lexer() bails out.
+    QsciLexerCustom = QsciLexerVerilog = QsciLexerVHDL = object
+    QsciScintilla = None
+    HAS_QSCI = False
 
 
 # Scintilla fold-level flags (stable ABI constants).
@@ -356,6 +369,10 @@ def make_lexer(file_path, font, parent=None):
 
     *parent* must own the lexer so it is not garbage-collected.
     """
+    if not HAS_QSCI:
+        # No QScintilla: the host is showing a PlainEditor, which has no
+        # lexer slot to fill.
+        return None
     lang = language_for(file_path)
     lexer = None
     if lang == "SPICE":

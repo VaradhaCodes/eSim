@@ -1510,15 +1510,35 @@ def _install_excepthook():
         if site in seen_sites:
             return
         seen_sites.add(site)
+
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        summary = (
+            'An internal error occurred; the app will keep running, '
+            'but the last action may be incomplete.\n\n'
+            + ''.join(traceback.format_exception_only(etype, value)).strip()
+            + ('\n\nDetails: %s' % log_path if log_path else ''))
+
+        def show():
+            try:
+                Dialogs.critical(None, 'eSim - Unexpected error', summary)
+            except Exception:
+                pass
+
+        # sys.excepthook runs on whichever thread raised, and a raise inside a
+        # WorkerThread (a missing eeschema/OMEdit binary is the easy one) lands
+        # here off the GUI thread. Creating or showing a QWidget from a non-GUI
+        # thread is undefined behaviour in Qt and can kill the process
+        # natively -- the crash net itself becoming the crash. Marshal the
+        # dialog to the GUI thread instead; the log write above already
+        # happened, so a worker failure is never silent even if the queued
+        # call never gets serviced.
         try:
-            if QtWidgets.QApplication.instance() is not None:
-                Dialogs.critical(
-                    None, 'eSim - Unexpected error',
-                    'An internal error occurred; the app will keep running, '
-                    'but the last action may be incomplete.\n\n'
-                    + ''.join(traceback.format_exception_only(etype, value)).strip()
-                    + ('\n\nDetails: %s' % log_path if log_path else '')
-                )
+            if QtCore.QThread.currentThread() is app.thread():
+                show()
+            else:
+                QtCore.QTimer.singleShot(0, app, show)
         except Exception:
             pass
 
