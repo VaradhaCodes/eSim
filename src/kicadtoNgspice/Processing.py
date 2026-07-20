@@ -60,7 +60,10 @@ class PrcocessNetlist:
                 if option == '.param':
                     for i in range(1, len(words), 1):
                         paramList = words[i].split('=')
-                        param[paramList[0]] = paramList[1]
+                        # A bare token with no '=' (".param foo") used to
+                        # IndexError on paramList[1] (M3a). Skip it.
+                        if len(paramList) >= 2:
+                            param[paramList[0]] = paramList[1]
         # print("=============================================================")
         # print("readParamInfo called, from Processing")
         # print("=============================================================")
@@ -92,15 +95,26 @@ class PrcocessNetlist:
             # Construct netlist
             if len(eachline) > 1:
                 if eachline[0] == '+':
-                    netlist.append(netlist.pop() + eachline.replace('+', ' '))
+                    if netlist:
+                        netlist.append(
+                            netlist.pop() + eachline.replace('+', ' '))
+                    else:
+                        # A '+' continuation as the very first line has
+                        # nothing to attach to; keep the remainder as a
+                        # standalone line so netlist[0] below still exists
+                        # (M3b — pop from empty list).
+                        netlist.append(eachline[1:].strip())
                 else:
                     netlist.append(eachline)
         if unresolved:
             raise UndefinedParametersError(unresolved)
 
         # Copy information line
-        infoline = netlist[0]
-        netlist.remove(netlist[0])
+        if netlist:
+            infoline = netlist[0]
+            netlist.remove(netlist[0])
+        else:
+            infoline = ""
         """print("=============================================================")
         print("preprocessNetList called, from Processing")
         print("=============================================================")
@@ -212,6 +226,12 @@ class PrcocessNetlist:
                         [index, compline, words[3], Title, v1, v2])
 
             elif compName[0] == 'h' or compName[0] == 'f':
+                # A CCVS/CCCS (h/f) needs words[1..5]; a short line
+                # ("h1 1 2") used to IndexError at words[3..5] (R2-4). Leave
+                # the malformed component untouched for the downstream error
+                # surface rather than crash the parser here.
+                if len(words) < 6:
+                    continue
                 # Find the index component from the circuit
                 index = schematicInfo.index(compline)
                 schematicInfo.remove(compline)
@@ -463,32 +483,47 @@ class PrcocessNetlist:
 
                 elif compType in plotList:
                     schematicInfo.insert(index, "* " + compline)
+                    # Node names sit between the designator (words[0]) and the
+                    # trailing plot-type token (words[-1]). Slicing them out
+                    # both fixes the IndexError on a plot line with too few
+                    # nodes (M3c) and stops a single-node plot_v2 from emitting
+                    # the plot-type token itself as a bogus node name (R2-4).
+                    words = compline.split()
+                    nodes = words[1:-1]
                     if compType == 'plot_v1':
-                        words = compline.split()
-                        plotText.append("plot v(" + words[1] + ")")
+                        if nodes:
+                            plotText.append("plot v(" + nodes[0] + ")")
                     elif compType == 'plot_v2':
-                        words = compline.split()
-                        plotText.append(
-                            "plot v(" + words[1] + "," + words[2] + ")")
+                        if len(nodes) >= 2:
+                            plotText.append(
+                                "plot v(" + nodes[0] + "," + nodes[1] + ")")
+                        elif nodes:
+                            plotText.append("plot v(" + nodes[0] + ")")
                     elif compType == 'plot_i2':
-                        words = compline.split()
-                        # Adding zero voltage source to netlist
-                        schematicInfo.append(
-                            "v_" + words[0] + " " +
-                            words[1] + " " + words[2] + " " + "0")
-                        plotText.append("plot i(v_" + words[0] + ")")
+                        if len(nodes) >= 2:
+                            # Adding zero voltage source to netlist
+                            schematicInfo.append(
+                                "v_" + words[0] + " " +
+                                nodes[0] + " " + nodes[1] + " " + "0")
+                            plotText.append("plot i(v_" + words[0] + ")")
                     elif compType == 'plot_log':
-                        words = compline.split()
-                        plotText.append("plot log(" + words[1] + ")")
+                        if nodes:
+                            plotText.append("plot log(" + nodes[0] + ")")
                     elif compType == 'plot_db':
-                        words = compline.split()
-                        plotText.append("plot db(" + words[1] + ")")
+                        if nodes:
+                            plotText.append("plot db(" + nodes[0] + ")")
                     elif compType == 'plot_phase':
-                        words = compline.split()
-                        plotText.append("plot phase(" + words[1] + ")")
+                        if nodes:
+                            plotText.append("plot phase(" + nodes[0] + ")")
 
                 elif compType == 'transfo':
                     schematicInfo.insert(index, "* " + compline)
+                    # A transformer needs words[1..4] (four coupling nodes);
+                    # a short line ("u3 1 2 transfo") used to IndexError at
+                    # words[4] (R2-4). Keep the original as a comment (above)
+                    # and skip generating its model lines.
+                    if len(words) < 5:
+                        continue
 
                     # For Primary Couple
                     modelLine = (

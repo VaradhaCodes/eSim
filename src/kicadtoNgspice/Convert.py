@@ -750,7 +750,14 @@ class Convert:
 
                     if eachline[0] == 'm':
                         # For mosfet library name come along with MOSFET
-                        # dimension information
+                        # dimension information. A model-track entry without
+                        # the ":W=.. L=.." suffix used to IndexError here
+                        # (R3-10); surface it as a readable error instead.
+                        if len(tempStr) < 2:
+                            raise ValueError(
+                                "MOSFET '" + words[0] + "' has no W/L "
+                                "dimensions — reopen its device model and set "
+                                "the dimensions before converting.")
                         dimension = tempStr[1]
                         # Replace last word with library name
                         # words[-1] = libname.split('.')[0]
@@ -760,7 +767,19 @@ class Convert:
                         deviceLine[index] = words
                         includeLine.append(".include " + libname)
 
-                        shutil.copy2(libAbsPath, projpath)
+                        # A library file that was moved/renamed/unplugged
+                        # between selection and Convert used to raise a raw
+                        # FileNotFoundError (R3-10); surface it clearly.
+                        try:
+                            shutil.copy2(libAbsPath, projpath)
+                        except OSError as copy_err:
+                            raise FileNotFoundError(
+                                "Device-model library '" + libname +
+                                "' could not be copied from " + libpath +
+                                " — it may have been moved, renamed or is on "
+                                "an unavailable drive. (" +
+                                str(copy_err) + ")"
+                            ) from copy_err
 
                     elif eachline[0:6] == 'scmode':
                         (filepath, filemname) = os.path.split(self.clarg1)
@@ -789,8 +808,9 @@ sky130_fd_pr__model__linear.model.spice
 sky130_fd_pr__model__pnp.model.spice
 sky130_fd_pr__model__r+c.model.spice
 '''
+                        corner = tempStr[1] if len(tempStr) > 1 else "tt"
                         includeLine.append(
-                            ".lib \"" + libAbsPath + "\" " + tempStr[1])
+                            ".lib \"" + libAbsPath + "\" " + corner)
                         for i in libs.split():
                             includeLine.append(
                                 ".include \"" + libAbsPath.replace(
@@ -811,7 +831,16 @@ sky130_fd_pr__model__r+c.model.spice
                         deviceLine[index] = words
                         includeLine.append(".include " + libname)
 
-                        shutil.copy2(completeLibPath, projpath)
+                        try:
+                            shutil.copy2(completeLibPath, projpath)
+                        except OSError as copy_err:
+                            raise FileNotFoundError(
+                                "Device-model library '" +
+                                os.path.basename(completeLibPath) +
+                                "' could not be copied — it may have been "
+                                "moved, renamed or is on an unavailable "
+                                "drive. (" + str(copy_err) + ")"
+                            ) from copy_err
 
             # Adding device line to schematicInfo
             for index, value in deviceLine.items():
@@ -866,11 +895,31 @@ sky130_fd_pr__model__r+c.model.spice
 
                     src = completeSubPath
                     dst = projpath
-                    print(os.listdir(src))
-                    for files in os.listdir(src):
+                    # A subcircuit directory that was moved/renamed/unplugged
+                    # between selection and Convert used to raise a raw
+                    # FileNotFoundError from os.listdir (R3-10); surface it.
+                    try:
+                        sub_files = os.listdir(src)
+                    except OSError as list_err:
+                        raise FileNotFoundError(
+                            "Subcircuit directory '" + src + "' is not "
+                            "available — it may have been moved, renamed or "
+                            "is on an unavailable drive. (" +
+                            str(list_err) + ")"
+                        ) from list_err
+                    print(sub_files)
+                    for files in sub_files:
                         if os.path.isfile(os.path.join(src, files)):
                             if files != "analysis":
-                                shutil.copy2(os.path.join(src, files), dst)
+                                try:
+                                    shutil.copy2(
+                                        os.path.join(src, files), dst)
+                                except OSError as copy_err:
+                                    raise FileNotFoundError(
+                                        "Subcircuit file '" + files +
+                                        "' could not be copied from " + src +
+                                        ". (" + str(copy_err) + ")"
+                                    ) from copy_err
 
             # Adding subcircuit line to schematicInfo
             for index, value in subLine.items():

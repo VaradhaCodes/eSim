@@ -467,6 +467,12 @@ class _RenderMixin:
             raw_data = raw_data[:n]
             trace_time = time_data[:n]
 
+            # An empty trace (header-only / all-rows-dropped run) makes
+            # np.min/np.max raise "zero-size array to reduction" — skip it
+            # so the Timing view still renders the remaining traces (R2-3).
+            if n == 0:
+                continue
+
             trace_vmin, trace_vmax = np.min(raw_data), np.max(raw_data)
             trace_unit = "V" if idx < self.obj_dataext.volts_length else "A"
 
