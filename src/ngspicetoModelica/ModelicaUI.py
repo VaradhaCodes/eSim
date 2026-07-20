@@ -212,11 +212,11 @@ class OpenModelicaEditor(QtWidgets.QWidget):
         dir_name = os.path.dirname(os.path.realpath(self.ngspiceNetlist))
         # file_basename = os.path.basename(self.ngspiceNetlist)
 
-        cwd = os.getcwd()
-
+        # No os.chdir: the converter is passed dir_name explicitly and writes
+        # the .mo via absolute paths, so mutating the process CWD here bought
+        # nothing and raced with any concurrent CWD-relative code on the GUI
+        # thread (the map_json is absolute too).
         try:
-            os.chdir(dir_name)
-
             obj_NgMoConverter = NgMoConverter(self.map_json)
             # Getting all the require information
             lines = obj_NgMoConverter.readNetlist(self.ngspiceNetlist)
@@ -372,10 +372,6 @@ class OpenModelicaEditor(QtWidgets.QWidget):
                 'Unable to convert Ngspice netlist to Modelica netlist. ' +
                 'Check the netlist : ' + repr(e)
             )
-        finally:
-            # Always restore CWD — a mid-conversion exception used to leave
-            # the process chdir'd into the project dir (CWD-mutation hazard).
-            os.chdir(cwd)
 
     def callOMEdit(self):
 

@@ -551,6 +551,11 @@ class ModelEditorclass(QtWidgets.QWidget):
         print("Model File used for creating table : ", self.modelfile)
         self.tree = ET.parse(self.modelfile)
         self.root = self.tree.getroot()
+        # Default so a library whose XML omits these tags doesn't fall back to
+        # a STALE value from a previously opened model (or, for ref_model, an
+        # AttributeError in savethefile when it was never set at all).
+        self.ref_model = None
+        self.model_name = None
         for elem in self.tree.iter(tag='ref_model'):
             self.ref_model = elem.text
         for elem in self.tree.iter(tag='model_name'):
@@ -679,155 +684,76 @@ class ModelEditorclass(QtWidgets.QWidget):
     def createXML(self, model_name):
         '''
         - Create .xml and .lib file if new model is being created
-        - Save it in the corresponding compoenent directory,\
+        - Save it in the corresponding component directory,\
             example Diode, IGBT..
         - For each component, separate folder is there
         - Check the contents of .lib and .xml file to\
             understand their structure
         '''
-        root = ET.Element("library")
-        ET.SubElement(root, "model_name").text = model_name
-        ET.SubElement(root, "ref_model").text = self.modelname
-        param = ET.SubElement(root, "param")
-        for tags, text in list(self.modeldict.items()):
-            ET.SubElement(param, tags).text = text
-        tree = ET.ElementTree(root)
-        defaultcwd = os.getcwd()
+        # Map each device radio to its library sub-folder. Exactly one radio is
+        # expected to be checked; reaching Save with none selected (Edit, then
+        # New without picking a device type) used to fall through every branch
+        # and hit ``txtfile.close()`` on an unbound name (UnboundLocalError).
+        device_folders = [
+            (self.diode, 'Diode'),
+            (self.mos, 'MOS'),
+            (self.jfet, 'JFET'),
+            (self.igbt, 'IGBT'),
+            (self.magnetic, 'Misc'),
+            (self.bjt, 'Transistor'),
+        ]
+        folder = next(
+            (sub for rb, sub in device_folders if rb.isChecked()), None)
+        if folder is None:
+            Dialogs.critical(
+                self, "Error Message",
+                'Select a device type before saving the model.')
+            return
+
         self.savepath = paths.library_path('deviceModelLibrary')
-        if self.diode.isChecked():
-            savepath = os.path.join(self.savepath, 'Diode')
-            os.chdir(savepath)
-            txtfile = open(self.modelname + '.lib', 'w')
-            txtfile.write(
-                '.MODEL ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                '(')
+        savedir = os.path.join(self.savepath, folder)
+        libpath = os.path.join(savedir, self.modelname + '.lib')
+        xmlpath = os.path.join(savedir, self.modelname + '.xml')
+
+        # Absolute paths only — no os.chdir. The library tree may be read-only
+        # (a Program Files / system install), where a mid-write exception used
+        # to strand the whole process CWD inside the library folder. The
+        # read-only case and an invalid parameter name (bad XML tag) now both
+        # surface as one dialog and leave the CWD untouched.
+        try:
+            root = ET.Element("library")
+            ET.SubElement(root, "model_name").text = model_name
+            ET.SubElement(root, "ref_model").text = self.modelname
+            param = ET.SubElement(root, "param")
             for tags, text in list(self.modeldict.items()):
-                txtfile.write(' ' + tags + '=' + text)
-            txtfile.write(' )\n')
-            tree.write(self.modelname + ".xml")
-            self.obj_appconfig.print_info(
-                'New ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                ' library created at ' +
-                os.getcwd())
-        if self.mos.isChecked():
-            savepath = os.path.join(self.savepath, 'MOS')
-            os.chdir(savepath)
-            txtfile = open(self.modelname + '.lib', 'w')
-            txtfile.write(
-                '.MODEL ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                '(')
-            for tags, text in list(self.modeldict.items()):
-                txtfile.write(' ' + tags + '=' + text)
-            txtfile.write(' )\n')
-            tree.write(self.modelname + ".xml")
-            self.obj_appconfig.print_info(
-                'New ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                ' library created at ' +
-                os.getcwd())
-        if self.jfet.isChecked():
-            savepath = os.path.join(self.savepath, 'JFET')
-            os.chdir(savepath)
-            txtfile = open(self.modelname + '.lib', 'w')
-            txtfile.write(
-                '.MODEL ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                '(')
-            for tags, text in list(self.modeldict.items()):
-                txtfile.write(' ' + tags + '=' + text)
-            txtfile.write(' )\n')
-            tree.write(self.modelname + ".xml")
-            self.obj_appconfig.print_info(
-                'New ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                ' library created at ' +
-                os.getcwd())
-        if self.igbt.isChecked():
-            savepath = os.path.join(self.savepath, 'IGBT')
-            os.chdir(savepath)
-            txtfile = open(self.modelname + '.lib', 'w')
-            txtfile.write(
-                '.MODEL ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                '(')
-            for tags, text in list(self.modeldict.items()):
-                txtfile.write(' ' + tags + '=' + text)
-            txtfile.write(' )\n')
-            tree.write(self.modelname + ".xml")
-            self.obj_appconfig.print_info(
-                'New ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                ' library created at ' +
-                os.getcwd())
-        if self.magnetic.isChecked():
-            savepath = os.path.join(self.savepath, 'Misc')
-            os.chdir(savepath)
-            txtfile = open(self.modelname + '.lib', 'w')
-            txtfile.write(
-                '.MODEL ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                '(')
-            for tags, text in list(self.modeldict.items()):
-                txtfile.write(' ' + tags + '=' + text)
-            txtfile.write(' )\n')
-            tree.write(self.modelname + ".xml")
-            self.obj_appconfig.print_info(
-                'New ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                ' library created at ' +
-                os.getcwd())
-        if self.bjt.isChecked():
-            savepath = os.path.join(self.savepath, 'Transistor')
-            os.chdir(savepath)
-            txtfile = open(self.modelname + '.lib', 'w')
-            txtfile.write(
-                '.MODEL ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                '(')
-            for tags, text in list(self.modeldict.items()):
-                txtfile.write(' ' + tags + '=' + text)
-            txtfile.write(' )\n')
-            tree.write(self.modelname + ".xml")
-            self.obj_appconfig.print_info(
-                'New ' +
-                self.modelname +
-                ' ' +
-                self.model_name +
-                ' library created at ' +
-                os.getcwd())
-        txtfile.close()
+                ET.SubElement(param, tags).text = text
+            tree = ET.ElementTree(root)
+
+            os.makedirs(savedir, exist_ok=True)
+            with open(libpath, 'w') as txtfile:
+                txtfile.write(
+                    '.MODEL ' + self.modelname + ' ' + self.model_name + '(')
+                for tags, text in list(self.modeldict.items()):
+                    txtfile.write(' ' + tags + '=' + text)
+                txtfile.write(' )\n')
+            tree.write(xmlpath)
+        except (OSError, ValueError) as e:
+            Dialogs.critical(
+                self, "Error Message",
+                'Could not save the model into the library folder:\n' +
+                savedir + '\n\nThe library may be read-only (a Program Files '
+                'or system install), or a parameter name is not a valid XML '
+                'tag.\n\n' + str(e))
+            return
+
+        self.obj_appconfig.print_info(
+            'New ' + self.modelname + ' ' + self.model_name +
+            ' library created at ' + savedir)
 
         msg = "Model saved successfully!"
         Dialogs.information(
             self, "Information", msg, QtWidgets.QMessageBox.StandardButton.Ok
         )
-
-        os.chdir(defaultcwd)
 
     def validation(self, text):
         '''
@@ -853,28 +779,36 @@ class ModelEditorclass(QtWidgets.QWidget):
         '''
         xmlpath, file = os.path.split(editfile)
         filename = os.path.splitext(file)[0]
+        # The sibling .xml may lack <ref_model>/<model_name> (hand-made or an
+        # older-format library); fall back to the file stem instead of raising
+        # AttributeError when the attribute was never set.
+        ref_model = getattr(self, 'ref_model', None) or filename
+        model_name = getattr(self, 'model_name', None) or filename
         libpath = os.path.join(xmlpath, filename + '.lib')
-        libfile = open(libpath, 'w')
-        libfile.write(
-            '.MODEL ' +
-            self.ref_model +
-            ' ' +
-            self.model_name +
-            '(')
-        for tags, text in list(self.modeldict.items()):
-            libfile.write(' ' + tags + '=' + text)
-        libfile.write(' )\n')
-        libfile.close()
+        # Absolute paths, guarded: a read-only library folder or an invalid
+        # parameter name (bad XML tag) surfaces as a dialog, never a raw crash.
+        try:
+            with open(libpath, 'w') as libfile:
+                libfile.write('.MODEL ' + ref_model + ' ' + model_name + '(')
+                for tags, text in list(self.modeldict.items()):
+                    libfile.write(' ' + tags + '=' + text)
+                libfile.write(' )\n')
 
-        root = ET.Element("library")
-        ET.SubElement(root, "model_name").text = self.model_name
-        ET.SubElement(root, "ref_model").text = self.ref_model
-        param = ET.SubElement(root, "param")
-        for tags, text in list(self.modeldict.items()):
-            ET.SubElement(param, tags).text = text
-        tree = ET.ElementTree(root)
-
-        tree.write(os.path.join(xmlpath, filename + ".xml"))
+            root = ET.Element("library")
+            ET.SubElement(root, "model_name").text = model_name
+            ET.SubElement(root, "ref_model").text = ref_model
+            param = ET.SubElement(root, "param")
+            for tags, text in list(self.modeldict.items()):
+                ET.SubElement(param, tags).text = text
+            tree = ET.ElementTree(root)
+            tree.write(os.path.join(xmlpath, filename + ".xml"))
+        except (OSError, ValueError) as e:
+            Dialogs.critical(
+                self, "Error Message",
+                'Could not save the model file:\n' + libpath +
+                '\n\nThe folder may be read-only, or a parameter name is not '
+                'a valid XML tag.\n\n' + str(e))
+            return
 
         self.obj_appconfig.print_info('Updated library ' + libpath)
 
@@ -931,13 +865,31 @@ class ModelEditorclass(QtWidgets.QWidget):
         if not self.libfile:
             return
 
-        libopen = open(self.libfile)
-        filedata = libopen.read().split()
+        try:
+            with open(self.libfile) as libopen:
+                content = libopen.read()
+        except OSError as e:
+            Dialogs.critical(
+                self, "Error Message",
+                'Could not read the selected .lib file:\n' + str(e))
+            return
+
+        filedata = content.split()
         modelcount = 0
+        found = False
         for words in filedata:
             modelcount = modelcount + 1
             if words.lower() == '.model':
+                found = True
                 break
+        # Need the two tokens after '.model' (ref_model, model_name). A file
+        # with no '.model' line, an empty file, or '.model' as the last token
+        # used to IndexError here.
+        if not found or modelcount + 1 >= len(filedata):
+            Dialogs.critical(
+                self, "Error Message",
+                'The selected file has no valid ".model" definition.')
+            return
         ref_model = filedata[modelcount]
         model_name = filedata[modelcount + 1]
         model_name = list(model_name)
@@ -953,12 +905,7 @@ class ModelEditorclass(QtWidgets.QWidget):
         else:
             model_name = ''.join(model_name)
 
-        libopen1 = open(self.libfile)
-        while True:
-            char = libopen1.read(1)
-            if not char:
-                break
-            stringof.append(char)
+        stringof = list(content)
 
         count = 0
         for chars in stringof:
@@ -1014,17 +961,10 @@ class ModelEditorclass(QtWidgets.QWidget):
                 model_dict[listoflist[i][-1]] = listoflist[i + 1][0]
             except BaseException:
                 pass
-        root = ET.Element("library")
-        ET.SubElement(root, "model_name").text = model_name
-        ET.SubElement(root, "ref_model").text = ref_model
-        param = ET.SubElement(root, "param")
-        for tags, text in list(model_dict.items()):
-            ET.SubElement(param, tags).text = text
-        tree = ET.ElementTree(root)
-
-        defaultcwd = os.getcwd()
+        # Write into the user library with absolute paths — no os.chdir, so a
+        # failed write (illegal filename characters, read-only library) can no
+        # longer strand the process CWD inside the library folder.
         savepath = os.path.join(self.savepathtest, 'User Libraries')
-        os.chdir(savepath)
         text, ok1 = QtWidgets.QInputDialog.getText(
             self, 'Model Name', 'Enter Model Library Name'
         )
@@ -1036,13 +976,23 @@ class ModelEditorclass(QtWidgets.QWidget):
                     self, "Error Message",
                     'The model library name cannot be empty')
             else:
-                tree.write(text + ".xml")
-                fileopen = open(text + ".lib", 'w')
-                f = open(self.libfile)
-                fileopen.write(f.read())
-                f.close()
-                fileopen.close()
-
-        os.chdir(defaultcwd)
-        libopen.close()
-        libopen1.close()
+                try:
+                    root = ET.Element("library")
+                    ET.SubElement(root, "model_name").text = model_name
+                    ET.SubElement(root, "ref_model").text = ref_model
+                    param = ET.SubElement(root, "param")
+                    for tags, txt in list(model_dict.items()):
+                        ET.SubElement(param, tags).text = txt
+                    tree = ET.ElementTree(root)
+                    os.makedirs(savepath, exist_ok=True)
+                    tree.write(os.path.join(savepath, text + ".xml"))
+                    with open(os.path.join(savepath, text + ".lib"),
+                              'w') as fileopen:
+                        fileopen.write(content)
+                except (OSError, ValueError) as e:
+                    Dialogs.critical(
+                        self, "Error Message",
+                        'Could not save the model library into:\n' +
+                        savepath + '\n\nThe name may contain characters not '
+                        'allowed in a filename, or the library folder is '
+                        'read-only.\n\n' + str(e))
