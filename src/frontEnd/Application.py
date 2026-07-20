@@ -1410,6 +1410,13 @@ class MainView(QtWidgets.QWidget):
         self.obj_appconfig.noteArea['Note'].append('Project Selected : None')
         self.obj_appconfig.noteArea['Note'].append('\n')
 
+        # The console sink is now a live QTextEdit (and the status bar a live
+        # QStatusBar). Both may only be touched from the GUI thread, so stand up
+        # the GUI-thread reporter that print_info/warning/error marshal through
+        # -- we are on the GUI thread here (Application is built after
+        # QApplication in main()). See Appconfig.attach_gui_reporter (M9).
+        self.obj_appconfig.attach_gui_reporter()
+
         # Enhanced CSS with proper scrollbar styling
         self.noteArea.setObjectName("mainNoteConsole")
 
@@ -1526,19 +1533,41 @@ def _install_excepthook():
             except Exception:
                 pass
 
-        # sys.excepthook runs on whichever thread raised, and a raise inside a
-        # WorkerThread (a missing eeschema/OMEdit binary is the easy one) lands
-        # here off the GUI thread. Creating or showing a QWidget from a non-GUI
-        # thread is undefined behaviour in Qt and can kill the process
-        # natively -- the crash net itself becoming the crash. Marshal the
-        # dialog to the GUI thread instead; the log write above already
-        # happened, so a worker failure is never silent even if the queued
-        # call never gets serviced.
+        # Always POST the dialog, never show it inline -- for two reasons:
+        #
+        #  1. Thread (B1): sys.excepthook runs on whichever thread raised, and a
+        #     raise inside a WorkerThread (a missing eeschema/OMEdit binary is
+        #     the easy one) lands here off the GUI thread. Creating or showing a
+        #     QWidget from a non-GUI thread is undefined behaviour in Qt and can
+        #     kill the process natively -- the crash net itself becoming the
+        #     crash.
+        #  2. Re-entrancy (M12): even ON the GUI thread, Dialogs.critical runs a
+        #     nested modal loop (exec()). If the exception escaped a paint /
+        #     close / teardown handler, exec()ing there re-enters the event loop
+        #     -- and can re-enter the very handler that just raised. The
+        #     seen_sites dedupe stops an infinite dialog storm but not that
+        #     first re-entrancy.
+        #
+        # Appconfig.post_to_gui emits the reporter's QueuedConnection 'deferred'
+        # signal: from a worker thread it marshals to the GUI thread; on the GUI
+        # thread it still defers to the next event-loop turn, so the current
+        # (paint/close) stack fully unwinds before the modal box opens. NOTE:
+        # PyQt6's QTimer.singleShot has NO (msec, context, slot) overload, so
+        # the old singleShot(0, app, show) silently raised TypeError and the
+        # worker-thread dialog never appeared -- the reporter is the only API
+        # that crosses threads correctly.
+        #
+        # The log write above already happened, so a failure is never silent
+        # even if no event loop is left to service the queued call (e.g. the
+        # raise came from app teardown -- exactly when a modal box is unwanted).
         try:
-            if QtCore.QThread.currentThread() is app.thread():
-                show()
-            else:
-                QtCore.QTimer.singleShot(0, app, show)
+            if not Appconfig.post_to_gui(show):
+                # No GUI reporter yet (a crash during early startup, before
+                # Application built it) -- there is no other thread's loop to
+                # marshal to, so defer on THIS thread's loop. Fires only if this
+                # is the GUI thread (the sole event loop that early); a
+                # pre-reporter worker crash is already in error.log above.
+                QtCore.QTimer.singleShot(0, show)
         except Exception:
             pass
 
