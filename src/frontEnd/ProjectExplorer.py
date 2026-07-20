@@ -393,7 +393,13 @@ class ProjectExplorer(QtWidgets.QWidget):
         if (os.path.isfile(str(self.filePath))):
             self.openInEditor(str(self.filePath))
         else:
-            self.refreshProject(self.filePath)
+            # refreshProject shows its own "does not exist" dialog and returns
+            # False for a vanished folder (stale USB / unmounted network drive).
+            # Bail out then -- setting a dead path current makes every later tool
+            # click operate on a ghost project (eeschema on a missing file,
+            # "netlist not found", NgspiceWidget on a nonexistent cwd) -- M4.
+            if not self.refreshProject(self.filePath):
+                return
 
             self.obj_appconfig.print_info(
                 'The current project is: ' + self.filePath
@@ -491,6 +497,18 @@ class ProjectExplorer(QtWidgets.QWidget):
                 parentnode = self.treewidget.currentItem()
             else:
                 parentnode = self.treewidget.itemFromIndex(self.indexItem)
+            # openProject can call this with a filePath but no current selection,
+            # so currentItem() may be None; locate the node by path first.
+            if parentnode is None:
+                parentnode = self._findNode(filePath)
+            if parentnode is None:
+                # The folder exists but has no tree node to rebuild against.
+                # Record its contents and report success rather than raising
+                # AttributeError on None.childCount() (M4).
+                self.obj_appconfig.project_explorer[
+                    canonical_path(filePath)] = filelistnew
+                self._persist()
+                return True
             count = parentnode.childCount()
             for i in range(count):
                 parentnode.removeChild(parentnode.child(0))

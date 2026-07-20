@@ -29,6 +29,23 @@ from . import NgVeri
 from .DesignBus import DesignBus
 
 
+def _make_bus_closer(bus):
+    """destroyed-slot teardown for the design watch.
+
+    ``closeEvent`` stops the DesignBus watchdog on an explicit close, but the
+    Model Creation dock is usually torn down by parent destruction (Close
+    Project / tab close -> deleteLater), which Qt never delivers a closeEvent
+    for -- so the observer thread leaked (H4 / R3-2). Wiring this to
+    ``destroyed`` closes the class. It captures only the bus (a plain object),
+    never the dying widget, and is idempotent with closeEvent's own close()."""
+    def _close(*_a):
+        try:
+            bus.close()
+        except Exception:
+            pass
+    return _close
+
+
 # Verilog-path stage ids (also the content-stack order). NGHDL is the VHDL
 # path and lives outside this sequence.
 AUTHOR, VERIFY, CONVERT, NGHDL = range(4)
@@ -66,6 +83,8 @@ class FlowNavigator(QtWidgets.QWidget):
         # disk. The bus also watches the file for genuine external edits.
         self.bus = DesignBus(filecount, self)
         self.bus.externalChange.connect(self._on_external_change)
+        # Stop the watch even when dock destruction skips closeEvent.
+        self.destroyed.connect(_make_bus_closer(self.bus))
         self._build_ui()
 
     # ------------------------------------------------------------------ #

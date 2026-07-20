@@ -60,6 +60,38 @@ def _no_glow(btn):
         btn.setGraphicsEffect(None)
 
 
+def _make_verifier_teardown(state):
+    """destroyed-slot teardown for the Verify stage's worker thread.
+
+    ``closeEvent`` joins the in-flight compile/sim thread on an explicit close,
+    but dock destruction (Close Project / tab close -> deleteLater of the whole
+    Model Creation tree) never delivers a closeEvent to nested content -- the
+    QThread would then be destroyed while still running ("QThread: Destroyed
+    while thread is still running", native-crash territory, R3-12).
+
+    Wired to ``destroyed``, this cancels + joins whatever run is live. It reads
+    only the mutable ``state`` dict (plain job/cancel/tmpdir refs), never the
+    dying widget; the job is a child QThread still alive when ``destroyed`` fires
+    (children are deleted AFTER the parent emits destroyed), so the join lands
+    before the crash. Idempotent with closeEvent's own join."""
+    def _teardown(*_a):
+        job = state.get("job")
+        cancel = state.get("cancel")
+        try:
+            if job is not None and job.isRunning():
+                if cancel is not None:
+                    cancel.cancel()
+                job.wait(3000)
+        except RuntimeError:
+            # Wrapper already gone on the Qt side; nothing to join.
+            pass
+        tmp = state.get("tmpdir")
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+        state["job"] = state["cancel"] = state["tmpdir"] = None
+    return _teardown
+
+
 # VcdPlotWindow subclasses plotWindow, which pulls matplotlib (+numpy). Defining
 # it at module load made the FIRST Model Creation / Makerchip open pay that
 # multi-second cold import even though plots only appear in the Verify stage.
@@ -341,6 +373,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         # Temp dir of the in-flight run, tracked so it can be reaped even if the
         # stage is torn down mid-run (the done/fail closures may never fire).
         self._active_tmpdir = None
+        # Plain mirror of the teardown-critical run state (job / cancel token /
+        # tmpdir), read by the destroyed-slot teardown WITHOUT touching this
+        # (possibly dying) widget. closeEvent covers explicit close; this covers
+        # dock destruction, which skips closeEvent (R3-12).
+        self._teardown_state = {"job": None, "cancel": None, "tmpdir": None}
+        self.destroyed.connect(_make_verifier_teardown(self._teardown_state))
         # Filled by _design_sources at each compile: the on-disk source name
         # iverilog will echo in diagnostics -> the editor that holds it. Lets
         # error highlighting / jump-to-line survive labels the diagnostic regex
@@ -1344,7 +1382,13 @@ class VerilogVerifier(QtWidgets.QWidget):
                                     "Verilog Simulation")
 
         self.act_export_csv.setEnabled(True)
-        self.waveformReady.emit(plot)
+        # The host (Flow Navigator -> DockArea) takes ownership of this
+        # parentless plot when it docks it. If nothing is listening (verifier
+        # used standalone), drop it rather than leaking an unparented window.
+        if self.receivers(self.waveformReady) > 0:
+            self.waveformReady.emit(plot)
+        else:
+            plot.deleteLater()
             
     def export_csv(self):
         if not hasattr(self, 'current_timestamps') or not self.current_timestamps:
@@ -1449,6 +1493,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         closeEvent backstop for a run torn down before those fire."""
         d = self._active_tmpdir
         self._active_tmpdir = None
+        self._teardown_state["tmpdir"] = None
         if d:
             shutil.rmtree(d, ignore_errors=True)
 
@@ -1458,6 +1503,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         are disabled and a Cancel button shown for the duration; ``cancel`` is
         the token ``work`` threads into the backend so Cancel can kill it."""
         self._active_cancel = cancel
+        self._teardown_state["cancel"] = cancel
         self._busy_buttons = busy
         for b in busy:
             b.setEnabled(False)
@@ -1466,10 +1512,13 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         job = jobs.BackgroundJob(work, parent=self)
         self._active_job = job
+        self._teardown_state["job"] = job
 
         def finish():
             self._active_job = None
             self._active_cancel = None
+            self._teardown_state["job"] = None
+            self._teardown_state["cancel"] = None
             for b in busy:
                 b.setEnabled(True)
             self.btn_cancel.setVisible(False)
@@ -1533,6 +1582,7 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         tmpdir = tempfile.mkdtemp()
         self._active_tmpdir = tmpdir
+        self._teardown_state["tmpdir"] = tmpdir
         cancel = icarus.CancelToken()
 
         def work():
@@ -1644,6 +1694,7 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         tmpdir = tempfile.mkdtemp()
         self._active_tmpdir = tmpdir
+        self._teardown_state["tmpdir"] = tmpdir
         cancel = icarus.CancelToken()
         libdir = CosimConfig.iverilog_libdir()
 

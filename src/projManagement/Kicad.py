@@ -269,7 +269,12 @@ class Kicad:
             self.projName = projName
             self.project = os.path.join(projDir, self.projName)
             var = self.project + ".cir"
-            self.obj_dockarea.kicadToNgspiceEditor(var)
+            # Pass the project CAPTURED when the background netlist export began,
+            # not the live one: the user may have closed/switched projects during
+            # the 5-15 s export, and the editor must register + label under the
+            # project it is actually converting (see kicadToNgspiceEditor).
+            self.obj_dockarea.kicadToNgspiceEditor(
+                var, projDir=projDir, projName=projName)
         else:
             self.msg = Dialogs.make_error_message(None)
             self.msg.setModal(True)
