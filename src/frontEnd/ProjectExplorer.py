@@ -663,20 +663,50 @@ class ProjectExplorer(QtWidgets.QWidget):
                     print("==================")
                     print("Error! Revert renaming project")
 
-                    # Revert updatedProjectFiles
+                    # The revert can hit the same lock/permission that broke the
+                    # forward pass (a schematic open in KiCad on Windows is the
+                    # norm). Guard every os.rename here too and remember what
+                    # could not be put back, instead of letting a second OSError
+                    # escape to the excepthook and strand the project in a mixed
+                    # old/new-stem state that resolve_stem can no longer resolve.
+                    stranded = []
                     for projectFile in updatedProjectFiles:
                         newFilePath = os.path.join(
                                         updatedProjectPath, projectFile)
-                        projectFile = projectFile.replace(
+                        origName = projectFile.replace(
                                 newBaseFileName, oldStem, 1)
                         oldFilePath = os.path.join(
-                                updatedProjectPath, projectFile)
-                        os.rename(newFilePath, oldFilePath)
+                                updatedProjectPath, origName)
+                        try:
+                            os.rename(newFilePath, oldFilePath)
+                        except OSError:
+                            stranded.append(projectFile)
 
-                    # Revert project folder name
-                    os.rename(updatedProjectPath, projectPath)
+                    # Only fold the directory name back once its contents are
+                    # consistent — a renamed-back folder still holding new-stem
+                    # files is exactly the mixed state we are trying to avoid.
+                    projectDir = updatedProjectPath
+                    if not stranded:
+                        try:
+                            os.rename(updatedProjectPath, projectPath)
+                            projectDir = projectPath
+                        except OSError:
+                            stranded.append(
+                                os.path.basename(updatedProjectPath))
+
                     print("==================")
-                    Dialogs.critical(self, "Error Message", str(e))
+                    if stranded:
+                        Dialogs.critical(
+                            self, "Error Message",
+                            "Could not rename the project, and it could not be "
+                            "fully restored to '" + oldStem + "':\n\n" + str(e)
+                            + "\n\nThe project is left in a mixed state under:\n"
+                            + projectDir + "\n\nClose anything using these "
+                            "files (e.g. an open schematic in KiCad), then "
+                            "rename the remaining items back to '" + oldStem
+                            + "' manually before reopening the project.")
+                    else:
+                        Dialogs.critical(self, "Error Message", str(e))
                     return
 
                 # Re-point the .proj's schematicFile token at the renamed

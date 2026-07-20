@@ -163,22 +163,3 @@ class Model(QtWidgets.QWidget):
                     check = 1
             if check == 0:
                 self.obj_trac.modelTrack.append(lst)
-
-
-    def add_hex_btn(self, modelgrid, modelbox):
-        self.addbtn = QtWidgets.QPushButton("Add Hex File")
-        self.addbtn.setObjectName("%d" % self.nextcount)
-        self.addbtn.clicked.connect(self.addHex)
-        modelgrid.addWidget(self.addbtn, self.nextrow, 2)
-        modelbox.setLayout(modelgrid)
-
-        # CSS
-        modelbox.setStyleSheet(
-            " \
-        QGroupBox { border: 1px solid gray; border-radius:\
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left:\
-        10px; padding: 0 3px 0 3px; } \
-        "
-        )
-        self.grid.addWidget(modelbox)
