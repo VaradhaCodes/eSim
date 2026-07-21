@@ -613,7 +613,9 @@ QDockWidget::title {
 }
 
 /* Hide the native title-bar buttons — the card's own Fullscreen / Close
-   chrome provides those actions. */
+   chrome provides those actions. This is the only rule these subcontrols get:
+   the icon/hover/pressed blocks that used to follow assigned images and paint
+   to buttons already collapsed to 0x0, which no one could ever see. */
 QDockWidget::close-button,
 QDockWidget::float-button {
     width: 0px;
@@ -621,44 +623,6 @@ QDockWidget::float-button {
     image: none;
     background: transparent;
     border: none;
-}
-
-QDockWidget::close-button,
-QDockWidget::float-button {
-    image: url("images/dock_fullscreen_dark.svg");
-}
-
-QDockWidget::close-button:hover,
-QDockWidget::float-button:hover {
-    background-color: rgba(83,215,255,0.14);
-    border-color: rgba(83,215,255,0.38);
-    image: url("images/dock_fullscreen_dark_hover.svg");
-    border-radius: 4px;
-}
-
-QDockWidget::close-button:pressed,
-QDockWidget::float-button:pressed {
-    background-color: rgba(251,113,133,0.30);
-    border-color: #E11D48;
-}
-
-QDockWidget::float-button {
-    image: url("images/dock_fullscreen_dark.svg");
-}
-
-QDockWidget::float-button:hover {
-    background-color: rgba(83,215,255,0.14);
-    border-color: rgba(83,215,255,0.38);
-    image: url("images/dock_fullscreen_dark_hover.svg");
-}
-
-QDockWidget::close-button {
-    margin-right: 6px;
-    image: url("images/dock_close_dark.svg");
-}
-
-QDockWidget::close-button:hover {
-    image: url("images/dock_close_dark_hover.svg");
 }
 
 QDockWidget > QWidget {

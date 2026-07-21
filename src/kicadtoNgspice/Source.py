@@ -117,14 +117,6 @@ class Source(QtWidgets.QWidget):
                     self.count = self.count + 1
                     acbox.setLayout(acgrid)
 
-                    # CSS
-                    acbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius:\
-                     9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left:\
-                     10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(acbox)
                     sourcelisttrack.append(
                         [track_id, 'ac', self.start, self.end])
@@ -159,14 +151,6 @@ class Source(QtWidgets.QWidget):
                     self.end = self.count
                     self.count = self.count + 1
                     dcbox.setLayout(dcgrid)
-
-                    # CSS
-                    dcbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius:\
-                     9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left:\
-                     10px; padding: 0 3px 0 3px; } \
-                    ")
 
                     self.grid.addWidget(dcbox)
                     sourcelisttrack.append(
@@ -204,14 +188,6 @@ class Source(QtWidgets.QWidget):
                     self.end = self.count - 1
                     sinebox.setLayout(sinegrid)
 
-                    # CSS
-                    sinebox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius: \
-                    9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(sinebox)
                     sourcelisttrack.append(
                         [track_id, 'sine', self.start, self.end])
@@ -247,14 +223,6 @@ class Source(QtWidgets.QWidget):
                     self.end = self.count - 1
                     pulsebox.setLayout(pulsegrid)
 
-                    # CSS
-                    pulsebox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius: \
-                    9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
-
                     self.grid.addWidget(pulsebox)
                     sourcelisttrack.append(
                         [track_id, 'pulse', self.start, self.end])
@@ -286,14 +254,6 @@ class Source(QtWidgets.QWidget):
                     self.end = self.count
                     self.count = self.count + 1
                     pwlbox.setLayout(pwlgrid)
-
-                    # CSS
-                    pwlbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius: \
-                    9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
 
                     self.grid.addWidget(pwlbox)
                     sourcelisttrack.append(
@@ -329,14 +289,6 @@ class Source(QtWidgets.QWidget):
                         self.count = self.count + 1
                     self.end = self.count - 1
                     expbox.setLayout(expgrid)
-
-                    # CSS
-                    expbox.setStyleSheet(" \
-                    QGroupBox { border: 1px solid gray; border-radius:\
-                     9px; margin-top: 0.5em; } \
-                    QGroupBox::title { subcontrol-origin: margin; left: \
-                    10px; padding: 0 3px 0 3px; } \
-                    ")
 
                     self.grid.addWidget(expbox)
                     sourcelisttrack.append(

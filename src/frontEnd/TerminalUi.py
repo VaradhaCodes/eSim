@@ -31,7 +31,11 @@ class TerminalUi(QtWidgets.QMainWindow):
         # Other variables
         # The console inherits its colours from the global QSS rule
         # `QPlainTextEdit#simulationConsole` (see style_dark.qss /
-        # style_light.qss).
+        # style_light.qss), and the progress bar from the global QProgressBar
+        # rule. Do NOT give either a styleSheet property in TerminalUi.ui: a
+        # widget-level sheet beats the app sheet in every theme, which is how
+        # the pre-Aurora purple-black console and old-blue progress chunk
+        # survived a switch to light mode.
         # We deliberately do NOT keep an internal dark/light toggle here — that
         # was a legacy per-widget override that broke the user's selected
         # theme. The lightDarkModeButton now cycles the application's theme via

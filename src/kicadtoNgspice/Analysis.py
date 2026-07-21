@@ -317,13 +317,6 @@ class Analysis(QtWidgets.QWidget):
         self.track_obj.AC_entry_var["ITEMS"] = self.ac_entry_var
         self.track_obj.AC_Parameter["ITEMS"] = self.ac_parameter
 
-        # CSS
-        self.acbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: 9px; margin-top: \
-        0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: \
-        0 3px 0 3px; } \
-        ")
         if check:
             try:
                 if root[0][0].text == "true":
@@ -612,13 +605,6 @@ class Analysis(QtWidgets.QWidget):
         self.track_obj.DC_entry_var["ITEMS"] = self.dc_entry_var
         self.track_obj.DC_Parameter["ITEMS"] = self.dc_parameter
 
-        # CSS
-        self.dcbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: 9px; margin-top: \
-        0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-        10px; padding: 0 3px 0 3px; } \
-        ")
         if check:
             try:
                 self.dc_entry_var[0].setText(root[1][0].text or "")
@@ -798,13 +784,6 @@ class Analysis(QtWidgets.QWidget):
         self.track_obj.TRAN_entry_var["ITEMS"] = self.tran_entry_var
         self.track_obj.TRAN_Parameter["ITEMS"] = self.tran_parameter
 
-        # CSS
-        self.trbox.setStyleSheet(" \
-        QGroupBox { border: 1px solid gray; border-radius: \
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left: \
-         10px; padding: 0 3px 0 3px; } \
-        ")
         if check:
             try:
                 self.tran_entry_var[0].setText(root[2][0].text or "")

@@ -14,45 +14,16 @@ class ParameterEditDelegate(QtWidgets.QStyledItemDelegate):
       top-and-bottom and the teal "selected cell" fill showed all around it, so
       the value being edited looked like an unreadable blue box.
     - This makes the editor fill the whole cell (room for the text, and it
-      covers the teal underneath), paints an opaque themed background, and opens
-      showing the value with the caret at the end — no select-all block over it.
+      covers the teal underneath) and opens showing the value with the caret at
+      the end — no select-all block over it.
+    - The opaque themed background comes from the app sheet's
+      `QAbstractItemView QLineEdit` rule (style_dark.qss / style_light.qss), so
+      it follows a theme toggle. There is deliberately no per-delegate
+      setStyleSheet here: the one this replaced was emitted with doubled braces
+      (`QLineEdit{{...}}`), which Qt's QSS parser rejects outright — the whole
+      rule was discarded with a "Could not parse stylesheet" warning and the
+      app sheet was doing the work anyway.
     '''
-
-    def _is_dark(self):
-        from PyQt6 import QtGui
-        try:
-            from frontEnd import theme_utils
-            mode = theme_utils.get_preferences().get(
-                'theme_mode', 'System')
-            if mode == 'Dark':
-                return True
-            if mode == 'Light':
-                return False
-        except Exception:
-            pass
-        try:
-            from frontEnd.theme_utils import system_is_dark
-            return system_is_dark()
-        except Exception:
-            return False
-
-    def createEditor(self, parent, option, index):
-        editor = super().createEditor(parent, option, index)
-        if isinstance(editor, QtWidgets.QLineEdit):
-            if self._is_dark():
-                bg, fg, border = "#0E1728", "#F8FBFF", "#53D7FF"
-                sel_bg, sel_fg = "#0E7490", "#FFFFFF"
-            else:
-                bg, fg, border = "#FFFFFF", "#142033", "#0077A8"
-                sel_bg, sel_fg = "#0077A8", "#FFFFFF"
-            editor.setStyleSheet(
-                "QLineEdit{{margin:0;padding:0 8px;border:2px solid %(b)s;"
-                "border-radius:8px;background:%(bg)s;color:%(fg)s;"
-                "selection-background-color:%(sb)s;selection-color:%(sf)s;}}"
-                % {"b": border, "bg": bg, "fg": fg,
-                   "sb": sel_bg, "sf": sel_fg}
-            )
-        return editor
 
     def updateEditorGeometry(self, editor, option, index):
         # Fill the whole cell: gives the text vertical room (no clipping) and

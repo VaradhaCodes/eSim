@@ -28,92 +28,103 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 # Fallback defaults if the runtime can't reach the live QApplication.
+#
+# These are the Aurora palette (frontEnd/tokens.py), hand-copied on purpose:
+# this module must not import frontEnd (leaf rule, see the module docstring).
+# ``tests/test_palette_tokens_match.py`` asserts the copies stay in step with
+# tokens.py, so drift shows up as a test failure instead of two design
+# languages sitting side by side in the same window.
+#
+# The trace colors (``constants.VIBRANT_COLOR_PALETTE``) and the cursor marker
+# hues below are data identity, not chrome — they stay put across a retint so
+# saved user configs keep the colors they expect.
 _LIGHT_DEFAULTS: Dict[str, Any] = {
     "is_dark": False,
-    # Surfaces
-    "bg":            "#FFFFFF",
-    "surface":       "#FAFBFC",
+    # Surfaces — tokens LIGHT bg / surface / surface_2
+    "bg":            "#F3F7FC",
+    "surface":       "#FFFFFF",
     "panel":         "#FFFFFF",
-    "panel_alt":     "#F3F4F6",
-    # Borders / dividers
-    "border":        "#E5E7EB",
-    "border_strong": "#D1D5DB",
-    "divider":       "#E5E7EB",
-    "spine_separator": "#BDBDBD",
-    # Text
-    "text":          "#1F2937",
-    "text_muted":    "#6B7280",
-    "text_subtle":   "#9CA3AF",
-    # Brand
-    "primary":       "#165982",
-    "primary_hover": "#1E88E5",
-    "primary_pressed": "#0E4D7A",
-    # Overlays
-    "hover_overlay":   "rgba(0,0,0,0.04)",
-    "pressed_overlay": "rgba(0,0,0,0.07)",
-    "selection_bg":    "#E3F2FD",
-    "selection_text":  "#1F2937",
-    # Plotting axes/legend/grid
+    "panel_alt":     "#F6F9FD",
+    # Borders / dividers — tokens stroke, then the QPalette Mid/Midlight tones
+    "border":        "#DCE6F1",
+    "border_strong": "#AFC0D3",
+    "divider":       "#DCE6F1",
+    "spine_separator": "#AFC0D3",
+    # Text — tokens text / text_muted / text_subtle
+    "text":          "#142033",
+    "text_muted":    "#6B7F99",
+    "text_subtle":   "#9AAABE",
+    # Brand — tokens accent / accent_hi / accent_lo
+    "primary":       "#0077A8",
+    "primary_hover": "#00A4DC",
+    "primary_pressed": "#005E86",
+    # Overlays — the accent tints the app sheet uses for the same states
+    "hover_overlay":   "rgba(0,119,168,0.07)",
+    "pressed_overlay": "rgba(0,119,168,0.24)",
+    "selection_bg":    "rgba(0,119,168,0.16)",
+    "selection_text":  "#142033",
+    # Plotting axes/legend/grid — the axes are a card on the window backdrop
     "axes_face":     "#FFFFFF",
-    "axes_edge":     "#E5E7EB",
-    "label_color":   "#1F2937",
-    "tick_color":    "#6B7280",
-    "grid_color":    "#E5E7EB",
+    "axes_edge":     "#DCE6F1",
+    "label_color":   "#142033",
+    "tick_color":    "#6B7F99",
+    "grid_color":    "#DCE6F1",
     "legend_face":   "#FFFFFF",
-    "legend_edge":   "#E0E0E0",
-    "stats_text":    "#444444",
-    "info_text":     "#757575",
+    "legend_edge":   "#DCE6F1",
+    "stats_text":    "#405168",   # tokens text_dim
+    "info_text":     "#9AAABE",
     # Cursor UI
     "cursor1":       "#e53935",
     "cursor2":       "#1976d2",
     "cursor_delta":  "#e65100",
-    "cursor_chrome": "#999999",   # "@" / undefined-state labels
-    "cursor_dim":    "#555555",   # dimmed trace names in rows
-    "cursor_disabled": "#AAAAAA", # "not set" / "—" placeholders
+    "cursor_chrome": "#9AAABE",   # "@" / undefined-state labels
+    "cursor_dim":    "#6B7F99",   # dimmed trace names in rows
+    "cursor_disabled": "#AFC0D3",  # "not set" / "—" placeholders
 }
 
 _DARK_DEFAULTS: Dict[str, Any] = {
     "is_dark": True,
-    # Surfaces
-    "bg":            "#0B1220",
-    "surface":       "#111827",
-    "panel":         "#1F2937",
-    "panel_alt":     "#374151",
-    # Borders / dividers
-    "border":        "#1F2937",
-    "border_strong": "#3B4A5F",
-    "divider":       "#2C3A4F",
-    "spine_separator": "#475569",
-    # Text
-    "text":          "#F1F5F9",
-    "text_muted":    "#94A3B8",
-    "text_subtle":   "#64748B",
-    # Brand (replaced by accent color when user has set one)
-    "primary":       "#3B82F6",
-    "primary_hover": "#60A5FA",
-    "primary_pressed": "#1D4ED8",
-    # Overlays
-    "hover_overlay":   "rgba(255,255,255,0.06)",
-    "pressed_overlay": "rgba(255,255,255,0.10)",
-    "selection_bg":    "rgba(59,130,246,0.18)",
-    "selection_text":  "#F1F5F9",
-    # Plotting axes/legend/grid
-    "axes_face":     "#0B1220",
-    "axes_edge":     "#1F2937",
-    "label_color":   "#F1F5F9",
-    "tick_color":    "#94A3B8",
-    "grid_color":    "#1F2937",
-    "legend_face":   "#111827",
-    "legend_edge":   "#2C3A4F",
-    "stats_text":    "#CBD5E1",
-    "info_text":     "#94A3B8",
+    # Surfaces — tokens DARK bg / surface / surface_2
+    "bg":            "#050812",
+    "surface":       "#0E1728",
+    "panel":         "#0E1728",
+    "panel_alt":     "#121E33",
+    # Borders / dividers — tokens stroke, then the QPalette Mid/Midlight tones
+    "border":        "#1D2B45",
+    "border_strong": "#30415F",
+    "divider":       "#1D2B45",
+    "spine_separator": "#30415F",
+    # Text — tokens text / text_muted / text_subtle
+    "text":          "#F8FBFF",
+    "text_muted":    "#94A8C3",
+    "text_subtle":   "#5F728D",
+    # Brand — tokens accent / accent_hi / accent_lo
+    # (primary is replaced by the accent color when the user has set one)
+    "primary":       "#53D7FF",
+    "primary_hover": "#8BEAFF",
+    "primary_pressed": "#18A8D8",
+    # Overlays — the accent tints the app sheet uses for the same states
+    "hover_overlay":   "rgba(83,215,255,0.12)",
+    "pressed_overlay": "rgba(83,215,255,0.28)",
+    "selection_bg":    "rgba(83,215,255,0.20)",
+    "selection_text":  "#F8FBFF",
+    # Plotting axes/legend/grid — the axes are a card on the window backdrop
+    "axes_face":     "#0E1728",
+    "axes_edge":     "#1D2B45",
+    "label_color":   "#F8FBFF",
+    "tick_color":    "#94A8C3",
+    "grid_color":    "#1D2B45",
+    "legend_face":   "#0E1728",
+    "legend_edge":   "#1D2B45",
+    "stats_text":    "#D3DEEF",   # tokens text_dim
+    "info_text":     "#5F728D",
     # Cursor UI — brighter variants for dark mode contrast.
     "cursor1":       "#ef5350",
     "cursor2":       "#42a5f5",
     "cursor_delta":  "#ffb74d",
-    "cursor_chrome": "#94A3B8",
-    "cursor_dim":    "#94A3B8",
-    "cursor_disabled": "#64748B",
+    "cursor_chrome": "#5F728D",
+    "cursor_dim":    "#94A8C3",
+    "cursor_disabled": "#30415F",
 }
 
 

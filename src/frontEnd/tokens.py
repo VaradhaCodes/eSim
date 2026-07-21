@@ -5,19 +5,38 @@ painters import THEME/accent helpers from here; ``theme_utils`` uses the
 accent values to propagate a custom accent through the whole stylesheet
 (including the rgba() glows that the old token-replace step missed).
 
+The .qss sheets are the visually-tuned truth: every value below is the one
+the sheets (and the QPalette blocks in ``theme_utils.apply_theme``) actually
+paint, so a painter reading a token lands on the same pixel as a rule reading
+the literal. Receipts are in the comments; keep them in step when retuning a
+sheet.
+
+Background ladder, deepest first — both themes stack the same way:
+
+    bg_sunken   the workspace floor the dock cards sit on
+                (``QDockWidget`` / ``::title`` / ``#dockTitleBar``)
+    bg          the window itself — ``QMainWindow``/``QDialog``/``QFrame``,
+                and ``QPalette.Window``
+    bg_raise    one notch above the window (chrome strips, e.g. #waveHeader)
+    surface     a card/panel floating on the window
+    surface_2   a raised row or a disabled control inside a card
+    surface_3   the topmost tint (hover fills inside a card)
+
 No external dependencies — pure stdlib + values.
 """
 
 # ── Per-theme palette ────────────────────────────────────────────────
 DARK = {
-    "bg":            "#05070F",
+    "bg_sunken":     "#05070F",
+    "bg":            "#050812",
     "bg_raise":      "#0A1020",
     "surface":       "#0E1728",
     "surface_2":     "#121E33",
     "surface_3":     "#17243B",
     "stroke":        "#1D2B45",
-    "text":          "#F4F8FF",
-    "text_muted":    "#9FB1CC",
+    "text":          "#F8FBFF",
+    "text_dim":      "#D3DEEF",   # menubar/toolbutton/console body text
+    "text_muted":    "#94A8C3",   # QLabel[cssClass="muted"], status bar
     "text_subtle":   "#5F728D",
     "text_invert":   "#03121C",
     "accent":        "#53D7FF",   # primary accent (cyan)
@@ -35,14 +54,16 @@ DARK = {
 }
 
 LIGHT = {
-    "bg":            "#EEF3FA",
-    "bg_raise":      "#F3F7FC",
+    "bg_sunken":     "#EEF3FA",
+    "bg":            "#F3F7FC",
+    "bg_raise":      "#F8FBFF",
     "surface":       "#FFFFFF",
     "surface_2":     "#F6F9FD",
     "surface_3":     "#FFFFFF",
     "stroke":        "#DCE6F1",
     "text":          "#142033",
-    "text_muted":    "#5A6E89",
+    "text_dim":      "#405168",   # menubar/toolbutton/console body text
+    "text_muted":    "#6B7F99",   # QLabel[cssClass="muted"], status bar
     "text_subtle":   "#9AAABE",
     "text_invert":   "#FFFFFF",
     "accent":        "#0077A8",

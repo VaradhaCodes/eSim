@@ -217,16 +217,6 @@ class Microcontroller(QtWidgets.QWidget):
                         modelbox.setLayout(modelgrid)
                         self.hex_btns.append(addbtn)
 
-                        # CSS
-
-                        modelbox.setStyleSheet(
-                            " \
-                        QGroupBox { border: 1px solid gray; border-radius:\
-                        9px; margin-top: 0.5em; } \
-                        QGroupBox::title { subcontrol-origin: margin; left:\
-                        10px; padding: 0 3px 0 3px; } \
-                        "
-                        )
                         self.grid.addWidget(modelbox)
 
                     try:
@@ -250,17 +240,6 @@ class Microcontroller(QtWidgets.QWidget):
 
             self.end = self.nextcount - 1
             modelbox.setLayout(modelgrid)
-
-            # CSS
-
-            modelbox.setStyleSheet(
-                " \
-            QGroupBox { border: 1px solid gray; border-radius: \
-            9px; margin-top: 0.5em; } \
-            QGroupBox::title { subcontrol-origin: margin; left:\
-             10px; padding: 0 3px 0 3px; } \
-            "
-            )
 
             self.grid.addWidget(modelbox)
 
