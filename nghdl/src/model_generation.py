@@ -10,6 +10,11 @@ class ModelGeneration:
         # Script starts from here
         print("Arguement is : ", file)
         self.fname = os.path.basename(file)
+        # ONE canonical model stem. os.path.splitext strips only the final
+        # extension ("adder.v1.vhdl" -> "adder.v1"), where the old
+        # split('.')[0] read "adder" and desynced the model dir, cfunc, ifspec,
+        # testbench and modpath entry from one another.
+        self.model_stem = os.path.splitext(self.fname)[0]
         print("VHDL filename is : ", self.fname)
 
         # Per-user config lives at ~/.nghdl/config.ini on EVERY platform (the
@@ -191,7 +196,7 @@ class ModelGeneration:
             '''
 
         function_open = (
-            '''void cm_''' + self.fname.split('.')[0] + '''(ARGS) \n{''')
+            '''void cm_''' + self.model_stem + '''(ARGS) \n{''')
 
         digital_state_output = []
         for item in self.output_port:
@@ -571,7 +576,7 @@ class ModelGeneration:
             cmd_str2 = "/start_server.sh %d %s & read" + "\\" + "\"" + "\""
             cmd_str1 = os.path.normpath(
                 "\"" + self.digital_home + "/" +
-                self.fname.split('.')[0] + "/DUTghdl/"
+                self.model_stem + "/DUTghdl/"
             )
             cmd_str1 = cmd_str1.replace("\\", "/")
 
@@ -584,7 +589,7 @@ class ModelGeneration:
             cfunc.write(
                 '\t\tsnprintf(command,1024,"' + self.home +
                 '/nghdl-simulator/src/xspice/icm/ghdl/' +
-                self.fname.split('.')[0] +
+                self.model_stem +
                 '/DUTghdl/start_server.sh %d %s &", sock_port, my_ip);'
             )
 
@@ -647,8 +652,8 @@ class ModelGeneration:
         '''
 
         name_table = 'NAME_TABLE:\n\
-        C_Function_Name: cm_' + self.fname.split('.')[0] + '\n\
-        Spice_Model_Name: ' + self.fname.split('.')[0] + '\n\
+        C_Function_Name: cm_' + self.model_stem + '\n\
+        Spice_Model_Name: ' + self.model_stem + '\n\
         Description: "Model generated from ghdl code ' + self.fname + '" \n'
 
         # Input and Output Port Table
@@ -758,8 +763,8 @@ class ModelGeneration:
 
         print("Starting with testbench file")
 
-        testbench = open(self.fname.split('.')[0] + '_tb.vhdl', 'w')
-        print(self.fname.split('.')[0] + '_tb.vhdl')
+        testbench = open(self.model_stem + '_tb.vhdl', 'w')
+        print(self.model_stem + '_tb.vhdl')
 
         # comment
         comment_vhdl = "------------------------------------------------------"
@@ -783,15 +788,15 @@ class ModelGeneration:
 
         '''
 
-        tb_entity = ("entity " + self.fname.split('.')[0] +
+        tb_entity = ("entity " + self.model_stem +
                      "_tb is\nend entity;\n\n")
 
-        arch = ("architecture " + self.fname.split('.')[0] + "_tb_beh of " +
-                self.fname.split('.')[0] + "_tb is\n")
+        arch = ("architecture " + self.model_stem + "_tb_beh of " +
+                self.model_stem + "_tb is\n")
 
         # Adding components
         components = []
-        components.append("\tcomponent " + self.fname.split('.')[0] +
+        components.append("\tcomponent " + self.model_stem +
                           " is\n\t\tport(\n\t\t\t\t")
 
         port_vector_count = 0
@@ -909,7 +914,7 @@ class ModelGeneration:
 
         # Adding mapping part
         map = []
-        map.append("\tu1 : " + self.fname.split('.')[0] + " port map(\n")
+        map.append("\tu1 : " + self.model_stem + " port map(\n")
 
         for item in self.input_port:
             map.append("\t\t\t\t" + item.split(':')[0] +
@@ -1080,12 +1085,12 @@ class ModelGeneration:
             start_server.write(
                 "export PATH=/mingw64/bin:/usr/bin:$PATH\n")
             pathstr = self.digital_home + "/" + \
-                self.fname.split('.')[0] + "/DUTghdl/"
+                self.model_stem + "/DUTghdl/"
             pathstr = pathstr.replace("\\", "/")
             start_server.write("cd " + pathstr + "\n")
         else:
             start_server.write("cd " + self.digital_home +
-                               "/" + self.fname.split('.')[0] + "/DUTghdl/\n")
+                               "/" + self.model_stem + "/DUTghdl/\n")
 
         start_server.write("chmod 775 sock_pkg_create.sh &&\n")
         start_server.write("./sock_pkg_create.sh $1 $2 &&\n")
@@ -1102,7 +1107,7 @@ class ModelGeneration:
         #=============================================
         start_server.write("ghdl -a " + self.fname + " &&\n")
         start_server.write(
-            "ghdl -a " + self.fname.split('.')[0] + "_tb.vhdl  &&\n"
+            "ghdl -a " + self.model_stem + "_tb.vhdl  &&\n"
         )
 
         if os.name == 'nt':
@@ -1111,12 +1116,12 @@ class ModelGeneration:
             # that no longer ships (and would be toolchain-mismatched anyway).
             start_server.write("ghdl -e -Wl,ghdlserver.o " +
                                "-Wl,-lws2_32 " +
-                               self.fname.split('.')[0] + "_tb &&\n")
-            start_server.write("./" + self.fname.split('.')[0] + "_tb.exe")
+                               self.model_stem + "_tb &&\n")
+            start_server.write("./" + self.model_stem + "_tb.exe")
         else:
-            start_server.write("ghdl -e -Wl,ghdlserver.o " + self.fname.split('.')[0] + "_tb &&\n")
-            start_server.write("./" + self.fname.split('.')[0] + "_tb --vcd=" + self.fname.split('.')[0] + "_tb.vcd\n")
-            start_server.write( "gtkwave " + self.fname.split('.')[0] + "_tb.vcd 2>/dev/null")
+            start_server.write("ghdl -e -Wl,ghdlserver.o " + self.model_stem + "_tb &&\n")
+            start_server.write("./" + self.model_stem + "_tb --vcd=" + self.model_stem + "_tb.vcd\n")
+            start_server.write( "gtkwave " + self.model_stem + "_tb.vcd 2>/dev/null")
 
         start_server.close()
 

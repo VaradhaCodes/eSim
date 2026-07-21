@@ -40,7 +40,7 @@ from .kicad_symlib import (
 class AutoSchematic:
     def init(self, modelname, modelpath):
         self.App_obj = Appconfig.Appconfig()
-        self.modelname = modelname.split('.')[0]
+        self.modelname = os.path.splitext(modelname)[0]
         self.template = self.App_obj.kicad_sym_template.copy()
         self.xml_loc = self.App_obj.xml_loc
         self.lib_loc = self.App_obj.lib_loc

@@ -1,6 +1,7 @@
 import importlib
 import os
 
+import pytest
 from PyQt6 import QtWidgets
 
 from maker import CosimConfig, ModelGeneration
@@ -78,3 +79,27 @@ def test_verilog_parse_keeps_wire_reg_in_identifiers(qapp, tmp_path,
     # The old substring replace would have left the truncated stems instead.
     assert "data_ " not in conn
     assert "_en" not in conn.replace("wire_en", "")
+
+
+@pytest.mark.parametrize("fname, expected_stem, valid", [
+    ("counter.v", "counter", True),    # plain single extension
+    ("fir.v1.v", "fir.v1", False),     # dotted stem: unified, then refused
+    ("counter", "counter", True),      # no extension at all
+    ("Model.V", "model", True),        # uppercase name + uppercase extension
+])
+def test_model_stem_is_unified_and_validated(qapp, tmp_path, monkeypatch,
+                                             fname, expected_stem, valid):
+    """M4: one os.path.splitext-based stem drives every derived artifact (model
+    dir, cfunc, ifspec, sim_main, modpath), so a dotted name can't split-brain
+    the build the way split('.')[0] did. The stem is then validated as a bare
+    identifier -- 'fir.v1' unifies correctly but is refused up front, since it
+    would otherwise reach cmpp/make as the invalid C name cm_fir.v1."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    importlib.reload(CosimConfig)
+
+    terminal = QtWidgets.QTextEdit()
+    model = ModelGeneration.ModelGeneration(str(tmp_path / fname), terminal)
+
+    assert model.model_stem == expected_stem
+    assert model._stem_is_valid(model.model_stem) is valid

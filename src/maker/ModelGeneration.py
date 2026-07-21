@@ -102,6 +102,14 @@ class ModelGeneration(QtWidgets.QWidget):
         self.cur_dir = os.getcwd()
         self.fname = os.path.basename(file)
         self.fname = self.fname.lower()
+        # ONE canonical model stem for the whole pipeline. os.path.splitext
+        # strips only the final extension, so "fir.v1.v" -> "fir.v1" (matching
+        # the model directory verilogfile() creates), where the old
+        # split('.')[0] read "fir" and split-brained the build (dir under one
+        # name, cfunc/ifspec/sim_main/modpath under another). sandpiper()
+        # rewrites fname .tlv->.sv but preserves this stem, so setting it once
+        # here is safe.
+        self.model_stem = os.path.splitext(self.fname)[0]
         print("Verilog/SystemVerilog/TL Verilog filename is : ", self.fname)
 
         # Keep a parser for the legacy build methods below, but all constructor
@@ -116,6 +124,15 @@ class ModelGeneration(QtWidgets.QWidget):
         self.licensefile = CosimConfig.nghdl_cfg('SRC', 'LICENSE')
         self.digital_home = os.path.join(
             CosimConfig.digital_model_root(), 'Ngveri')
+
+    @staticmethod
+    def _stem_is_valid(stem):
+        """A model stem is spliced verbatim into C function names (cm_<stem>),
+        Verilog/VHDL entities, make targets and filesystem paths, so it must be
+        a bare identifier: a letter/underscore followed by word chars. A dot
+        (fir.v1), hyphen or space would silently break the build four layers
+        deeper (invalid C identifier, broken make target); refuse it up front."""
+        return bool(stem) and re.fullmatch(r'[A-Za-z_]\w*', stem) is not None
 
     def require_legacy_toolchain(self):
         """Report a missing legacy toolchain cleanly instead of crashing.
@@ -355,6 +372,7 @@ class ModelGeneration(QtWidgets.QWidget):
                     string = item
                 f.write(string)
             f.write("\n")
+        return "No Error"
 
     def sandpiper(self):
         '''
@@ -560,7 +578,7 @@ class ModelGeneration(QtWidgets.QWidget):
         log.info("iverilog: " + iverilog)
         log.detail("version: " + self._tool_version(iverilog))
 
-        model = self.fname.split('.')[0]
+        model = self.model_stem
         src = os.path.abspath(os.path.join(self.modelpath, self.fname))
         # Build the vvp at the ONE canonical location the netlister also
         # derives (CosimConfig.cosim_vvp_path, keyed by the lowercased model
@@ -698,12 +716,12 @@ class ModelGeneration(QtWidgets.QWidget):
         #include <stdio.h>
         #include <math.h>
         #include <string.h>
-        #include "sim_main_''' + self.fname.split('.')[0] + '''.h"
+        #include "sim_main_''' + self.model_stem + '''.h"
 
         '''
 
         function_open = (
-            '''void cm_''' + self.fname.split('.')[0] + '''(ARGS) \n{''')
+            '''void cm_''' + self.model_stem + '''(ARGS) \n{''')
 
         digital_state_output = []
         for item in self.output_port:
@@ -723,14 +741,14 @@ class ModelGeneration(QtWidgets.QWidget):
     {
         inst_count++;
         PARAM(instance_id)=inst_count;
-        foo_''' + self.fname.split('.')[0] + '''(0,inst_count);
+        foo_''' + self.model_stem + '''(0,inst_count);
         /* Allocate storage for output ports \
 and set the load for input ports */
 
         '''
         port_init = []
         for i, item in enumerate(self.input_port + self.output_port):
-            port_init.append(self.fname.split('.')[0] + '''_port_''' +
+            port_init.append(self.model_stem + '''_port_''' +
                              item.split(':')[0] + '''=PORT_SIZE(''' +
                              item.split(':')[0] + ''');
 ''')
@@ -788,12 +806,12 @@ and set the load for input ports */
     {\n\
         if( INPUT_STATE(" + item.split(':')[0] + "[Ii])==ZERO )\n\
         {\n\
-            " + self.fname.split('.')[0] +
+            " + self.model_stem +
                 "_temp_" + item.split(':')[0] + "[Ii]=0;\
             }\n\
         else\n\
         {\n\
-            " + self.fname.split('.')[0] +
+            " + self.model_stem +
                 "_temp_" + item.split(':')[0] + "[Ii]=1;\n\
         }\n\
             }\n")
@@ -806,12 +824,12 @@ and set the load for input ports */
                 "\t/* Scheduling event and processing them */\n\
     for(Ii=0;Ii<PORT_SIZE(" + item.split(':')[0] + ");Ii++)\n\
     {\n\
-        if(" + self.fname.split('.')[0] + "_temp_" +
+        if(" + self.model_stem + "_temp_" +
                 item.split(':')[0] + "[Ii]==0)\n\
         {\n\
             _op_" + item.split(':')[0] + "[Ii]=ZERO;\n\
             }\n\
-        else if(" + self.fname.split('.')[0] +
+        else if(" + self.model_stem +
                 "_temp_" + item.split(':')[0] + "[Ii]==1)\n\
         {\n\
             _op_" + item.split(':')[0] + "[Ii]=ONE;\n\
@@ -895,7 +913,7 @@ and set the load for input ports */
         for item in assign_data_to_input:
             cfunc.write(item)
 
-        cfunc.write("\tfoo_" + self.fname.split('.')[0] + "(1,count);\n\n")
+        cfunc.write("\tfoo_" + self.model_stem + "(1,count);\n\n")
 
         for item in sch_output_event:
             cfunc.write(item)
@@ -1021,22 +1039,22 @@ and set the load for input ports */
             This function creates the header file of
             "sim_main" file automatically in Ngspice folder.
         '''
-        print("Starting With sim_main_" + self.fname.split('.')[0] + ".h file")
+        print("Starting With sim_main_" + self.model_stem + ".h file")
         simh = open(
             self.modelpath +
             'sim_main_' +
-            self.fname.split('.')[0] +
+            self.model_stem +
             '.h',
             'w')
         print("Building content for sim_main_" +
-              self.fname.split('.')[0] + ".h file")
-        simh.write("int foo_" + self.fname.split('.')[0] + "(int,int);")
+              self.model_stem + ".h file")
+        simh.write("int foo_" + self.model_stem + "(int,int);")
         extern_var = []
         for i, item in enumerate(self.input_port + self.output_port):
             extern_var.append('''
-        int ''' + self.fname.split('.')[0] + '''_temp_''' +
+        int ''' + self.model_stem + '''_temp_''' +
                               item.split(':')[0] + '''[1024];
-        int ''' + self.fname.split('.')[0] + '''_port_''' +
+        int ''' + self.model_stem + '''_port_''' +
                               item.split(':')[0] + ''';''')
         for item in extern_var:
             simh.write(item)
@@ -1049,17 +1067,17 @@ and set the load for input ports */
         '''
         print(
             "Starting With sim_main_" +
-            self.fname.split('.')[0] +
+            self.model_stem +
             ".cpp file")
         csim = open(
             self.modelpath +
             'sim_main_' +
-            self.fname.split('.')[0] +
+            self.model_stem +
             '.cpp',
             'w')
         print(
             "Building content for sim_main_" +
-            self.fname.split('.')[0] +
+            self.model_stem +
             ".cpp file")
 
         comment = \
@@ -1070,7 +1088,7 @@ and set the load for input ports */
         header = '''
         #include <memory>
         #include <verilated.h>
-        #include "V''' + self.fname.split('.')[0] + '''.h"
+        #include "V''' + self.model_stem + '''.h"
         #include <stdio.h>
         #include <stdio.h>
         #include <fstream>
@@ -1084,16 +1102,16 @@ and set the load for input ports */
         extern_var = []
         for i, item in enumerate(self.input_port + self.output_port):
             extern_var.append('''
-        extern "C" int ''' + self.fname.split('.')[0] +
+        extern "C" int ''' + self.model_stem +
                               '''_temp_''' + item.split(':')[0] + '''[1024];
-        extern "C" int ''' + self.fname.split('.')[0] +
+        extern "C" int ''' + self.model_stem +
                               '''_port_''' + item.split(':')[0] + ''';''')
 
         extern_var.append('''
-        extern "C" int foo_''' + self.fname.split('.')[0] + '''(int,int);
+        extern "C" int foo_''' + self.model_stem + '''(int,int);
         ''')
         convert_func = '''
-        void int2arr''' + self.fname.split('.')[0] + \
+        void int2arr''' + self.model_stem + \
             '''(int  num, int array[], int n)
         {
             for (int i = 0; i < n && num>=0; i++)
@@ -1102,7 +1120,7 @@ and set the load for input ports */
                 num /= 2;
                 }
         }
-        int arr2int''' + self.fname.split('.')[0] + '''(int array[],int n)
+        int arr2int''' + self.model_stem + '''(int array[],int n)
         {
             int i,k=0;
             for (i = 0; i < n; i++)
@@ -1111,31 +1129,31 @@ and set the load for input ports */
         }
         '''
         foo_func = '''
-        int foo_''' + self.fname.split('.')[0] + '''(int init,int count)
+        int foo_''' + self.model_stem + '''(int init,int count)
         {
             int argc=1;
             const char* argv[]={"fullverbose"};
             Verilated::commandArgs(argc, argv);
             static VerilatedContext* contextp = new VerilatedContext;
-            static V''' + self.fname.split('.')[0] + "* " + \
-            self.fname.split('.')[0] + '''[1024];
+            static V''' + self.model_stem + "* " + \
+            self.model_stem + '''[1024];
             count--;
             if (init==0)
             {
-                if (''' + self.fname.split('.')[0] + '''[count] != nullptr) {
-                    ''' + self.fname.split('.')[0] + '''[count]->final();
-                    delete ''' + self.fname.split('.')[0] + '''[count];
-                    ''' + self.fname.split('.')[0] + '''[count] = nullptr;
+                if (''' + self.model_stem + '''[count] != nullptr) {
+                    ''' + self.model_stem + '''[count]->final();
+                    delete ''' + self.model_stem + '''[count];
+                    ''' + self.model_stem + '''[count] = nullptr;
                 }
                 contextp->time(0);
-                ''' + self.fname.split('.')[0] + '''[count]=new V''' + \
-            self.fname.split('.')[0] + '''{contextp};
+                ''' + self.model_stem + '''[count]=new V''' + \
+            self.model_stem + '''{contextp};
                 contextp->traceEverOn(true);
             }
             else
             {
                 contextp->timeInc(1);
-                printf("=============''' + self.fname.split('.')[0] + \
+                printf("=============''' + self.model_stem + \
             ''' : New Iteration===========");
                 printf("\\nInstance : %d\\n",count);
                 printf("\\nInside foo before eval.....\\n");
@@ -1148,7 +1166,7 @@ and set the load for input ports */
                 '''\t\t\t\tprintf("''' +
                 item.split(':')[0] +
                 '''=%d\\n", ''' +
-                self.fname.split('.')[0] +
+                self.model_stem +
                 '''[count] ->''' +
                 item.split(':')[0] +
                 ''');\n''')
@@ -1156,19 +1174,19 @@ and set the load for input ports */
 
             before_eval.append(
                 '''\t\t\t\t''' +
-                self.fname.split('.')[0] +
+                self.model_stem +
                 '''[count]->''' +
                 item.split(':')[0] +
                 ''' = arr2int''' +
-                self.fname.split('.')[0] +
-                '''(''' + self.fname.split('.')[0] + '''_temp_''' +
+                self.model_stem +
+                '''(''' + self.model_stem + '''_temp_''' +
                 item.split(':')[0] +
-                ''', ''' + self.fname.split('.')[0] + '''_port_''' +
+                ''', ''' + self.model_stem + '''_port_''' +
                 item.split(':')[0] +
                 ''');\n''')
         before_eval.append(
             "\t\t\t\t" +
-            self.fname.split('.')[0] +
+            self.model_stem +
             "[count]->eval();\n")
 
         after_eval.append('''
@@ -1178,7 +1196,7 @@ and set the load for input ports */
                 '''\t\t\t\tprintf("''' +
                 item.split(':')[0] +
                 '''=%d\\n", ''' +
-                self.fname.split('.')[0] +
+                self.model_stem +
                 '''[count] ->''' +
                 item.split(':')[0] +
                 ''');\n''')
@@ -1186,14 +1204,14 @@ and set the load for input ports */
         for i, item in enumerate(self.output_port):
             after_eval.append(
                 "\t\t\t\tint2arr" +
-                self.fname.split('.')[0] +
+                self.model_stem +
                 "(" +
-                self.fname.split('.')[0] +
+                self.model_stem +
                 '''[count] -> ''' +
                 item.split(':')[0] +
-                ''', ''' + self.fname.split('.')[0] + '''_temp_''' +
+                ''', ''' + self.model_stem + '''_temp_''' +
                 item.split(':')[0] +
-                ''', ''' + self.fname.split('.')[0] + '''_port_''' +
+                ''', ''' + self.model_stem + '''_port_''' +
                 item.split(':')[0] +
                 ''');\n''')
         after_eval.append('''
@@ -1485,7 +1503,7 @@ and set the load for input ports */
 
         filename = os.path.basename(includefile)
         self.modelpath = self.digital_home + \
-            "/" + self.fname.split('.')[0] + "/"
+            "/" + self.model_stem + "/"
 
         if not os.path.isdir(self.modelpath):
             os.mkdir(self.modelpath)

@@ -124,7 +124,7 @@ class NgVeri(QtWidgets.QWidget):
         if not model.require_legacy_toolchain():
             self.entry_var[0].append(currentTermLogs.toHtml())
             return
-        file = (os.path.basename(self.fname)).split('.')[0]
+        file = os.path.splitext(os.path.basename(self.fname))[0]
         # If this name was previously built via d_cosim, ASK, then remove that
         # version first so the switch to the legacy NgVeri flow is clean. A
         # declined switch aborts the build.
@@ -149,7 +149,9 @@ class NgVeri(QtWidgets.QWidget):
         # verilogParse's name-mismatch box -- so no QWidget is ever touched
         # off-thread). If any of these fail, abort before spawning a worker.
         try:
-            model.verilogfile()
+            if model.verilogfile() == "Error":
+                self._flush_build_logs(currentTermLogs)
+                return
             if model.verilogParse() == "Error":
                 self._flush_build_logs(currentTermLogs)
                 return
@@ -220,7 +222,8 @@ class NgVeri(QtWidgets.QWidget):
                 color:#00FF00;\"> Model Created Successfully!
                 </p>
             ''')
-            placedName = os.path.basename(self.fname).split('.')[0].lower()
+            placedName = os.path.splitext(
+                os.path.basename(self.fname))[0].lower()
             logs.append(
                 '<p style="color:#00AA00; font-weight:600;">'
                 'Model "' + placedName + '" — place it from the '
@@ -320,7 +323,8 @@ class NgVeri(QtWidgets.QWidget):
         # XML, compiled vvp, picker entry and netlist all key off THIS one
         # name, so the build location matches the netlister's lookup (a
         # case-sensitive filesystem otherwise loses the vvp at sim time).
-        modelname = (os.path.basename(self.fname)).split('.')[0].lower()
+        modelname = os.path.splitext(
+            os.path.basename(self.fname))[0].lower()
 
         # Fast GUI-thread half: the backend-switch prompt, source generation and
         # parse. These are the only dialog-raising steps, so they stay on the
@@ -333,7 +337,9 @@ class NgVeri(QtWidgets.QWidget):
             # build_cosim. A declined switch aborts the build.
             if not self._switch_backends_if_needed("cosim", modelname):
                 return
-            model.verilogfile()
+            if model.verilogfile() == "Error":
+                self._flush_build_logs(currentTermLogs)
+                return
             if model.verilogParse(make_symbol=False) == "Error":
                 self._flush_build_logs(currentTermLogs)
                 return
