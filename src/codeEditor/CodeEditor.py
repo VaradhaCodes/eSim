@@ -129,7 +129,14 @@ class CodeEditor(QsciScintilla):
         """
         line, col = self.getCursorPosition()
         top = self.firstVisibleLine()
-        self._load()
+        try:
+            self._load()
+        except OSError:
+            # The file vanished between the watcher event and this reload
+            # (external delete/rename, or a network path dropping out). Keep
+            # the current buffer instead of crashing through _read_bytes'
+            # unguarded open() (audit R3-13).
+            return
         self.setModified(False)
         line = min(line, max(0, self.lines() - 1))
         self.setCursorPosition(line, col)

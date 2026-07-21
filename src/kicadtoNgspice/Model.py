@@ -25,6 +25,12 @@ class Model(QtWidgets.QWidget):
         # Processing for getting previous values
         kicadFile = clarg1
         check = 1
+        # Pre-bind the restore node so ``root`` is always defined even when the
+        # prev-values XML is missing or has no <model> child; the restore loops
+        # below then simply skip. Previously ``root`` was only bound inside the
+        # try, so a bare access outside the swallowing try/except would raise
+        # UnboundLocalError (the latent crash shape flagged in audit R3-13).
+        root = None
         try:
             f = open(
                 previous_values_path(kicadFile),
@@ -90,7 +96,7 @@ class Model(QtWidgets.QWidget):
 
                         # load any previous XML value
                         try:
-                            for child in root:
+                            for child in root if root is not None else []:
                                 if child.text == line[2] and child.tag == line[3]:
                                     le.setText(child[i].text)
                                     i += 1
@@ -116,7 +122,7 @@ class Model(QtWidgets.QWidget):
                     le.setText("")
 
                     try:
-                        for child in root:
+                        for child in root if root is not None else []:
                             if child.text == line[2] and child.tag == line[3]:
                                 le.setText(child[i].text)
                                 i += 1

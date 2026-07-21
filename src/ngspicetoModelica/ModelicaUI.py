@@ -224,6 +224,23 @@ class OpenModelicaEditor(QtWidgets.QWidget):
             # "lines ---------------->", lines)
             optionInfo, schematicInfo = \
                 obj_NgMoConverter.separateNetlistInfo(lines)
+
+            # An empty or comment-only netlist parses cleanly all the way down
+            # to a bare skeleton .mo with no components, which then reported a
+            # false "successfully converted" and wrote junk (audit R3-7).
+            # schematicInfo holds every device / source / subckt-instance line;
+            # if it is empty there is nothing to convert -- report it and write
+            # no output file instead of pretending success.
+            if not schematicInfo:
+                self.msg = Dialogs.make_error_message(self)
+                self.msg.setModal(True)
+                self.msg.setWindowTitle("Conversion Error")
+                self.msg.showMessage(
+                    'The Ngspice netlist has no circuit elements to convert. '
+                    'Generate the netlist first (Convert KiCad to Ngspice), '
+                    'then retry.'
+                )
+                return
             # print("All option details like analysis,subckt,.ic,.model  :" +
             # "OptionInfo------------------->", optionInfo)
             # print("Schematic connection info :schematicInfo", schematicInfo)
