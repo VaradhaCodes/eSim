@@ -30,7 +30,7 @@ os.makedirs(os.environ["LOCALAPPDATA"], exist_ok=True)
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 sys.path.insert(0, SRC)
 
-from PyQt6 import QtCore, QtWidgets  # noqa: E402
+from PyQt6 import QtWidgets  # noqa: E402
 
 _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 

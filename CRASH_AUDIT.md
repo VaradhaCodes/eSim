@@ -327,13 +327,15 @@ Round 3 executed gap items 1, 2, 3 and 6 from the Round-2 list. All harnesses li
 
 ## What still remains after Round 3
 
+> **Status (integration branch `fix/crash-hardening-integration`).** Every code finding — B1–B3, H1–H7, M1–M12, L1–L10, R2-1…R2-8, R3-1…R3-13 — is **landed and certified** across Batches 1–10, now composed onto one branch and re-verified green (see **Certification** at the end of this file). R3-3's post-fix proof is done. What is left is **operational, not code**: it needs a real machine, a bootable app, or a CI runner, none of which exist in-repo. Items below are annotated with their final disposition.
+
 1. ~~Per-widget fuzz harnesses~~ — **DONE** (R3-4…R3-7); NgVeri terminal paths still unfuzzed (its crash sites are now statically mapped in R3-11).
 2. ~~Process-lifecycle chaos~~ — **DONE** (R3-3). Reusable: point `chaos_ngspice.py`'s stub at Worker/ModelGeneration to extend.
-3. ~~Soak/leak~~ — **DONE for the two prime suspects** (R3-1, R3-2). Still open: theme-toggle ×100 and dock-open/close ×100 GDI/RSS soak (needs the full Application boot offscreen).
-4. **Exit-path chaos — partially covered** (case G = close-dock-mid-run). Still open: whole-app close during sim/fullscreen/modal/snapshot-restore, logoff/taskkill, next-boot cleanliness. Needs a bootable offscreen `Application` fixture first.
-5. **Environment matrix (VM-level)** — unchanged, cannot be simulated in-repo: read-only Program Files, non-ASCII username, OneDrive sync, disk-full, Qt 6.4 vs 6.8, `pythonw`, Defender cold-boot, DPI/monitor hot-unplug.
+3. ~~Soak/leak~~ — **DONE for the two prime suspects** (R3-1, R3-2, both re-certified on integration). **Deferred (operational):** theme-toggle ×100 and dock-open/close ×100 GDI/RSS soak — needs a full offscreen `Application` boot, which the audit consciously parked; the per-widget teardown paths it would exercise are already covered by verify_batch4 (dock reap) + R3-1/R3-2 soak.
+4. **Exit-path chaos — partially covered** (case G = close-dock-mid-run, re-proven on integration). **Deferred (operational):** whole-app close during sim/fullscreen/modal/snapshot-restore, logoff/taskkill, next-boot cleanliness — needs a bootable offscreen `Application` fixture. The teardown net (`_app_teardown`, B3 abandon-reporter, R3-12 thread joins) is in place; this is a stress-verification gap, not a known bug.
+5. **Environment matrix (VM-level)** — **the one genuinely open item.** Cannot be simulated in-repo: read-only Program Files, non-ASCII username, OneDrive sync, disk-full, Qt 6.4 vs 6.8, `pythonw`, Defender cold-boot, DPI/monitor hot-unplug. The code fixes for these classes (install-dir writes → dialogs, sync races → guards, corrupt config → clamp) all landed; only live confirmation on real VMs remains. Use the checklist in **Post-fix verification checklist** + the harnesses on each target OS.
 6. ~~Full read of the remaining ~12k lines~~ — **DONE** (all 16 files; findings R3-8…R3-13).
-7. **CI gates** — unchanged, for the fix session: ruff F821+bugbear required; import-smoke without QScintilla/watchdog/hdlparse (R2-1/M8); Windows+Linux offscreen pytest with the R2-5 fix; commit `audit_harness/` fuzz corpora as regression tests. Note for CI authors: `hdlparse==1.0.4` from PyPI does not install on Python 3.13 — use the `https://github.com/hdl/pyhdlparser` tarball as `windows/requirements-windows.txt` already does.
+7. **CI gates** — **not code; a repo-ops task for whoever lands this upstream.** ruff F821+bugbear required; import-smoke without QScintilla/watchdog/hdlparse (R2-1/M8, harnesses exist: `smoke_no_qsci.py` / `smoke_no_watchdog.py`); Windows+Linux offscreen pytest with the R2-5 fix; commit `audit_harness/` fuzz corpora as regression tests. Note for CI authors: `hdlparse==1.0.4` from PyPI does not install on Python 3.13 — use the `https://github.com/hdl/pyhdlparser` tarball as `windows/requirements-windows.txt` already does.
 
 ---
 
@@ -404,6 +406,24 @@ Theme: every raw `words[n]` / `child[n]` / `entry_var[n]` index walk in the netl
 
 **Scope note:** `fuzz_ngmo.py` cases K/L (empty / comment-only netlist reporting **false success**) are **R3-7** — the ngspicetoModelica converter has its own parser (no `Processing` import), so this batch cannot reach it; its clean fix lives in the ngmo / `ModelicaUI` area and is left for a later batch. This batch used `fuzz_ngmo` only as a regression gate (still 0 raises). The `root`-may-be-unbound restore pattern in Source/Model/Analysis (R3-13) stays inside its existing `try/except` and was not touched.
 
+### Batch 4 — project / dock state + thread teardown (H1, H2, H4, M4, M7, R3-2, R3-12) — DONE
+Theme: reclaim per-project dock + background-thread state on the dock lifecycle (Close Project / fullscreen toggle / dock destruction) so nothing leaks a thread or touches an already-destroyed widget, plus guard the netlist-converter and project-CRUD paths against a `None` project or a mid-create write failure. Landed in code at `b93c97b3`; this entry backfills the FIX LOG (the commit shipped without one). Verified by a new `audit_harness/verify_batch4.py` (**7/7** offscreen), `soak_leak.py` (DesignBus `close()` → leak 0, process registry 0 — R3-1 holds), and 78 targeted `frontEnd` / `VerilogVerifier` / `projManagement` pytest.
+
+- **H4 / R3-2** — `FlowNavigator` now registers the Model Creation dock in `dock_dict` and wires its close to stop the `DesignBus` watchdog thread, so Close Project (`closeDock`) reaps the dock and frees the observer — the per-open/close-cycle thread leak (`soak_leak` proved 2 threads/cycle) is gone. This was the only tool opener that skipped `dock_dict` registration.
+- **R3-12** — `DockArea`'s dock-destroyed slot joins `VerilogVerifier`'s worker thread on teardown — the path `closeEvent` never sees when a dock dies by parent destruction — so a running `BackgroundJob` can no longer be destroyed mid-run ("QThread: Destroyed while thread is still running"). `VerilogVerifier` gained the cooperative-cancel + `wait`-join plumbing the slot calls.
+- **H2** — `FullScreen` exit guards against a host dock destroyed underneath it (`sip.isdeleted` / RuntimeError-safe), so fullscreen → Close Project → Esc no longer RuntimeErrors on a deleted `QDockWidget`.
+- **H1** — `Kicad.kicadToNgspiceEditor` uses the *captured* project rather than re-reading the live `current_project`; a project closed during the 5–15 s background export now raises a clear info dialog instead of `os.path.basename(None)` TypeError, and the converter dock can no longer register under the wrong project.
+- **M4** — `ProjectExplorer.refreshProject` returns `False` for a vanished folder (so `openProject` aborts instead of setting `current_project` to a dead path) and None-guards the parent tree node (no `AttributeError` when reached without a selection).
+- **M7** — `NewProjectInfo.createProject` extends the guarded region over the `.proj` write + registry save, rolls back the half-created folder, and leaves `current_project` unchanged when any create step fails mid-way (no half-project stranded on disk).
+
+### Batch 5 — test-infra safety gate (R2-5, R2-6) — DONE
+Theme: stop the test suite itself from corrupting the developer's real environment or masking regressions through cross-test global-state leaks — the two Round-2 test-infra findings. Landed at `f0479e12`; this entry backfills the FIX LOG. Verified by the full offscreen suite (17 setup-errors → 0; **457 pass vs 440 before**), a byte-identical real `sym-lib-table` after a run, and `symlib` 25/25; ruff F/B clean.
+
+- **R2-5** — pytest on Windows no longer writes into the real `%APPDATA%\kicad\…\sym-lib-table`. `maker/tests/test_kicad_symlib_paths.py` derives its verification dir from `ksym._kicad_config_dir()` and `src/conftest.py`'s `_redirect_home` also redirects `APPDATA`, so `kicad_symlib` writes land in the tmp profile. (**Do not** redirect `APPDATA` *globally* in the root conftest — it breaks subprocess user-site under `%APPDATA%\Python`; the redirect is scoped to the fixtures that need it.)
+- **R2-6** — the 17 `ngspiceSimulation` "ERROR at setup" in a full run were a dead `QTextEdit` left in `Appconfig.noteArea['Note']` by a prior `frontEnd` Application test tearing down, so the next module's `plotWindow.__init__` → `print_info` → `_append_note` hit `.append()` on a corpse. Root `conftest._detach_appconfig_gui_sinks` now resets `noteArea['Note']=[]` / `statusbar=None` per test, and the ngspice conftest snapshots/restores `plt.rcParams`. Also removed a vestigial `monkeypatch os.name='posix'` in `test_model_generation_build.py` that made `pathlib` build a `PosixPath` on Windows → pytest reporter INTERNALERROR aborting the whole session.
+
+**Scope note:** the 9 remaining full-suite failures on a bare Windows box (`test_toolchain_check` ×6, `vvp`/`vvp.exe`, a `charmap` cp1252 encode in `nghdl_embed`) are pre-existing environment gaps — no MSYS / ngspice / iverilog toolchain installed — not R2-5/R2-6 regressions; they fail identically before these changes. (The `_append_note` `.append()`-on-a-corpse crash R2-6 exposed is also hardened for *production* in Batch 8's `RuntimeError` guard, so a mid-session console teardown can't crash the live app either.)
+
 ### Batch 6 — file-I/O race hardening + rename revert (M5, M10, H6, R3-13a) — DONE
 Theme: the file-I/O race / permission class the earlier batches kept deferring (batch 2's scope note explicitly parked M10) plus the HIGH rename-revert half-rename. Every remaining bare `getsize` / `open` / `stat` / `copytree` on a user- or sync-touched path now degrades to a readable dialog or a terminal code instead of a raw excepthook, and the `renameProject` revert can no longer strand the project by raising a second time. Verified by `fuzz_subcircuit.py` (2/7 → **0/7 raised**: M10 cases C/D now PASS), a new `verify_batch6.py` (**5/5**: M5 missing-source + copytree-fail, M10 direct, H6 revert-contained, R3-13a removed), and `test_validation` + `kicadtoNgspice` pytest (**60 passed**). ruff F/B: no new findings.
 
@@ -451,3 +471,79 @@ Theme: the remaining edge-case LOW findings — cosmetic-but-noisy Qt warnings, 
 - **L9** — `frontEnd/ProjectExplorer.handleDirectoryChanged`: a cloud-sync client (OneDrive/Dropbox) rewriting a watched project folder fires `directoryChanged` in bursts, and each event rebuilt the branch's children on the GUI thread (a refresh storm). The handler now just records the path and (re)starts a single-shot `QTimer(300 ms)`; `_flushDirectoryChanges` snapshots-and-clears the pending set (so a refresh-triggered re-entrant event lands in the next batch) and refreshes each changed path once. A burst collapses to one rebuild after the storm goes quiet. The other two L9 surfaces need no change — `save_project_explorer`'s `os.replace` `PermissionError` is already caught, and `data_extraction.openFile` already handles a sync-locked `plot_data_*.txt` as a parse-failure dialog. `verify_batch10`: 12 same-path events → exactly 1 refresh; a post-flush event → 1 more.
 
 **Scope note:** while in `converter/pspiceToKicad.py` for L6 the batch also cleared the two pre-existing ruff findings in that file — the dead `from frontEnd import ProjectExplorer` import (**R2-7**, a documented LOW: "imports `frontEnd.ProjectExplorer` and never uses it") and the unused `result = msg_box.exec()` binding (folded into the L6 rewrite). The three remaining ruff F841/B007 warnings on other touched files (`plot_window` `em`, `Kicad` `ok`, `ProjectExplorer` loop `i`) all predate `b93c97b3` and live in methods this batch does not touch; they are left alone to keep the batch surgical. Batch 10 is a **sibling off `b93c97b3`** (batch 4 head), like batches 5–9 — not stacked on them. Remaining open after this batch: **R3-3** proof and the VM-level environment matrix (both operational, not code). L1 was already benign once H3 landed (Batch 1); L7 landed in Batch 2; L8/L10 were verified non-issues in the audit.
+
+---
+
+## Certification — integration branch `fix/crash-hardening-integration`
+
+All ten batches, previously a linear stack (1→2→3→4) plus six siblings off `b93c97b3` (5,6,7,8,9,10), are now composed onto **one** branch and re-verified green. This section is the single source of truth for "what shipped where" and "does it still hold when combined."
+
+### Finding → batch map (every finding, where it landed)
+
+| Finding | Batch | Finding | Batch | Finding | Batch |
+|---|---|---|---|---|---|
+| B1 | 1 | M4 | 4 | R2-1 | 1 |
+| B2 | 1 | M5 | 6 | R2-2 | 9 |
+| B3 | 1 | M6 | 2 | R2-3 | 3 |
+| H1 | 4 | M7 | 4 | R2-4 | 3 |
+| H2 | 4 | M8 | 7 | R2-5 | 5 |
+| H3 | 1 | M9 | 8 | R2-6 | 5 |
+| H4 | 4 | M10 | 6 | R2-7 | 7 (+ folded into 10's L6 rewrite) |
+| H5 | 2 | M11 | 2 | R2-8 | notes-only (no code action) |
+| H6 | 6 | M12 | 8 | R3-1 | 1 |
+| H7 | 7 | L1 | benign after H3 (1) | R3-2 | 4 |
+| M1 | 3 | L2–L6, L9 | 10 | R3-3 | proof (B3/H3 — proven, below) |
+| M2 | 3 | L7 | 2 | R3-4 | 3 |
+| M3 | 3 | L8, L10 | verified non-issue | R3-5 | 2 |
+| | | | | R3-6 | 6 (M10) |
+| | | | | R3-7 | 9 |
+| | | | | R3-8, R3-9, R3-10 | 3 |
+| | | | | R3-11 | 2 |
+| | | | | R3-12 | 4 |
+| | | | | R3-13a | 6 |
+| | | | | R3-13b/c/d | 9 |
+
+**No finding in B/H/M/L/R is unaddressed.** R2-8 and L8/L10 required no code by design (module-level `sys.argv` scripts run only standalone; ruff `theme.py` F821 is a false positive; L8/L10 read clean).
+
+### R3-3 — post-fix proof (rerun of `chaos_ngspice.py` on the composed branch)
+
+The chaos matrix that originally *proved* B3 and H3 live, re-run against the fixed `NgspiceWidget`:
+
+| Case | Pre-fix (audit) | Post-fix (integration) | Verdict |
+|---|---|---|---|
+| A. instant non-zero exit | finish=1, 1 dialog | finish=1 emits=1, 1 error dialog | OK |
+| B. hard crash (abort) | **finish=2, 2 dialogs** | finish=1 emits=1, 1 dialog | **H3 fixed** |
+| C. garbage bytes | finish=1, no dialog | finish=1 emits=1, 0 dialog | OK |
+| D. dies mid multibyte | **finish=2** | finish=1 emits=1, 1 dialog | **H3 fixed** |
+| E. FailedToStart | finish=1, 1 dialog | finish=1 emits=1, 1 dialog | OK |
+| F. clean success | finish=1, no dialog | finish=1 emits=1, 0 dialog | OK |
+| G. hang + close dock mid-run | **finish=0, emits=0** (toolbar dead) | **emits=1** (toolbar revives), 0 dialog | **B3 fixed** |
+
+**Reading case G's `finish_calls=2`:** benign, and expected. On dock destruction the `destroyed`-wired abandon reporter fires *first* (Qt emits `destroyed` at the top of `~QObject`, before children die), sets the shared one-shot `_run_state['finished']=True` and emits the single completion signal (`emits=1`). The parented `QProcess` is then torn down, delivering a late `finished`/`errorOccurred` that re-enters `finish_simulation` — but the shared flag makes every such re-entry an immediate no-op return. The counter tallies *entries*; `dialogs=[]` proves both extra entries did nothing. The user-visible contract holds: one completion, no dialog storm, toolbar re-enabled.
+
+### Full checklist rerun (integration, offscreen, Windows)
+
+1. `chaos_ngspice.py` → table above: H3 (B/D 2→1 dialog) + B3 (G emits 0→1) both certified.
+2. `soak_leak.py` → process registry **0 / 0** after 25 runs (R3-1); `DesignBus.close()` → thread leak **0** (R3-2/H4). The `leak=60`-without-`close()` line is the *diagnosis* the fix relies on, unchanged by design.
+3. `fuzz_ktn.py` / `fuzz_processing.py` / `fuzz_modeleditor.py` / `fuzz_subcircuit.py` → **0 `[RAISE]`**, **0 `[CWD STRANDED]`**.
+4. `fuzz_ngmo.py` → cases K/L (empty / comment-only) now emit **"no circuit elements to convert"** error, valid RC still succeeds (R3-7).
+5. `verify_batch4/6/7/8/9/10.py` → **7/7, 5/5, PASS, 13/13, 8/8, 6/6** (verify_batch6's M5 copytree test was re-pointed at the async `_on_convert_done` slot — batch 10's L6 moved the copy off the GUI thread).
+6. `smoke_no_qsci.py` (R2-1) + `smoke_no_watchdog.py` (M8) → **PASS** — `frontEnd.Application` reaches its window with QScintilla absent; `maker.makerchip` imports with watchdog absent.
+7. Full offscreen pytest → **457 passed, 9 failed, 22 skipped** (2:08). The 457 pass count **matches the batch-5 baseline exactly**, so composing batches 6→10 added **zero** test regressions. The 9 failures are the pre-existing bare-Windows toolchain gaps — `maker/tests/test_toolchain_check.py` ×6, `test_cosim_config::test_vvp_falls_back_next_to_iverilog`, and `test_nghdl_embed.py` ×2 (`charmap` cp1252) — all in the NgVeri/NGHDL toolchain surface, identical before and after these changes.
+
+**Known flaky (test-teardown only, not a regression):** one initial full-suite run died with a native access violation inside `maker/tests/test_verifier_sim.py::test_verifier_emits_simulation_succeeded` — its `QEventLoop.exec()` flushes the process-wide `DeferredDelete` backlog, and a `FlowNavigator`/`VerilogVerifier` left undestroyed by an *earlier* test gets torn down late, right as its worker-thread/watchdog teardown races the widget's C++ destruction (`FlowNavigator._make_bus_closer._close` on the dumped stack). It did **not** reproduce on two subsequent full runs (integration and the batch-5 baseline both reached 100%). Attribution: `iverilog`+`vvp` are bundled (`C:\FOSSEE\eSim\...`), so `has_iverilog()` is True and this test *runs* (not skips) on **both** batch 5 and integration; the test code is byte-identical (batches 6→10 changed no test file) and `FlowNavigator`/`VerilogVerifier` are batch-4 code — so the race is **pre-existing and environment-reachable, not introduced by the merge**. It is production-safe: the live app always tears down under a running event loop, and the R3-12 `DockArea` dock-destroyed slot joins the verifier thread on the real dock path. **Residual fix direction (a clean future batch, R3-12-adjacent):** wire the verifier worker-thread join to `VerilogVerifier`'s own `destroyed` signal (mirroring B3's `NgspiceWidget` abandon-reporter) so a parentless/late destruction is safe everywhere, and have the test suite drain `DeferredDelete` between tests so no widget graph survives into a later test's event loop.
+
+### Merge-order & conflict-resolution record (for whoever lands this upstream)
+
+Integration was built by merging onto `b93c97b3` (batch 4 head, which already carries 1→2→3→4 linearly) in order: batch 5 (fast-forward), then merge commits for 6, 7, 8, 9, 10. Conflicts and how they were resolved — all in favour of keeping **every** batch's intended fix:
+
+- **`converter/pspiceToKicad.py`** (batch 6 M5 + batch 7 R2-7 + batch 10 L6): kept batch 10's async `BackgroundJob` rewrite, but **re-applied batch 6's M5 guards into it** — batch 10 had silently regressed both (unguarded `os.path.getsize` and an unguarded `shutil.copytree` in the new `_on_convert_done` slot). R2-7's import stays removed. This is the one merge that would have quietly lost a fix on a naive "take theirs".
+- **`frontEnd/Application.py`** (batch 8 M9 + batch 10 L2): auto-merged; both the reporter/excepthook marshalling (M9, lines ~1418/1564/1570) and the splash `isNull()` guard (L2, ~1802/1811) are present.
+- **`kicadtoNgspice/Model.py`** (batch 6 R3-13a delete + batch 9 R3-13d prebind): auto-merged, disjoint hunks (end-of-file vs `__init__` top).
+- **`CRASH_AUDIT.md`**: union of all FIX LOG entries; **Batch 4 and Batch 5 entries backfilled** here (both landed in code without their own log entry).
+
+**Landing recommendation:** ship as this one integration branch (single PR), or replay as a rebased linear stack — the sibling merge commits already document each theme boundary. If FOSSEE prefers themed PRs (as with the earlier 416/506/520/521 series), squash per batch; the finding→batch map above is the PR-split key. Whatever the shape, the `converter/pspiceToKicad.py` M5-into-L6 reconciliation must survive — re-run `verify_batch6.py` after any re-slice to catch a dropped guard.
+
+### The one thing left
+
+Only the **VM-level environment matrix** (What-Still-Remains item 5) is genuinely open, and it is confirmation-on-real-hardware, not code: read-only Program Files, non-ASCII username, OneDrive/Dropbox sync, disk-full, Qt 6.4↔6.9, `pythonw`, Defender cold-boot, DPI/monitor hot-unplug. Every corresponding code class is fixed and dialog-guarded; run the **Post-fix verification checklist** + the `audit_harness/` suite on each target OS to close it. Items 3/4 (whole-app soak / exit-path stress) and item 7 (CI wiring) are operational follow-ons, not defects.
