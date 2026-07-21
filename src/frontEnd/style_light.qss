@@ -292,7 +292,6 @@ QPushButton:disabled {
     background: #EEF2F7;
     color: #9AAABE;
     border-color: #E0E7F0;
-    font-style: italic;
 }
 
 /* Primary accent CTA — auto-applied to a dialog's default button, opt-in
@@ -304,7 +303,6 @@ QPushButton[cssClass="primary"] {
     color: #FFFFFF;
     border: 1px solid rgba(0,119,168,0.45);
     font-weight: 700;
-    font-style: normal;
 }
 
 QPushButton:default:hover,
@@ -317,6 +315,7 @@ QPushButton[cssClass="primary"]:hover {
 QPushButton:default:pressed,
 QPushButton[cssClass="primary"]:pressed {
     background: #005E86;
+    border-color: #0077A8;
     padding-top: 9px;
     padding-bottom: 7px;
 }
@@ -344,8 +343,8 @@ QPushButton[cssClass="secondary"] {
 QPushButton[cssClass="secondary"]:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 rgba(0,119,168,0.07), stop:1 rgba(109,93,246,0.04));
-    border-color: rgba(0,119,168,0.48);
     color: #005E86;
+    border-color: rgba(0,119,168,0.48);
 }
 
 QPushButton[cssClass="secondary"]:pressed {
@@ -409,6 +408,7 @@ QPushButton[cssClass="verifierPrimary"]:pressed {
 QPushButton[cssClass="verifierPrimary"]:disabled {
     background: #E7EDF4;
     color: #9AAABE;
+    border-color: #DCE6F1;
 }
 
 QPushButton[cssClass="verifierPrimary"]:focus {
@@ -581,7 +581,7 @@ QPushButton#addModuleBtn {
     border: 1px solid rgba(0,119,168,0.22);
     border-radius: 8px;
     color: #0077A8;
-    font-weight: 750;
+    font-weight: 700;
     font-size: 12px;
     padding: 2px 12px;
     min-width: 0px;
@@ -601,7 +601,7 @@ QPushButton#addModuleBtn:pressed {
 QDockWidget {
     background: #EEF3FA;
     color: #142033;
-    font-weight: 650;
+    font-weight: 600;
     titlebar-close-icon: none;
     titlebar-normal-icon: none;
 }
@@ -686,7 +686,7 @@ QPushButton[dockPopButton="true"] {
     max-height: 25px;
     padding: 0 11px;
     font-size: 11px;
-    font-weight: 820;
+    font-weight: 800;
     letter-spacing: 0.28px;
     border-radius: 9px;
     qproperty-iconSize: 14px 14px;
@@ -695,11 +695,12 @@ QPushButton[dockPopButton="true"] {
 QPushButton[dockPopButton="true"]:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 rgba(0,119,168,0.06), stop:1 rgba(109,93,246,0.03));
+    color: #142033;
     border-color: rgba(0,119,168,0.44);
 }
 
 QPushButton[dockPopButton="true"][isCloseBtn="true"]:hover {
-    background: rgba(225,29,72,0.08);
+    background-color: rgba(225,29,72,0.08);
     color: #E11D48;
 }
 
@@ -949,6 +950,7 @@ QGroupBox::indicator {
 QCheckBox::indicator:hover,
 QGroupBox::indicator:hover {
     border-color: #0077A8;
+    background: #F6F9FD;
 }
 
 QCheckBox::indicator:checked,
@@ -1010,7 +1012,7 @@ QGroupBox {
     border-radius: 10px;
     margin-top: 16px;
     padding: 14px 12px 12px 12px;
-    font-weight: 650;
+    font-weight: 600;
     color: #142033;
 }
 
@@ -1030,7 +1032,7 @@ QGroupBox[cssClass="themedGroupBox"] {
     border-radius: 10px;
     margin-top: 12px;
     padding: 14px 12px 12px 12px;
-    font-weight: 650;
+    font-weight: 600;
     color: #142033;
 }
 
@@ -1210,7 +1212,7 @@ QFrame#welcomeHero {
 
 QLabel#welcomeHeroTitle {
     font-size: 28px;
-    font-weight: 850;
+    font-weight: 800;
     color: #142033;
     letter-spacing: -0.7px;
 }
@@ -1220,19 +1222,15 @@ QLabel#welcomeHeroSubtitle {
     color: #405168;
 }
 
+/* Resting state only. Hover belongs to ToolCard.paintEvent (browser/Welcome.py),
+   which animates an accent wash plus the drop-shadow glow off one progress
+   value — a :hover rule here paints a SECOND highlight underneath it. Same for
+   :focus: the card's border is none in every state, so a rule restating that
+   only invites a future edit that fights the painter. */
 QFrame#welcomeCard {
     background-color: #FFFFFF;
     border: none;
     border-radius: 16px;
-}
-
-QFrame#welcomeCard:hover {
-    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.04), stop:1 rgba(109,93,246,0.02));
-}
-
-QFrame#welcomeCard:focus {
-    border: none;
 }
 
 /* ── Spice Editor ────────────────────────────────────────────────── */
@@ -1357,7 +1355,7 @@ QTabWidget#verilogBottomContainer::pane {
 QLabel#verilogSidebarTitle {
     color: #0077A8;
     font-size: 11px;
-    font-weight: 860;
+    font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 1.0px;
     padding: 2px 4px;
@@ -1439,7 +1437,7 @@ QWidget#hierarchyRow {
 QLabel#hierarchyName {
     color: #16263A;
     font-size: 12px;
-    font-weight: 650;
+    font-weight: 600;
     background: transparent;
 }
 
@@ -1684,6 +1682,17 @@ QMessageBox#esimMessageBox {
         stop:0 rgba(0,119,168,0.18), stop:1 rgba(109,93,246,0.10));
     border-radius: 16px;
 }
+
+/* Severity spine. `messageKind` is set by dialogs._prepare_msg before the box
+   is shown (the only setter, and the four values below are the only ones it
+   emits), so the box reads as error/warning/info/question at a glance instead
+   of four identical panels. Left edge only — the rest of the border keeps the
+   gradient above, and 3px is the widest stripe the 16px radius still curves
+   cleanly around. */
+QMessageBox#esimMessageBox[messageKind="error"]    { border-left: 3px solid #E11D48; }
+QMessageBox#esimMessageBox[messageKind="warning"]  { border-left: 3px solid #D97706; }
+QMessageBox#esimMessageBox[messageKind="info"]     { border-left: 3px solid #0077A8; }
+QMessageBox#esimMessageBox[messageKind="question"] { border-left: 3px solid #6D5DF6; }
 
 QMessageBox#esimMessageBox QLabel {
     color: #142033;

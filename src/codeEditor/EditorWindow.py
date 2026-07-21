@@ -27,76 +27,110 @@ except ImportError:                       # QScintilla not installed
     HAS_QSCI = False
 
 
+# The two sheets below are strict mirrors: same selectors in the same order,
+# same property keys, same alphas -- only the palette values differ, taken from
+# frontEnd/tokens.py (LIGHT here, DARK below).  Reading a rule in one sheet
+# tells you exactly where its twin is in the other, and a structural diff of the
+# pair is empty.  Keep it that way: a rule added to one belongs in both.
+#
+# Value map, dark -> light: bg #050812 -> #F3F7FC, bg_raise #0A1020 -> #F8FBFF,
+# surface #0E1728 -> #FFFFFF, text #F8FBFF -> #142033, text_dim #D3DEEF ->
+# #405168, text_muted #94A8C3 -> #6B7F99, accent #53D7FF -> #0077A8 (and every
+# rgba(83,215,255,a) -> rgba(0,119,168,a)), danger #FB7185 -> #E11D48.  The
+# emphasis tone steps AWAY from the background in each theme, so dark's
+# accent_hi #8BEAFF maps to light's accent_lo #005E86, and #FDA4AF to #BE123C.
+#
+# Three places alpha cannot mirror, all because a dark opaque wash has to become
+# a light tint: the find bar's no-match field, #infoBar, and #findClose:hover
+# (0.24 there would drop the token-red glyph to 4.28:1; 0.14 lifts it to 5.0).
+#
+# The InfoBar stays warm in both themes, but light drops GitHub's yellows for
+# the Aurora warning hue #D97706 as the wash, with text two steps darker than
+# the token (amber-800 #92400E, amber-900 #78350F). That extension is deliberate
+# and the one place this sheet leaves the LIGHT token set: no Aurora light token
+# is dark enough to put body text on a warm tint at 4.5:1 — the ramp above hits
+# 5.9:1 and 7.6:1. Every other value here comes straight from tokens.LIGHT.
+#
+# _apply_chrome_theme() picks one from the live QApplication palette and
+# re-applies it on PaletteChange.
 STYLE_LIGHT = """
-QMainWindow, #editorCentral { background: #FFFFFF; }
-QMenuBar { background: #F6F8FA; border-bottom: 1px solid #E1E4E8;
-           padding: 2px 4px; }
+QMainWindow, #editorCentral { background: #F3F7FC; }
+QMenuBar { background: #F8FBFF; border-bottom: 1px solid rgba(0,119,168,0.12);
+           color: #405168; padding: 2px 4px; }
 QMenuBar::item { padding: 4px 10px; background: transparent;
                  border-radius: 6px; }
-QMenuBar::item:selected { background: #E7ECF1; }
-QMenu { background: #FFFFFF; border: 1px solid #D0D7DE;
-        border-radius: 8px; padding: 4px; }
+QMenuBar::item:selected { background: rgba(0,119,168,0.14); color: #142033; }
+QMenu { background: #FFFFFF; border: 1px solid rgba(0,119,168,0.16);
+        color: #405168; border-radius: 8px; padding: 4px; }
 QMenu::item { padding: 5px 22px; border-radius: 5px; }
-QMenu::item:selected { background: #E7ECF1; }
-QTabWidget::pane { border: 0; border-top: 1px solid #E1E4E8; }
+QMenu::item:selected { background: rgba(0,119,168,0.16); color: #142033; }
+QMenu::separator { height: 1px; background: rgba(0,119,168,0.12);
+                   margin: 4px 8px; }
+QTabWidget::pane { border: 0; border-top: 1px solid rgba(0,119,168,0.12); }
 QTabBar { qproperty-drawBase: 0; }
-QTabBar::tab { background: #EEF1F4; color: #41484F;
+QTabBar::tab { background: #F8FBFF; color: #6B7F99;
                padding: 6px 10px 6px 12px; margin-right: 2px;
                border-top-left-radius: 8px;
                border-top-right-radius: 8px; }
-QTabBar::tab:selected { background: #FFFFFF; color: #1F2328;
-                        border: 1px solid #E1E4E8; border-bottom: 0; }
-QTabBar::tab:hover { background: #F6F8FA; }
-QStatusBar { background: #F6F8FA; border-top: 1px solid #E1E4E8;
-             color: #57606A; }
-QStatusBar QLabel { color: #57606A; padding: 0 8px; }
-#findBar { background: #F6F8FA; border: 1px solid #C7CDD4;
-           border-radius: 8px; }
-#findBar QLineEdit { border: 1px solid #D0D7DE; border-radius: 6px;
-                     padding: 4px 8px; background: #FFFFFF;
-                     selection-background-color: #CFE3FB; }
-#findBar QLineEdit:focus { border: 1px solid #0366D6; }
-#findBar QLineEdit[noMatch="true"] { border: 1px solid #E1604D;
-                     background: #FDF1F0; }
-#findCount { color: #57606A; }
+QTabBar::tab:selected { background: #FFFFFF; color: #142033;
+                        border: 1px solid rgba(0,119,168,0.16);
+                        border-bottom: 0; }
+QTabBar::tab:hover { background: rgba(0,119,168,0.08); }
+QStatusBar { background: #F8FBFF;
+             border-top: 1px solid rgba(0,119,168,0.12); color: #6B7F99; }
+QStatusBar QLabel { color: #6B7F99; padding: 0 8px; }
+#findBar { background: rgba(255,255,255,0.96);
+           border: 1px solid rgba(0,119,168,0.20); border-radius: 8px; }
+#findBar QLineEdit { border: 1px solid rgba(0,119,168,0.18);
+                     border-radius: 6px; padding: 4px 8px; background: #FFFFFF;
+                     color: #142033;
+                     selection-background-color: #0077A8;
+                     selection-color: #FFFFFF; }
+#findBar QLineEdit:focus { border: 1px solid #0077A8; }
+#findBar QLineEdit[noMatch="true"] { border: 1px solid #E11D48;
+                     background: rgba(225,29,72,0.08); }
+#findCount { color: #6B7F99; }
 QToolButton#findToggle, QToolButton#findTool {
     border: 1px solid transparent; border-radius: 6px;
-    padding: 3px 7px; color: #41484F; font-weight: 600; }
+    padding: 3px 7px; color: #6B7F99; font-weight: 600; }
 QToolButton#findToggle:hover, QToolButton#findTool:hover {
-    background: #E7ECF1; }
+    background: rgba(0,119,168,0.12); color: #142033; }
 QToolButton#findToggle:checked {
-    background: #DDEBFB; border: 1px solid #9CC4F0; color: #0366D6; }
-QToolButton#findClose:hover { background: #FBD2D0; color: #B71C1C; }
-QToolButton#findExpand { border: 1px solid #D0D7DE; border-radius: 6px;
-    background: #FFFFFF; color: #57606A; font-size: 15px;
+    background: rgba(0,119,168,0.18); border: 1px solid rgba(0,119,168,0.30);
+    color: #005E86; }
+QToolButton#findClose:hover { background: rgba(225,29,72,0.14);
+    color: #BE123C; }
+QToolButton#findExpand { border: 1px solid rgba(0,119,168,0.18);
+    border-radius: 6px; background: #FFFFFF; color: #6B7F99; font-size: 15px;
     font-weight: 700; padding: 0 6px; }
-QToolButton#findExpand:hover { background: #E7ECF1; }
-QToolButton#findExpand:checked { color: #0366D6; background: #DDEBFB;
-    border: 1px solid #9CC4F0; }
-#findBar QPushButton { border: 1px solid #D0D7DE; border-radius: 6px;
-                       padding: 4px 12px; background: #FFFFFF; }
-#findBar QPushButton:hover { background: #EEF1F4; }
+QToolButton#findExpand:hover { background: rgba(0,119,168,0.12);
+    color: #142033; }
+QToolButton#findExpand:checked { color: #005E86;
+    background: rgba(0,119,168,0.18); border: 1px solid rgba(0,119,168,0.30); }
+#findBar QPushButton { border: 1px solid rgba(0,119,168,0.18);
+                       border-radius: 6px; padding: 4px 12px;
+                       background: #FFFFFF; color: #142033; }
+#findBar QPushButton:hover { background: rgba(0,119,168,0.12);
+                             color: #142033; }
 QToolButton#tabClose { border: none; border-radius: 9px;
-                       color: #8A9199; font-size: 14px;
+                       color: #6B7F99; font-size: 14px;
                        padding: 0; }
-QToolButton#tabClose:hover { background: #E1604D; color: #FFFFFF; }
-#infoBar { background: #FCE5C0; border-bottom: 1px solid #E5C97A; }
-QLabel#infoTitle { color: #5C4405; font-weight: 700; background: transparent; }
-QLabel#infoMessage { color: #6B5410; background: transparent; }
-QPushButton#infoAction { border: 1px solid #C9A227; border-radius: 6px;
-    padding: 5px 14px; background: #F6D88A; color: #4D3A05;
-    font-weight: 600; }
-QPushButton#infoAction:hover { background: #F0CD6E; }
+QToolButton#tabClose:hover { background: #E11D48; color: #FFFFFF; }
+#infoBar { background: rgba(217,119,6,0.10);
+           border-bottom: 1px solid rgba(217,119,6,0.32); }
+QLabel#infoTitle { color: #78350F; font-weight: 700; background: transparent; }
+QLabel#infoMessage { color: #92400E; background: transparent; }
+QPushButton#infoAction { border: 1px solid rgba(217,119,6,0.50);
+    border-radius: 6px; padding: 5px 14px; background: rgba(217,119,6,0.16);
+    color: #78350F; font-weight: 600; }
+QPushButton#infoAction:hover { background: rgba(217,119,6,0.26); }
 QToolButton#infoClose { border: none; border-radius: 6px; padding: 2px 6px;
-    color: #6B5410; font-size: 14px; }
-QToolButton#infoClose:hover { background: #E7C766; color: #4D3A05; }
+    color: #92400E; font-size: 14px; }
+QToolButton#infoClose:hover { background: rgba(217,119,6,0.30);
+    color: #78350F; }
 """
 
 
-# Dark mirror of STYLE_LIGHT, tuned to the Aurora dark palette (deep navy
-# surfaces, cyan accent) so the floating editor window matches the rest of the
-# app when the theme is dark.  Picked by _apply_chrome_theme() from the live
-# QApplication palette and re-applied on PaletteChange.
 STYLE_DARK = """
 QMainWindow, #editorCentral { background: #050812; }
 QMenuBar { background: #0A1020; border-bottom: 1px solid rgba(83,215,255,0.12);
@@ -127,8 +161,9 @@ QStatusBar QLabel { color: #94A8C3; padding: 0 8px; }
            border: 1px solid rgba(83,215,255,0.20); border-radius: 8px; }
 #findBar QLineEdit { border: 1px solid rgba(83,215,255,0.18);
                      border-radius: 6px; padding: 4px 8px; background: #0E1728;
-                     color: #E6EDF7;
-                     selection-background-color: #0E7490; }
+                     color: #F8FBFF;
+                     selection-background-color: #0E7490;
+                     selection-color: #FFFFFF; }
 #findBar QLineEdit:focus { border: 1px solid #53D7FF; }
 #findBar QLineEdit[noMatch="true"] { border: 1px solid #FB7185;
                      background: rgba(40,20,30,0.6); }
@@ -152,7 +187,7 @@ QToolButton#findExpand:checked { color: #8BEAFF;
     background: rgba(83,215,255,0.18); border: 1px solid rgba(83,215,255,0.30); }
 #findBar QPushButton { border: 1px solid rgba(83,215,255,0.18);
                        border-radius: 6px; padding: 4px 12px;
-                       background: #0E1728; color: #E6EDF7; }
+                       background: #0E1728; color: #F8FBFF; }
 #findBar QPushButton:hover { background: rgba(83,215,255,0.12);
                              color: #F8FBFF; }
 QToolButton#tabClose { border: none; border-radius: 9px;

@@ -363,8 +363,8 @@ QPushButton[cssClass="tertiary"] {
 
 QPushButton[cssClass="tertiary"]:hover {
     background: rgba(83,215,255,0.10);
-    border-color: rgba(83,215,255,0.26);
     color: #B8F4FF;
+    border-color: rgba(83,215,255,0.26);
 }
 
 /* ── Danger button ───────────────────────────────────────────────── */
@@ -574,7 +574,7 @@ QPushButton#addModuleBtn {
     border: 1px solid rgba(83,215,255,0.20);
     border-radius: 8px;
     color: #9FE9FF;
-    font-weight: 750;
+    font-weight: 700;
     font-size: 12px;
     padding: 2px 12px;
     min-width: 0px;
@@ -594,7 +594,7 @@ QPushButton#addModuleBtn:pressed {
 QDockWidget {
     background: #05070F;
     color: #F8FBFF;
-    font-weight: 650;
+    font-weight: 600;
     titlebar-close-icon: none;
     titlebar-normal-icon: none;
 }
@@ -679,7 +679,7 @@ QPushButton[dockPopButton="true"] {
     max-height: 25px;
     padding: 0 11px;
     font-size: 11px;
-    font-weight: 820;
+    font-weight: 800;
     letter-spacing: 0.28px;
     border-radius: 9px;
     qproperty-iconSize: 14px 14px;
@@ -1005,7 +1005,7 @@ QGroupBox {
     border-radius: 10px;
     margin-top: 16px;
     padding: 14px 12px 12px 12px;
-    font-weight: 650;
+    font-weight: 600;
     color: #F8FBFF;
 }
 
@@ -1025,7 +1025,7 @@ QGroupBox[cssClass="themedGroupBox"] {
     border-radius: 10px;
     margin-top: 12px;
     padding: 14px 12px 12px 12px;
-    font-weight: 650;
+    font-weight: 600;
     color: #F8FBFF;
 }
 
@@ -1181,14 +1181,6 @@ QLabel[cssClass="gradientTitle"] {
     letter-spacing: -0.4px;
 }
 
-/* ── Hero Label (gradient text style from About aesthetic) ────────── */
-QLabel[cssClass="heroGradient"] {
-    font-size: 24px;
-    font-weight: 850;
-    letter-spacing: -0.5px;
-    padding: 0;
-}
-
 /* ── Welcome Page ────────────────────────────────────────────────── */
 QLabel[cssClass="welcomeTitle"] {
     font-weight: 700;
@@ -1215,7 +1207,7 @@ QFrame#welcomeHero {
 
 QLabel#welcomeHeroTitle {
     font-size: 28px;
-    font-weight: 850;
+    font-weight: 800;
     color: #F8FBFF;
     letter-spacing: -0.7px;
 }
@@ -1225,19 +1217,15 @@ QLabel#welcomeHeroSubtitle {
     color: #D3DEEF;
 }
 
+/* Resting state only. Hover belongs to ToolCard.paintEvent (browser/Welcome.py),
+   which animates an accent wash plus the drop-shadow glow off one progress
+   value — a :hover rule here paints a SECOND highlight underneath it. Same for
+   :focus: the card's border is none in every state, so a rule restating that
+   only invites a future edit that fights the painter. */
 QFrame#welcomeCard {
     background-color: #0E1728;
     border: none;
     border-radius: 16px;
-}
-
-QFrame#welcomeCard:hover {
-    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(83,215,255,0.08), stop:1 rgba(155,124,255,0.04));
-}
-
-QFrame#welcomeCard:focus {
-    border: none;
 }
 
 /* ── Spice Editor ────────────────────────────────────────────────── */
@@ -1363,7 +1351,7 @@ QTabWidget#verilogBottomContainer::pane {
 QLabel#verilogSidebarTitle {
     color: #8BEAFF;
     font-size: 11px;
-    font-weight: 860;
+    font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 1.0px;
     padding: 2px 4px;
@@ -1440,7 +1428,7 @@ QWidget#hierarchyRow {
 QLabel#hierarchyName {
     color: #E6F0FB;
     font-size: 12px;
-    font-weight: 650;
+    font-weight: 600;
     background: transparent;
 }
 
@@ -1673,6 +1661,17 @@ QMessageBox#esimMessageBox {
         stop:0 rgba(83,215,255,0.22), stop:1 rgba(155,124,255,0.14));
     border-radius: 16px;
 }
+
+/* Severity spine. `messageKind` is set by dialogs._prepare_msg before the box
+   is shown (the only setter, and the four values below are the only ones it
+   emits), so the box reads as error/warning/info/question at a glance instead
+   of four identical panels. Left edge only — the rest of the border keeps the
+   gradient above, and 3px is the widest stripe the 16px radius still curves
+   cleanly around. */
+QMessageBox#esimMessageBox[messageKind="error"]    { border-left: 3px solid #FB7185; }
+QMessageBox#esimMessageBox[messageKind="warning"]  { border-left: 3px solid #FACC15; }
+QMessageBox#esimMessageBox[messageKind="info"]     { border-left: 3px solid #53D7FF; }
+QMessageBox#esimMessageBox[messageKind="question"] { border-left: 3px solid #9B7CFF; }
 
 QMessageBox#esimMessageBox QLabel {
     color: #F8FBFF;

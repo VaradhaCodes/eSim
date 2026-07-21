@@ -293,6 +293,189 @@ delete those.
 
 ---
 
+### S2 — 2026-07-22 · 1.6, 1.7, 2.7, 2.8, 2.2 (QSS half)
+
+Verifier: `audit_harness/verify_ui_s2.py` (16/16 offscreen). Guards green:
+`test_theme_qss_cache` · `test_view_control_metrics` · `test_motion_idempotent` ·
+`test_plot_window_theme` · `test_palette_tokens_match` = 66 passed. Both sheets
+and both editor sheets re-parse through Qt with no "Could not parse stylesheet".
+
+**1.6 — the structural diff of the two sheets is now empty.** The verifier
+parses both sheets into `selector -> ordered property keys` and asserts the maps
+are identical; that assertion is the finding's stated goal, and it is now a
+test. Closed the five gaps the audit named: light's `QPushButton:disabled`
+`font-style: italic` deleted **with** the `font-style: normal` counter-patch it
+forced onto light primaries; light gained `QCheckBox/QGroupBox::indicator:hover`
+`background: #F6F9FD`, `QPushButton:default:pressed` `border-color: #0077A8`,
+and `verifierPrimary:disabled` `border-color: #DCE6F1`; dark-only
+`QLabel[cssClass="heroGradient"]` deleted (§3.1 lists it as dead — no
+`setProperty` site, and `GradientLabel` supersedes it). Two more the diff caught
+that the audit's spot-check missed: light `dockPopButton:hover` had no `color`
+where dark did, and its `isCloseBtn:hover` said `background` where dark said
+`background-color` — same paint, different property key, so the parity test saw
+them as different rules. Also normalized property *order* in two hover rules so
+the ordered comparison holds.
+
+**2.7 — eight ad-hoc font weights collapsed to three.** 650→600, 750→700,
+820/850/860→800, applied to both sheets: 6 sites each. Weights now read as
+600 medium / 700 headings+buttons / 800 caps-labels+hero. The verifier asserts
+the union of weights across both sheets is exactly `{600,700,800}` *and* that
+the two sheets' weight histograms match, so a future 650 in one sheet fails.
+This also removes the Qt-variable-font trap the audit flagged: 650 vs 700 vs 750
+quantize to the same instance on some installs, so the old scale implied
+distinctions the renderer never drew.
+
+**2.8 — `messageKind` is styled (option (a)).** Four
+`QMessageBox#esimMessageBox[messageKind="..."]` rules per sheet, a 3px
+`border-left` in `danger`/`warning`/`accent`/`accent_2` — the audit specified
+the first three; question got `accent_2` (violet) so it is not a second info
+box. Verified against the *setter*, not the docs: the verifier greps
+`dialogs.py` for every literal passed to `setProperty("messageKind", …)` and
+asserts each one has a rule in both sheets, so a new kind added in Python fails
+the test instead of silently rendering unstyled. Also asserts the stripe
+actually renders (box polished offscreen in both themes, left edge sampled).
+
+**2.2 (QSS half only) — the double hover is gone.** Deleted
+`QFrame#welcomeCard:hover` and `:focus` from both sheets; `ToolCard.paintEvent`
+now owns hover alone, as the audit directed (it is the richer effect — animated
+wash + shadow glow off one progress value). The `:focus` rule only restated
+`border: none`, which every state already has. Comment left at the surviving
+resting-state rule saying why nothing may follow it. **The Python half of §2.2
+is NOT done** — `Welcome.py:77-79, 171, 290-291` still hardcode accent literals
+and the unused `GradientLabel` import is still there.
+
+**1.7 — `EditorWindow.STYLE_LIGHT` is Aurora, and the pair is a strict
+mirror.** Every GitHub value is gone (`#F6F8FA`/`#0366D6`/`#D0D7DE`/`#E1E4E8`/
+`#57606A`/`#E1604D` and the `#FCE5C0` amber family). Light now takes its values
+straight from `tokens.LIGHT` — surfaces `#F3F7FC`/`#F8FBFF`/`#FFFFFF`, text
+`#142033`/`#405168`/`#6B7F99`, accent `#0077A8`, focus `#0077A8`, no-match
+`#E11D48` — and dark was corrected in the same pass (`#E6EDF7` → the real
+`text` token `#F8FBFF`, twice; `selection-color` added so a selected find-field
+string is not dark-on-dark). Structure is identical between the two, which the
+verifier checks the same way it checks the app sheets.
+
+Three deliberate non-mirrors, all documented in the header comment: the
+no-match field, `#infoBar`, and `#findClose:hover` cannot share alphas, because
+what is an opaque wash on dark must be a tint on light — at the dark alpha 0.24
+the light close glyph lands at 4.28:1, and 0.14 lifts it to 5.0. The InfoBar
+stays warm in both themes but drops GitHub's yellows for the Aurora warning hue
+`#D97706` as the wash, with text at amber-800/900 (`#92400E`/`#78350F`). **That
+is the one place this sheet leaves the LIGHT token set**, and it is deliberate:
+no Aurora light token is dark enough to put body text on a warm tint at 4.5:1,
+where that ramp reaches 5.9:1 and 7.6:1. The verifier computes WCAG contrast for
+every tinted light surface (composited over its real backdrop, not assumed) and
+requires AA.
+
+**Not done in S2, still open:** §1.3, §1.8, §1.9, §1.10, §2.1, §2.2 (Python
+half), §2.3, §2.4, §2.5, §2.6, §2.9, all of P3, §C1's `theme_utils` half,
+§C3-C7.
+
+---
+
+### S2 — 2026-07-22 · 1.6, 2.7, 2.8, 2.2 (QSS half), 1.7
+
+Verifier: `audit_harness/verify_ui_s2.py` (16/16 offscreen). S1's verifier
+re-run on this tree: still 11/11. Guards green: `src/frontEnd/tests` +
+`test_plot_window_theme` + `test_palette_tokens_match` +
+`maker/test_highlighting` = **138 passed, 18 skipped, 0 failed**. Ruff
+`F,E9,B,E501,W291,W293` on every touched file: clean. Both app sheets and both
+editor sheets re-parse through Qt with no "Could not parse stylesheet".
+
+**1.6 — the structural diff of the two sheets is now EMPTY.** That is the
+audit's own success criterion, and it is a test from here on
+(`p16_structural_diff_is_empty` compares selector order, property-key order and
+every non-color value). The seven gaps the audit named:
+- light `QPushButton:disabled` lost `font-style: italic`, and
+  `QPushButton:default` lost the `font-style: normal` counter-patch it only
+  existed to undo.
+- light `QPushButton:default:pressed` gained `border-color: #0077A8` — dark
+  paints the border one step *lighter* than the pressed fill (`accent` over
+  `accent_lo`), so light paints it one step darker the same way.
+- light `QPushButton[cssClass="verifierPrimary"]:disabled` gained
+  `border-color: #DCE6F1` (`LIGHT.stroke`, mirroring dark's `DARK.stroke`).
+- light `QCheckBox/QGroupBox::indicator:hover` gained `background: #F6F9FD` —
+  dark tints the box one surface step up on hover, light now does too.
+- the two `dockPopButton` hover rules: light gained the missing `color` and its
+  `background` became `background-color` to match dark. These rules are **dead**
+  (§3.1 deletes them together with `motion.py:192,263-279`) — they were made
+  parallel rather than deleted so 1.6's guard can be absolute without pulling
+  §3.1's Python half into this session.
+- dark-only `QLabel[cssClass="heroGradient"]` deleted (dead per §3.1, and the
+  last selector-level asymmetry). Its sibling `gradientTitle` is equally dead
+  but symmetric, so it stays for §3.1.
+
+Two more the audit did not have, surfaced by tightening the diff from *key sets*
+to *declaration order*: `QPushButton[cssClass="secondary"]:hover` and
+`[cssClass="tertiary"]:hover` each ordered `color`/`border-color` differently
+between sheets — and inconsistently with each other *within* dark. All four
+normalized to `background; color; border-color;`. The sheets are now diffable
+line-for-line, which is what makes the guard cheap to keep.
+
+**2.7 — weights normalized to 600/700/800.** `650→600` (×4), `750→700`,
+`820→800`, `850→800`, `860→800` in both sheets; the histograms are now
+identical (7/12/12) and asserted equal, so the two sheets cannot drift on
+weight either. The audit's concern was real: on Qt < 6.7 the variable Inter
+registers one instance and the intermediate steps quantize, so 650 vs 700 was
+implying an intent the renderer never honoured.
+
+**2.8 — `messageKind` styles for the first time (option (a)).** Four rules per
+sheet give the box a 3px left severity spine: `error`→`danger`,
+`warning`→`warning`, `info`→`accent`, `question`→`accent_2`. Verified by
+*rendering*, not by grep — `p28_stripe_renders_in_both_themes` grabs each box
+and asserts the three leftmost pixels at mid-height are exactly the expected
+token, all 4 kinds × both themes. A second check parses `dialogs.py` for the
+kinds `_prepare_msg` can actually emit and fails if the sheets ever cover a
+different set. 3px is the widest stripe the 16px radius still curves cleanly
+around; the rest of the border keeps its gradient.
+
+**2.2 (QSS half) — one hover system on the Welcome cards.** `#welcomeCard:hover`
+and `:focus` deleted from both sheets; the animated `ToolCard.paintEvent` (wash
++ shadow glow off one progress value) now owns hover alone. `:focus` was a
+no-op restating the base `border: none`. Note this removes *nothing* visible in
+light mode that the painter was not already drawing — the painter's cyan fill
+was always painting there too, which is exactly the double-paint the finding is
+about. **Still open (Python half):** `Welcome.py:77-79, 171, 290-291` keep
+literal accents, so the light-theme hover wash is still dark-theme cyan; that
+and the `GradientLabel` import are the rest of §2.2.
+
+**1.7 — the editor window is Aurora in light too.** `STYLE_LIGHT` rewritten from
+its GitHub palette (`#F6F8FA`/`#0366D6`/`#D0D7DE`) onto `tokens.LIGHT`, and the
+two editor sheets are now **strict mirrors**: same selectors in the same order,
+same property keys, same alphas — a guard asserts it, and a second one asserts
+every hex in `STYLE_LIGHT` is a `LIGHT` token. Consequences worth recording:
+- The emphasis tone steps *away from the background* in each theme, so dark's
+  `accent_hi #8BEAFF` maps to light's `accent_lo #005E86`, not to `accent_hi`.
+- `QMenu::separator` existed only in dark; light gained the mirror.
+- `#findBar QLineEdit` gained `selection-color: #FFFFFF` in **both** sheets.
+  Light was about to put `#142033` text on a `#0077A8` selection; the app sheets
+  have paired `selection-background-color` with `selection-color` since S1, and
+  the editor chrome was the one place that had not.
+- Dark's `#E6EDF7` (a phantom — in no token and in neither sheet) became
+  `text #F8FBFF`, the same drift class §C2 cleared.
+- Contrast was computed, not eyeballed (offscreen Qt on this box exposes no
+  fonts). Everything the sheet invents clears WCAG AA and is pinned by
+  `p17_light_tinted_surfaces_are_legible`. Two values moved *because* of that
+  measurement: the InfoBar text ramp went one step darker than first written
+  (amber-800 `#92400E` / amber-900 `#78350F`, 5.9:1 and 7.6:1 — `#B45309` was
+  4.2:1), and `#findClose:hover`'s wash dropped 0.24→0.14 so the *token*
+  `danger_lo` clears 5.0:1 instead of 4.28:1 and light needs no invented red.
+  The amber pair is the single place `STYLE_LIGHT` leaves the token set, and the
+  comment above the sheets says why: no Aurora light token is dark enough to put
+  body text on a warm tint at 4.5:1.
+- The muted roles (tab labels, status bar, find count) land at ~4.0:1. That is
+  `LIGHT.text_muted` behaving the same way it does across the whole light theme
+  — a token-level call, deliberately not made here.
+
+**Not done in S2, still open in the areas touched:** §2.2's Python half (above),
+§1.3, §1.8, §1.9, §1.10, the rest of P2 (§2.1, §2.3, §2.4, §2.5, §2.6, §2.9),
+all of P3, and §C1's `theme_utils`/`recolor` half. Observation for whoever takes
+P3: with `:focus` gone from `#welcomeCard`, a keyboard-focused tile has no
+visible ring at all (`* { outline: 0 }` kills the native one). That predates
+this session — the deleted rule was `border: none` — but it is a real a11y gap
+and wants its own finding rather than a quiet re-add.
+
+---
+
 ## Verification checklist for the fixing session
 
 1. `pytest src/frontEnd/tests src/ngspiceSimulation/tests/test_plot_window_theme.py -q` green.
