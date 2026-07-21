@@ -40,16 +40,21 @@ class _FuncTraceMixin:
         self._schedule_refresh()
 
     def _populate_func_color_menu(self, menu: QMenu, f_idx: int) -> None:
+        # Same popup chrome as the trace list's colour menu — see
+        # _ListMixin.populate_color_menu; both read the live palette so neither
+        # punches a white card into the dark theme.
+        p = self._palette
         color_widget = QWidget()
-        color_widget.setStyleSheet("background-color: #FFFFFF;")
+        color_widget.setStyleSheet(f"background-color: {p['panel']};")
         grid_layout = QGridLayout(color_widget)
         grid_layout.setSpacing(2)
         for i, c in enumerate(self.color_palette):
             btn = QPushButton()
             btn.setFixedSize(24, 24)
             btn.setStyleSheet(
-                f"QPushButton{{background-color:{c};border:1px solid #E0E0E0;border-radius:2px;}}"
-                f"QPushButton:hover{{border:2px solid #212121;}}")
+                f"QPushButton{{background-color:{c};"
+                f"border:1px solid {p['border_strong']};border-radius:2px;}}"
+                f"QPushButton:hover{{border:2px solid {p['text']};}}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(
                 lambda checked=False, col=c, fi=f_idx, m=menu: (

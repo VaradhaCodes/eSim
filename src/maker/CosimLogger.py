@@ -101,26 +101,40 @@ class CosimLog:
                         QTextEdit off-thread.
     '''
 
-    # GUI line colors. None means "emit no color at all" so the line inherits
-    # the QTextEdit palette -- which is what the active theme sets. A
-    # hardcoded #000000 renders black-on-black and is INVISIBLE on the dark
-    # theme; ModelGeneration.termtext/termtitle already took exactly this fix,
-    # but CosimLog paints the whole d_cosim build story into the same terminal
-    # and kept the light-theme values. Only lines whose color carries MEANING
-    # keep one, and those reuse the theme-tested values shared with the rest of
-    # the maker UI. A phase header is already distinguished by size+weight, so
-    # it needs no color either.
-    _COLOR = {
+    # GUI line colors, keyed by CosimLog level and resolved AT EMIT TIME from
+    # frontEnd.console_colors -- see _colors() below. None still means "emit no
+    # color at all" so the line inherits the QTextEdit palette, which is what
+    # the active theme sets.
+    #
+    # The colors used to be light-web literals frozen here: '#00AA00' and
+    # '#E07B00' are readable on white and muddy on the dark #0E1728 terminal,
+    # and the whole d_cosim build story paints into that one terminal. Naming
+    # the semantic level instead means one table decides the hue per theme, and
+    # a line written after a light/dark toggle comes out in the new theme.
+    #
+    # A phase header is already distinguished by size + weight, so it needs no
+    # color; body text and verbatim stdout inherit the palette for the same
+    # reason. Only lines whose color carries MEANING get one.
+    _LEVEL = {
         'info': None,               # body text -> palette
-        'ok': '#00AA00',
-        'warn': '#E07B00',
-        'error': '#FF0000',
+        'ok': 'ok',
+        'warn': 'warn',
+        'error': 'error',
         'phase': None,              # marked by size/weight, not color
-        'detail': '#666666',        # deliberately dim on both themes
-        'fix': '#B30086',
+        'detail': 'detail',         # one text tier below body, both themes
+        'fix': 'head',              # actionable, not a failure -> accent
         'stdout': None,             # verbatim tool output -> palette
-        'stderr': '#FF0000',        # same red as ModelGeneration._emit_error
+        'stderr': 'error',          # same red as ModelGeneration._emit_error
     }
+
+    @classmethod
+    def _color(cls, level):
+        '''Resolve one level to a live theme color, or None to inherit.'''
+        key = cls._LEVEL.get(level)
+        if key is None:
+            return None
+        from frontEnd.console_colors import current_console_colors
+        return current_console_colors().get(key)
 
     def __init__(self, termedit=None, name=_ROOT_NAME, sink=None):
         configure_logging()
@@ -159,37 +173,37 @@ class CosimLog:
         self._gui(
             '<span style="font-size:14pt; font-weight:800;%s">'
             '<br>&#9654;&nbsp;%s</span>'
-            % (self._color_css(self._COLOR['phase']), escape(title)))
+            % (self._color_css(self._color('phase')), escape(title)))
 
     def info(self, msg):
         '''Normal progress line (INFO).'''
         self.logger.info(msg)
-        self._span(msg, self._COLOR['info'])
+        self._span(msg, self._color('info'))
 
     def detail(self, msg):
-        '''Low-priority diagnostic: DEBUG on terminal/file, dim grey in GUI.'''
+        '''Low-priority diagnostic: DEBUG on terminal/file, dim in GUI.'''
         self.logger.debug(msg)
-        self._span(msg, self._COLOR['detail'], size=11)
+        self._span(msg, self._color('detail'), size=11)
 
     def ok(self, msg):
         '''Success line (green).'''
         self.logger.info(msg)
-        self._span(msg, self._COLOR['ok'], weight=600)
+        self._span(msg, self._color('ok'), weight=600)
 
     def warn(self, msg):
-        '''Warning line (orange).'''
+        '''Warning line (amber).'''
         self.logger.warning(msg)
-        self._span(msg, self._COLOR['warn'], weight=600)
+        self._span(msg, self._color('warn'), weight=600)
 
     def error(self, msg):
         '''Failure line (red).'''
         self.logger.error(msg)
-        self._span(msg, self._COLOR['error'], weight=700)
+        self._span(msg, self._color('error'), weight=700)
 
     def fix(self, msg):
         '''Actionable remediation hint shown after an error.'''
         self.logger.error('Fix: %s', msg)
-        self._span('Fix: ' + msg, self._COLOR['fix'], weight=600)
+        self._span('Fix: ' + msg, self._color('fix'), weight=600)
 
     def output(self, text, stream='stdout'):
         '''
@@ -205,4 +219,4 @@ class CosimLog:
             self.logger.info('[iverilog stdout]\n%s', text)
         self._gui(
             '<pre style="margin:2px 0; font-size:11pt;%s">%s</pre>'
-            % (self._color_css(self._COLOR[stream]), escape(text)))
+            % (self._color_css(self._color(stream)), escape(text)))

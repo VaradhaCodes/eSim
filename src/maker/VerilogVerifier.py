@@ -1080,14 +1080,15 @@ class VerilogVerifier(QtWidgets.QWidget):
 
     # Console palette. One colour per semantic level so runs read like a real
     # tool console instead of a uniform gray wall.
-    _LOG_COLORS = {
-        'info':    "#57606A",   # tool chatter: paths, progress, load/save
-        'ok':      "#1A7F37",   # outcomes that mean "you're good"
-        'error':   "#CF222E",   # failures
-        'warn':    "#9A6700",   # cancellations, notes, hints
-        'head':    "#0969DA",   # section headings (Diagnostics:)
-        'output':  "#24292E",   # raw simulator stdout ($display et al.)
-    }
+    #
+    # Resolved per read rather than frozen at class-definition time: this was a
+    # GitHub-light table, and 'output' (#24292E, near-black) sat invisible on
+    # the dark #0E1728 console card. frontEnd.console_colors owns the values
+    # and measures them against that card in both themes.
+    @property
+    def _LOG_COLORS(self):
+        from frontEnd.console_colors import current_console_colors
+        return current_console_colors()
 
     def _append_console(self, text, color, bold=False):
         cursor = self.console.textCursor()
@@ -1099,6 +1100,59 @@ class VerilogVerifier(QtWidgets.QWidget):
         cursor.insertText(text.rstrip("\n") + "\n", fmt)
         self.console.setTextCursor(cursor)
         self.console.ensureCursorVisible()
+
+    def changeEvent(self, event):
+        """Re-colour the console backlog when the app flips light<->dark.
+
+        _append_console bakes the colour into each fragment's QTextCharFormat,
+        so re-styling alone leaves every line already on screen in the old
+        theme's colours — a dark-theme user who toggles mid-session would keep
+        a scrollback of light-theme text. Nothing else needs to be remembered
+        to undo that: the colour IS the semantic level, so the outgoing theme's
+        palette is a lookup table back to it."""
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            try:
+                self._retheme_console()
+            except Exception:
+                pass
+        super().changeEvent(event)
+
+    def _retheme_console(self):
+        from frontEnd.console_colors import console_colors, console_is_dark
+        console = getattr(self, 'console', None)
+        if console is None:
+            return
+        dark = console_is_dark()
+        old, new = console_colors(not dark), console_colors(dark)
+        # Map every outgoing colour to its incoming counterpart. Levels that
+        # share a colour in one theme (none today) would collapse here, which
+        # is why the map is built from the level names, not the values.
+        remap = {old[k].upper(): new[k] for k in old}
+        doc = console.document()
+        cursor = QtGui.QTextCursor(doc)
+        cursor.beginEditBlock()
+        try:
+            block = doc.begin()
+            while block.isValid():
+                it = block.begin()
+                while not it.atEnd():
+                    frag = it.fragment()
+                    it += 1
+                    if not frag.isValid():
+                        continue
+                    fmt = frag.charFormat()
+                    want = remap.get(fmt.foreground().color().name().upper())
+                    if want is None:
+                        continue
+                    cursor.setPosition(frag.position())
+                    cursor.setPosition(frag.position() + frag.length(),
+                                       QtGui.QTextCursor.MoveMode.KeepAnchor)
+                    patch = QtGui.QTextCharFormat()
+                    patch.setForeground(QtGui.QColor(want))
+                    cursor.mergeCharFormat(patch)
+                block = block.next()
+        finally:
+            cursor.endEditBlock()
 
     @staticmethod
     def _classify_log(text):

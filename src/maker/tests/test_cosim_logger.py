@@ -9,13 +9,19 @@ into the SAME widget and had kept the light-theme values, so on dark the
 d_cosim log was mostly invisible.
 
 These tests pin the split: body-ish lines emit no color (inherit the palette),
-lines whose color carries MEANING keep one, and those use the theme-tested
-values shared with the rest of the maker UI. No Qt widget needed -- the logger
-takes a plain callable sink.
+lines whose color carries MEANING keep one, and those come from
+``frontEnd.console_colors`` -- the one table that decides a console hue per
+theme -- rather than from literals frozen in this module. No Qt widget needed:
+the logger takes a plain callable sink, and console_colors falls back to the
+light set when there is no QApplication to ask.
 """
 import re
 
+from frontEnd.console_colors import console_colors
 from maker.CosimLogger import CosimLog
+
+# No QApplication in this module, so the logger resolves to the light theme.
+LIGHT = console_colors(False)
 
 
 def _log():
@@ -75,17 +81,26 @@ def test_semantic_colors_are_kept():
     log.ok("done")
     log.warn("careful")
     log.error("failed")
-    assert "color:#00AA00;" in out[0]
-    assert "color:#E07B00;" in out[1]
-    assert "color:#FF0000;" in out[2]
+    assert "color:%s;" % LIGHT["ok"] in out[0]
+    assert "color:%s;" % LIGHT["warn"] in out[1]
+    assert "color:%s;" % LIGHT["error"] in out[2]
+
+
+def test_semantic_colors_track_the_theme():
+    """The whole point of routing through console_colors: the three meaningful
+    levels are different hues in dark, not the light ones dimmed."""
+    dark = console_colors(True)
+    for level in ("ok", "warn", "error", "detail", "head"):
+        assert dark[level] != LIGHT[level], level
 
 
 def test_stderr_uses_the_same_red_as_the_ngveri_terminal():
-    # ModelGeneration._emit_error paints stderr #ff0000; the darker #B00000
-    # CosimLog used read as near-black on the dark theme.
+    # Both paths now resolve 'error' from console_colors, so they cannot drift:
+    # this used to be two separately-maintained literals (#B00000 vs #ff0000),
+    # and the darker one read as near-black on the dark theme.
     log, out = _log()
     log.output("undefined reference to `main'", stream="stderr")
-    assert "color:#FF0000;" in out[0]
+    assert "color:%s;" % LIGHT["error"] in out[0]
 
 
 # ── the emitted HTML stays well-formed ──────────────────────────────────────

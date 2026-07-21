@@ -60,12 +60,20 @@ class NgspiceWidget(QtWidgets.QWidget):
     ERROR_CRASHED = 1
     ERROR_TIMED_OUT = 2
 
-    SUCCESS_FORMAT = ('<span style="color:#00ff00; font-size:26px;">'
-                     '{}'
-                     '</span>')
-    FAILURE_FORMAT = ('<span style="color:#ff3333; font-size:26px;">'
-                     '{}'
-                     '</span>')
+    @staticmethod
+    def _banner_format(level):
+        """Status-banner HTML for one semantic level, in the live theme.
+
+        Was a pair of class constants holding neon #00ff00 / #ff3333 at 26px:
+        off-palette in dark, green-on-white and unreadable in light, and four
+        times body size in both. The colour now comes from the console palette
+        measured against the console's own background, and the banner is one
+        emphasis step above the log rather than a shout."""
+        from frontEnd.console_colors import (
+            current_console_colors, BANNER_PX, BANNER_WEIGHT)
+        return ('<span style="color:%s; font-size:%dpx; font-weight:%d;">'
+                '{}</span>'
+                % (current_console_colors()[level], BANNER_PX, BANNER_WEIGHT))
 
     def __init__(self, netlist: str, sim_end_signal: pyqtSignal, plotFlag: Optional[bool] = None) -> None:
         super().__init__()
@@ -734,11 +742,12 @@ class NgspiceWidget(QtWidgets.QWidget):
         message_dialog.exec()
 
     def _show_success_message(self) -> None:
-        success_message = self.SUCCESS_FORMAT.format("Simulation Completed Successfully!")
+        success_message = self._banner_format('ok').format(
+            "Simulation Completed Successfully!")
         self.terminal_ui.simulationConsole.appendHtml(success_message)
 
     def _show_failure_message(self, error_type: QtCore.QProcess.ProcessError) -> None:
-        failure_message = self.FAILURE_FORMAT.format("Simulation Failed!")
+        failure_message = self._banner_format('error').format("Simulation Failed!")
         self.terminal_ui.simulationConsole.appendHtml(failure_message)
 
         error_message = self._get_error_message(error_type)

@@ -344,9 +344,15 @@ class ModelGeneration(QtWidgets.QWidget):
         return True
 
     def _emit_error(self, textin):
-        '''Append stderr text in red (theme-independent) to the terminal.'''
-        Text = "<span style=\"font-size:12pt; font-weight:1000; " \
-               "color:#ff0000;\">"
+        '''Append stderr text to the terminal in the active theme's error tone.
+
+        Was a flat #ff0000 at weight 1000 — the weight clamps at 900 in Qt rich
+        text, and the pure red is the one hue that reads badly on BOTH themes.
+        '''
+        from frontEnd.console_colors import (
+            current_console_colors, HEAVY_WEIGHT)
+        Text = "<span style=\"font-size:12pt; font-weight:%d; color:%s;\">" \
+               % (HEAVY_WEIGHT, current_console_colors()['error'])
         for ln in textin.split("\n"):
             Text += "<br>" + ln
         Text += "</span>"
@@ -357,8 +363,12 @@ class ModelGeneration(QtWidgets.QWidget):
             Reading the file and performing operations and
             copying it in the Ngspice folder
         '''
-        Text = "<span style=\" font-size:25pt;\
-         font-weight:1000; color:#008000;\" >"
+        # 25pt / weight 1000 / #008000 was a shout in a colour neither theme
+        # owns. Matches the CosimLog phase banner it interleaves with instead.
+        from frontEnd.console_colors import (
+            current_console_colors, HEAVY_WEIGHT)
+        Text = "<span style=\"font-size:14pt; font-weight:%d; color:%s;\">" \
+               % (HEAVY_WEIGHT, current_console_colors()['head'])
         Text += ".................Running NgVeri..................."
         Text += "</span>"
         self.termedit.append(Text)
@@ -1655,8 +1665,11 @@ beyond the %d instances this model was built for; skipping it.\\n",
         '''
         # No hardcoded colour: the old #0000FF blue was near-invisible on the
         # dark theme. Weight + rule bars carry the emphasis; the text inherits
-        # the palette so it reads in both themes.
-        Text = "<span style=\"font-size:20pt; font-weight:1000;\">"
+        # the palette so it reads in both themes. Sized and weighted to match
+        # the CosimLog phase banner that shares this terminal (20pt/1000 was
+        # both louder than anything around it and a weight Qt clamps away).
+        from frontEnd.console_colors import HEAVY_WEIGHT
+        Text = "<span style=\"font-size:14pt; font-weight:%d;\">" % HEAVY_WEIGHT
         Text += "<br>================================<br>"
         Text += textin
         Text += "<br>================================<br>"

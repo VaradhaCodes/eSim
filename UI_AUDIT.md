@@ -476,6 +476,150 @@ and wants its own finding rather than a quiet re-add.
 
 ---
 
+### S3 — 2026-07-22 · 1.9, 1.3, 1.8, 1.10, 2.6
+
+Verifier: `audit_harness/verify_ui_s3.py` (22/22 offscreen). S1 and S2 re-run on
+this tree: still 11/11 and 16/16. Guards green: `src/frontEnd/tests` +
+`src/ngspiceSimulation/tests` + `test_cosim_logger` + `test_verifier_layout` +
+`test_verifier_run` + `test_highlighting` = **240 passed, 18 skipped**. Full
+suite **581 passed / 9 failed / 22 skipped** — the 9 are the documented
+pre-existing Windows env failures (`test_toolchain_check` ×6, `test_cosim_config`
+vvp, `test_nghdl_embed` ×2), byte-identical to the baseline set. Ruff
+`F,E9,B,E501,W291,W293` diffed against the pre-session tree for all 14 touched
+files: **zero new findings, 15 pre-existing cleared**.
+
+**1.9 — the console layer has one palette, and it is measured.** New
+`src/frontEnd/console_colors.py`: `console_colors(is_dark)` returns seven
+semantic levels — `info / detail / ok / warn / error / head / output` — plus
+`current_console_colors()`, which resolves the live theme from the QPalette that
+`apply_theme` installs (falling back to `current_theme_is_dark()`, then light,
+and never raising: two of the six callers run on worker threads and one is
+imported by a test with no QApplication at all).
+
+The audit's suggested map was followed with three measured corrections, all
+against the **console's own** background rather than the window's
+(`#0E1728`/`#08111F` dark, `#FFFFFF`/`#FBFDFF` light — the real values from the
+two sheets, and what the verifier composites against):
+- light `ok` and `warn` are **not** `LIGHT.success`/`LIGHT.warning`. Those are
+  tuned to sit *beside* light body text; as body text on white they measure
+  3.8:1 and 3.2:1. They take the next step down each ramp — `#047857`
+  (emerald-700, 5.5:1) and `#B45309` (amber-700, 5.1:1). Same call `STYLE_LIGHT`
+  made for its InfoBar in S2, same reason.
+- light `detail` is `#5A6E89`, not `LIGHT.text_muted` (4.1:1). `#5A6E89` is the
+  darker grey the light sheet already carries a receipt for. S2 accepted ~4.0:1
+  for muted *chrome*; a log line is not chrome.
+- `info` is `text_dim`, not `text_muted` — `text_dim` is literally what
+  `QPlainTextEdit#simulationConsole` and `QTextEdit` paint, so uncoloured
+  chatter and `info` land on the same tone by construction. `text_subtle` never
+  became a level: at 2.4:1 on the light console it is not a colour, it is a
+  disappearance.
+
+Every value in both themes clears WCAG AA (4.5:1) on both of its backdrops, and
+`p19_console_colors_clear_wcag_aa` recomputes that, so a retint that breaks it
+fails instead of shipping. A second guard asserts no level is the same hue in
+both themes — the failure mode where one side quietly never got retuned.
+
+The six consumers:
+- `VerilogVerifier._LOG_COLORS` is now a **property**, so all five existing call
+  sites are untouched and each read resolves live. Its GitHub-light table is
+  gone (`'output': #24292E`, near-black on the dark console card).
+- **`VerilogVerifier` also re-colours its backlog.** `_append_console` bakes the
+  colour into each fragment's `QTextCharFormat`, so a mid-session toggle used to
+  leave a whole scrollback in the outgoing theme. New `changeEvent` →
+  `_retheme_console()` walks the document and remaps every fragment through
+  `old_theme[level] → new_theme[level]`; nothing extra had to be remembered
+  because *the colour is the level*. Verified by rendering: the harness writes
+  all seven levels in dark, flips, and asserts the document's fragment-colour
+  set is exactly the light set with the text undisturbed.
+- `CosimLogger._COLOR` became `_LEVEL` (level → semantic key) + a `_color()`
+  classmethod resolving at emit time. `None` still means "emit no colour",
+  preserving the existing split. `fix` moved from magenta `#B30086` to `head`
+  (accent): it is actionable advice, not a failure.
+- `NgspiceWidget.SUCCESS_FORMAT`/`FAILURE_FORMAT` → `_banner_format(level)`;
+  `TerminalUi`'s cancel banner, `NgVeri`'s three build banners and
+  `ModelGeneration._emit_error` / `verilogfile` likewise.
+- All banners dropped from 26px/25pt to 16px (`BANNER_PX`) / 14pt, and every
+  `font-weight:1000` became 800 — Qt clamps rich text at 900, so 1000 was
+  asking for a weight that does not exist. Both are guarded.
+
+**Known limit, deliberately not chased:** the five HTML consoles bake their
+colour into the document too, but unlike `QTextCharFormat` there is no reliable
+way back from rendered HTML to the level that produced it. Lines written *after*
+a toggle are correct (that is what emit-time resolution buys); lines already on
+screen keep their old tone until the next run clears the terminal. Only the
+verifier console, which owns real char formats, re-colours retroactively.
+
+**1.3 — the status dot follows the theme, and re-tints on the toggle.**
+`_set_sim_status` reads `tokens.theme(current_theme_is_dark())` and records
+`_last_sim_state`; new `_retint_sim_status()` replays it. `apply_theme`'s
+top-level-widget sweep calls the hook (guarded by `hasattr` + try/except, like
+its neighbours) — `_CURRENT_DARK` is assigned ~100 lines earlier, so the sweep
+already sees the new theme. The dot's `padding` moved out of the Python sheet
+entirely: `QLabel#simStatusDot` already carries it in both sheets. Verified
+against the **real** `apply_theme`, not a stub: the dot goes `#FACC15` → `#D97706`
+across a live Dark→Light apply with nothing else touching it.
+
+**1.8 — the trace-colour popups are themed, and so are hidden rows.**
+`populate_color_menu` and `_populate_func_color_menu` read `self._palette`
+(`panel` for the card, `border_strong` for swatch borders, `text` for the hover
+border) instead of `#FFFFFF`/`#E0E0E0`/`#212121`. While there, the same finding's
+other half: the hidden-trace ring (`#9E9E9E`) and label (`#757575`) — Material
+greys for a white list — both became `cursor_dim`, so a switched-off row dims as
+one object. New `refresh_list_theme()` rebuilds every row on a theme change;
+each row is a hand-built widget with an inline sheet and a painted swatch, none
+of which a stylesheet swap can reach.
+
+**Two `_palette` keys were deliberately left unconsumed, and both are documented
+in place.** `cursor_disabled` and `cursor_chrome` read like text roles but hold
+`border_strong` and `text_subtle` — 1.75:1 on the dark plot panel and 2.4:1 on
+the light one. Adopting them would have swapped one invisible grey for another,
+which is the finding, not the fix. `p110_no_readout_paints_text_with_a_border_tone`
+keeps them out.
+
+**1.10 / 2.6 — the cursor readouts, in one move as the audit asked.** Every
+`#333`/`#555`/`#999`/`#aaa` in `_cursor_mixin` and every `#e53935`/`#1976d2`/
+`#e65100`/`#aaa` in `plot_window` now comes from `self._palette`
+(`stats_text` for values, `cursor_dim` for the secondary tier, `cursor1/2/delta`
+for the marker hues, which stay data identity per S1's rule). Three things fell
+out of doing it properly:
+- The drag path and the full-readout path were building the same "C1 @ 1.234 ms"
+  string with the same four literals written twice. They share
+  `_cursor_head_html` now; `_delta_html` and `_cursor_placeholder_html` collapse
+  four more copies.
+- **The drawn cursor line did not match its own label.** `set_cursor` drew bare
+  `'red'`/`'blue'` while the readout announced `#e53935`/`#1976d2` — two
+  different reds for one cursor, and pure blue is poor on the dark panel (which
+  is exactly why the dark palette brightens both). Both now take `_cursor_hue`.
+- `_make_focus_icon` stopped being a `@staticmethod`: it painted `#444444`, a
+  near-black glyph on the dark toolbar, i.e. an invisible button. It needs the
+  palette, so it takes `self`.
+
+New `_retint_painted_chrome()`, called at the end of `_apply_theme_impl`, drives
+the three surfaces a sheet cannot reach — list rows, cursor readouts, focus icon
+— each step independently guarded because it also runs from `__init__`, before
+the later widgets exist (there is a test for exactly that partial-window case).
+
+**§2.6 extended past its receipts, same finding class.** `_render_mixin.py` held
+five more Material literals painting the *matplotlib* chrome: legend
+`'white'`/`#E0E0E0` (which overrode the themed `legend.facecolor` that
+`matplotlib_rc_overrides` had already installed — a white card on the dark plot),
+the timing-unavailable message `#757575`, the stacked-pane stat titles `#444444`
+×2, and the inner-pane divider spine `#BDBDBD`. `_palette` defines
+`legend_face`, `legend_edge`, `stats_text` and `spine_separator` for precisely
+these and had **zero consumers** for any of them; it does now.
+
+**Tests.** `maker/tests/test_cosim_logger.py` stopped pinning literals — it now
+asserts against `console_colors(False)` (no QApplication in that module, so the
+logger resolves light) and gained `test_semantic_colors_track_the_theme`, which
+is the property the old literals could not express. Its two original intents —
+"no line is invisible", "meaningful lines keep a colour" — are unchanged.
+
+**Not done in S3, still open:** §2.1, §2.2 (Python half), §2.3, §2.4, §2.5,
+§2.9, all of P3, §C1's `theme_utils`/`recolor` half, §C3–C7. Also still open is
+the a11y gap S2 flagged: a keyboard-focused Welcome tile has no visible ring.
+
+---
+
 ## Verification checklist for the fixing session
 
 1. `pytest src/frontEnd/tests src/ngspiceSimulation/tests/test_plot_window_theme.py -q` green.

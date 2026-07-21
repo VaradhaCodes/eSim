@@ -10,6 +10,60 @@ logger = logging.getLogger(__name__)
 
 
 class _CursorMixin:
+    """Cursor placement, drag and the sidebar readout.
+
+    Every colour below comes from ``self._palette`` (the mixin is mixed into
+    plotWindow, which owns it). The readout HTML used to hardcode #333 / #555 /
+    #999 / #aaa, which is a light-theme design: on the dark plot panel the
+    values were effectively invisible, and the labels are the whole point of
+    placing a cursor. ``_palette`` already named these roles — ``stats_text``
+    for values and ``cursor_dim`` for everything secondary — trace names, the
+    "@" glue and the "not set" placeholder — which simply had no consumer.
+
+    Two neighbouring keys are deliberately NOT used, both tuned back when this
+    panel was white: ``cursor_disabled`` holds ``border_strong`` (1.75:1 on the
+    dark panel — a stroke tone, not something readable), and ``cursor_chrome``
+    holds ``text_subtle``, which is 2.4:1 on the light panel. Painting text with
+    either swaps one invisible grey for another, so the secondary tier is
+    ``cursor_dim`` throughout.
+    """
+
+    # -- readout chrome ------------------------------------------------------
+    def _cursor_hue(self, cursor_num: int) -> str:
+        """Marker hue for cursor N — data identity, so it has its own tokens."""
+        key = 'cursor1' if cursor_num == 0 else 'cursor2'
+        return self._palette[key]
+
+    def _cursor_head_html(self, cursor_num: int, x_display: str) -> str:
+        """The "C1 @ 1.234 ms" line, shared by the drag and full-readout paths.
+
+        Both used to build this string themselves, with the same four literal
+        colours written twice — the fastest way for the two to drift apart.
+        """
+        p = self._palette
+        return (f'<span style="font-weight:700;'
+                f'color:{self._cursor_hue(cursor_num)}">C{cursor_num + 1}</span>'
+                f'<span style="color:{p["cursor_dim"]}"> @ </span>'
+                f'<span style="font-weight:600;'
+                f'color:{p["stats_text"]}">{x_display}</span>')
+
+    def _delta_html(self, delta_raw: float, scale: float, unit_str: str) -> str:
+        p = self._palette
+        return (f'<span style="font-weight:700;color:{p["cursor_delta"]}">ΔX</span>'
+                f' <span style="font-family:monospace;font-weight:600;'
+                f'color:{p["stats_text"]}">{delta_raw * scale:.4g} {unit_str}</span>')
+
+    def _cursor_placeholder_html(self, cursor_num: Optional[int]) -> str:
+        """The "nothing placed yet" state for a C1/C2/ΔX label."""
+        p = self._palette
+        if cursor_num is None:
+            head, body = f'<b style="color:{p["cursor_delta"]}">ΔX</b>', '—'
+        else:
+            head = (f'<b style="color:{self._cursor_hue(cursor_num)}">'
+                    f'C{cursor_num + 1}</b>')
+            body = 'not set'
+        return f'{head}  <span style="color:{p["cursor_dim"]}">{body}</span>'
+
     def _find_nearest_cursor(self, event) -> Optional[int]:
         """Return cursor index if the click is within 8px of an existing cursor.
 
@@ -54,20 +108,13 @@ class _CursorMixin:
         # is deferred to on_canvas_release to keep drag smooth.
         unit_str = (self._x_unit or '').strip()
         label = self.cursor1_label if cursor_num == 0 else self.cursor2_label
-        _c_color = '#e53935' if cursor_num == 0 else '#1976d2'
-        label.setText(
-            f'<span style="font-weight:700;color:{_c_color}">C{cursor_num + 1}</span>'
-            f'<span style="color:#999"> @ </span>'
-            f'<span style="font-weight:600;color:#333">{x_pos * scale:.4g} {unit_str}</span>'
-        )
+        label.setText(self._cursor_head_html(
+            cursor_num, f'{x_pos * scale:.4g} {unit_str}'.strip()))
         two_cursors = (len(self.cursor_positions) >= 2
                        and all(p is not None for p in self.cursor_positions[:2]))
         if two_cursors:
             delta_raw = abs(self.cursor_positions[1] - self.cursor_positions[0])
-            self.delta_label.setText(
-                f'<span style="font-weight:700;color:#e65100">ΔX</span>'
-                f' <span style="font-family:monospace;font-weight:600;color:#333">{delta_raw * scale:.4g} {unit_str}</span>'
-            )
+            self.delta_label.setText(self._delta_html(delta_raw, scale, unit_str))
             self._update_measure_label(delta_raw, scale)
         # Blit path: restore static background, draw only cursor lines, blit.
         # Falls back to draw_idle() if snapshot is stale/missing.
@@ -115,14 +162,10 @@ class _CursorMixin:
         view where each pane has its own Y scale.
         """
         label_widget = self.cursor1_label if cursor_num == 0 else self.cursor2_label
-        color = '#e53935' if cursor_num == 0 else '#1976d2'
-        c_label = f'C{cursor_num + 1}'
+        p = self._palette
 
         if x_pos is None or not hasattr(self.obj_dataext, 'x'):
-            label_widget.setText(
-                f'<b style="color:{color}">{c_label}</b>'
-                f'  <span style="color:#aaa">not set</span>'
-            )
+            label_widget.setText(self._cursor_placeholder_html(cursor_num))
             return
 
         x_full = np.asarray(self.obj_dataext.x, dtype=float)
@@ -132,9 +175,7 @@ class _CursorMixin:
         if unit_label:
             x_display += f" {unit_label}"
 
-        html = (f'<span style="font-weight:700;color:{color}">{c_label}</span>'
-                f'<span style="color:#999"> @ </span>'
-                f'<span style="font-weight:600;color:#333">{x_display}</span>')
+        html = self._cursor_head_html(cursor_num, x_display)
 
         visible = self.visible_traces
         rows = ''
@@ -175,8 +216,10 @@ class _CursorMixin:
             unit = 'V' if t.index < self.obj_dataext.volts_length else 'A'
             value = _format_measurement(y_val, unit)
             rows += (f'<tr>'
-                     f'<td style="color:#555;padding-right:8px">{t.name}</td>'
-                     f'<td style="font-family:monospace;font-weight:600;color:#333">{value}</td>'
+                     f'<td style="color:{p["cursor_dim"]};'
+                     f'padding-right:8px">{t.name}</td>'
+                     f'<td style="font-family:monospace;font-weight:600;'
+                     f'color:{p["stats_text"]}">{value}</td>'
                      f'</tr>')
 
         for f_idx, (flabel, _fx, _fy, fcolor, *_) in enumerate(self._func_traces):
@@ -189,7 +232,8 @@ class _CursorMixin:
             rows += (f'<tr>'
                      f'<td style="color:{fcolor};padding-right:8px">'
                      f'ƒ {short}</td>'
-                     f'<td style="font-family:monospace;font-weight:600;color:#333">{y_val:.4g}</td>'
+                     f'<td style="font-family:monospace;font-weight:600;'
+                     f'color:{p["stats_text"]}">{y_val:.4g}</td>'
                      f'</tr>')
 
         if rows:
@@ -343,7 +387,11 @@ class _CursorMixin:
             except ValueError:
                 pass  # already cleared by fig.clear()
 
-        color = 'red' if cursor_num == 0 else 'blue'
+        # The drawn line takes the same hue its readout announces. Bare 'red' /
+        # 'blue' did not match cursor1/cursor2, so the C1 label and the C1 line
+        # were two different reds — and pure blue is poor on the dark panel,
+        # which is why the dark palette brightens both.
+        color = self._cursor_hue(cursor_num)
         new_lines: List[Optional[Line2D]] = [
             ax.axvline(x=x_pos, color=color, linestyle='--', alpha=CURSOR_ALPHA)
             for ax in self.panes
@@ -357,10 +405,8 @@ class _CursorMixin:
                        and all(p is not None for p in self.cursor_positions[:2]))
         if two_cursors:
             delta_raw = abs(self.cursor_positions[1] - self.cursor_positions[0])
-            self.delta_label.setText(
-                f'<span style="font-weight:700;color:#e65100">ΔX</span>'
-                f' <span style="font-family:monospace;font-weight:600;color:#333">{delta_raw * scale:.4g} {(self._x_unit or "").strip()}</span>'
-            )
+            self.delta_label.setText(self._delta_html(
+                delta_raw, scale, (self._x_unit or "").strip()))
             self._update_measure_label(delta_raw, scale)
         else:
             self.measure_label.setText(self._format_cursor_readout(x_pos))
@@ -377,11 +423,15 @@ class _CursorMixin:
                     pass  # already removed by fig.clear()
         self.cursor_lines.clear()
         self.cursor_positions.clear()
-        self.cursor1_label.setText('<b style="color:#e53935">C1</b>  <span style="color:#aaa">not set</span>')
-        self.cursor2_label.setText('<b style="color:#1976d2">C2</b>  <span style="color:#aaa">not set</span>')
-        self.delta_label.setText('<b style="color:#e65100">ΔX</b>  <span style="color:#aaa">—</span>')
-        self.measure_label.setText("")
+        self.reset_cursor_labels()
         self.canvas.draw()
+
+    def reset_cursor_labels(self) -> None:
+        """Put the C1/C2/ΔX labels back to their "not set" state."""
+        self.cursor1_label.setText(self._cursor_placeholder_html(0))
+        self.cursor2_label.setText(self._cursor_placeholder_html(1))
+        self.delta_label.setText(self._cursor_placeholder_html(None))
+        self.measure_label.setText("")
 
     def _restore_cursors(self) -> None:
         """Re-create cursor axvlines after fig.clear(), using stored positions.
@@ -392,13 +442,15 @@ class _CursorMixin:
         """
         if not self.panes or not self.cursor_positions:
             return
-        colors = ['red', 'blue']
         rebuilt: List[List[Optional[Line2D]]] = []
         for i, x_pos in enumerate(self.cursor_positions):
             if x_pos is None:
                 rebuilt.append([])
                 continue
-            color = colors[i] if i < len(colors) else 'green'
+            # Same hues set_cursor drew with, so a refresh never restyles a
+            # cursor the user already placed.
+            color = (self._cursor_hue(i) if i < 2
+                     else self._palette['cursor_delta'])
             pane_lines: List[Optional[Line2D]] = [
                 ax.axvline(x=x_pos, color=color,
                            linestyle='--', alpha=CURSOR_ALPHA)
@@ -427,13 +479,30 @@ class _CursorMixin:
                        and all(p is not None for p in self.cursor_positions[:2]))
         if two_cursors:
             delta_raw = abs(self.cursor_positions[1] - self.cursor_positions[0])
-            self.delta_label.setText(
-                f'<span style="font-weight:700;color:#e65100">ΔX</span>'
-                f' <span style="font-family:monospace;font-weight:600;color:#333">'
-                f'{delta_raw * scale:.4g} {(self._x_unit or "").strip()}</span>'
-            )
+            self.delta_label.setText(self._delta_html(
+                delta_raw, scale, (self._x_unit or "").strip()))
             self._update_measure_label(delta_raw, scale)
         elif self.cursor_positions and self.cursor_positions[0] is not None:
             self.measure_label.setText(
                 self._format_cursor_readout(self.cursor_positions[0]))
+
+    def retint_cursor_readouts(self) -> None:
+        """Re-render the cursor labels in the current palette.
+
+        The readouts are HTML strings with the colours baked in, so a theme
+        toggle leaves whatever was on screen in the old theme's tones. Labels
+        for cursors that ARE placed get recomputed; the rest fall back to the
+        placeholder, which also has to be re-tinted.
+        """
+        placed = [i for i, x in enumerate(self.cursor_positions) if x is not None]
+        if not placed:
+            self.reset_cursor_labels()
+            return
+        for i in (0, 1):
+            if i not in placed:
+                label = self.cursor1_label if i == 0 else self.cursor2_label
+                label.setText(self._cursor_placeholder_html(i))
+        if len(placed) < 2:
+            self.delta_label.setText(self._cursor_placeholder_html(None))
+        self._refresh_cursor_readouts()
 

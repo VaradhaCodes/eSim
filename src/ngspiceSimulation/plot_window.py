@@ -439,6 +439,31 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         QToolButton#plotToolButton:checked {{ background-color: {p['selection_bg']}; }}
         """
         self.setStyleSheet(theme_stylesheet)
+        self._retint_painted_chrome()
+
+    def _retint_painted_chrome(self) -> None:
+        """Re-colour everything this window paints by hand.
+
+        A stylesheet swap reaches only what the stylesheet owns. The trace-list
+        rows carry per-row inline sheets and a painted swatch, the cursor
+        readouts are HTML with the colours baked in, and the focus-mode icon is
+        a rendered pixmap — none of them re-derive on their own, so a light/dark
+        toggle used to leave three light-theme islands in a dark window. Each
+        step is independently guarded: this runs from __init__ too, where the
+        later widgets do not exist yet.
+        """
+        for step in (self.refresh_list_theme,
+                     self.retint_cursor_readouts):
+            try:
+                step()
+            except Exception:
+                pass
+        try:
+            btn = getattr(self, '_focus_btn', None)
+            if btn is not None:
+                btn.setIcon(self._make_focus_icon(btn.iconSize().width()))
+        except Exception:
+            pass
 
     def create_main_frame(self) -> None:
         main_widget_layout = QVBoxLayout(self)
@@ -719,15 +744,17 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         cursor_layout.setContentsMargins(ih, iv, ih, iv)
         cursor_layout.setSpacing(sp)
 
-        # font/theme color come from QSS (#cursorLabel); the inline <b>/<span>
-        # colors in the text are per-cursor data, not chrome, so they stay.
-        self.cursor1_label = QLabel('<b style="color:#e53935">C1</b>  <span style="color:#aaa">not set</span>')
+        # Font and default colour come from QSS (#cursorLabel); the inline
+        # <b>/<span> colours are built by _CursorMixin from self._palette, so
+        # the per-cursor hues AND the "not set" chrome both follow the theme.
+        # (They used to be literals here — #aaa on the dark panel was a ghost.)
+        self.cursor1_label = QLabel(self._cursor_placeholder_html(0))
         self.cursor1_label.setWordWrap(True)
         self.cursor1_label.setObjectName("cursorLabel")
-        self.cursor2_label = QLabel('<b style="color:#1976d2">C2</b>  <span style="color:#aaa">not set</span>')
+        self.cursor2_label = QLabel(self._cursor_placeholder_html(1))
         self.cursor2_label.setWordWrap(True)
         self.cursor2_label.setObjectName("cursorLabel")
-        self.delta_label = QLabel('<b style="color:#e65100">ΔX</b>  <span style="color:#aaa">—</span>')
+        self.delta_label = QLabel(self._cursor_placeholder_html(None))
         self.delta_label.setObjectName("cursorLabel")
 
         def _cursor_sep() -> QLabel:
@@ -895,13 +922,19 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._update_mode_controls()
         self.refresh_plot()
 
-    @staticmethod
-    def _make_focus_icon(size: int) -> QIcon:
+    def _make_focus_icon(self, size: int) -> QIcon:
+        """Corner-brackets icon for the focus-mode toggle.
+
+        Drawn in the palette's body text colour: the old fixed #444444 was a
+        near-black glyph on the dark toolbar, i.e. an invisible button. Not a
+        staticmethod any more precisely because it needs the palette.
+        """
         px = QPixmap(size, size)
         px.fill(Qt.GlobalColor.transparent)
         p = QPainter(px)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(QPen(QColor('#444444'), max(1, size // 12), Qt.PenStyle.SolidLine,
+        p.setPen(QPen(QColor(self._palette['text']), max(1, size // 12),
+                      Qt.PenStyle.SolidLine,
                       Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         m = max(2, size // 6)
         a = max(3, size // 4)

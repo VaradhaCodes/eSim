@@ -217,17 +217,21 @@ class NgVeri(QtWidgets.QWidget):
 
     def _on_legacy_build_finished(self, ok):
         '''GUI-thread epilogue for a completed legacy build (success path).'''
+        from frontEnd.console_colors import (
+            current_console_colors, HEAVY_WEIGHT)
+        c = current_console_colors()
         logs = self._build_logs
         if ok:
-            logs.append('''
-                <p style=\" font-size:16pt; font-weight:1000;
-                color:#00FF00;\"> Model Created Successfully!
-                </p>
-            ''')
+            # Was neon #00FF00 at weight 1000 (Qt clamps rich text at 900, so
+            # the value never meant anything) — unreadable on the light
+            # terminal and off-palette on the dark one.
+            logs.append(
+                '<p style="font-size:15pt; font-weight:%d; color:%s;">'
+                ' Model Created Successfully!</p>' % (HEAVY_WEIGHT, c['ok']))
             placedName = os.path.splitext(
                 os.path.basename(self.fname))[0].lower()
             logs.append(
-                '<p style="color:#00AA00; font-weight:600;">'
+                '<p style="color:' + c['ok'] + '; font-weight:600;">'
                 'Model "' + placedName + '" — place it from the '
                 'eSim_Ngveri library in KiCad.</p>')
         else:
@@ -243,12 +247,12 @@ class NgVeri(QtWidgets.QWidget):
 
     @staticmethod
     def _build_failure_html():
-        return '''
-            <p style=\" font-size:16pt; font-weight:1000;
-            color:#FF0000;\">There was an error during model creation,
-            <br/>Please rectify the error and try again!
-            </p>
-        '''
+        from frontEnd.console_colors import (
+            current_console_colors, HEAVY_WEIGHT)
+        return ('<p style="font-size:15pt; font-weight:%d; color:%s;">'
+                'There was an error during model creation,'
+                '<br/>Please rectify the error and try again!</p>'
+                % (HEAVY_WEIGHT, current_console_colors()['error']))
 
     def _set_convert_buttons_enabled(self, enabled):
         '''Enable/disable the two convert buttons around an async build.'''

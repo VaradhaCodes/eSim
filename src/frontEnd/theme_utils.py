@@ -477,3 +477,11 @@ def apply_theme(app):
             widget.devdocs.setIcon(dev_docs_icon())
         if hasattr(widget, 'preferences_action'):
             widget.preferences_action.setIcon(settings_icon())
+        # Widget-level stylesheets survive a re-theme untouched, so anything
+        # Python paints by hand has to be told. The simulation status dot is
+        # the one such surface on the main window.
+        if hasattr(widget, '_retint_sim_status'):
+            try:
+                widget._retint_sim_status()
+            except Exception:
+                pass

@@ -29,7 +29,13 @@ class _ListMixin:
             painter.drawEllipse(1, 1, 16, 16)
         else:
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            pen = QtGui.QPen(QColor("#9E9E9E"))
+            # Hollow ring for a hidden trace. Material grey #9E9E9E read as a
+            # smudge on the dark panel. cursor_dim is the palette's "present
+            # but switched off" tone, and the ring shares it with the row's
+            # label so the whole row dims as one thing. (Not cursor_disabled:
+            # despite the name that value is border_strong, which lands at
+            # 1.75:1 on the dark panel — a stroke, not something readable.)
+            pen = QtGui.QPen(QColor(self._palette['cursor_dim']))
             pen.setWidth(1)
             painter.setPen(pen)
             painter.drawEllipse(2, 2, 14, 14)
@@ -101,12 +107,18 @@ class _ListMixin:
         layout.setSpacing(10)
         icon_label = QLabel()
         icon_label.setAttribute(transparent, True)
-        color = QColor(t.color) if t.visible else QColor("#9E9E9E")
+        color = QColor(t.color) if t.visible \
+            else QColor(self._palette['cursor_dim'])
         icon = self.create_colored_icon(color, t.visible)
         icon_label.setPixmap(icon.pixmap(18, 18))
         text_label = QLabel(t.name)
         text_label.setAttribute(transparent, True)
-        text_label.setStyleSheet("font-weight: 500;" if t.visible else "color: #757575; font-weight: normal;")
+        # Visible rows inherit the list's themed colour; hidden rows use
+        # cursor_dim, which _palette defines as exactly this ("dimmed trace
+        # names in rows"). The old fixed #757575 was muddy on the dark panel.
+        text_label.setStyleSheet(
+            "font-weight: 500;" if t.visible
+            else f"color: {self._palette['cursor_dim']}; font-weight: normal;")
         layout.addWidget(icon_label)
         layout.addWidget(text_label)
         layout.addStretch()
@@ -129,7 +141,8 @@ class _ListMixin:
         layout.setSpacing(10)
         icon_label = QLabel()
         icon_label.setAttribute(transparent, True)
-        icon_color = QColor(color) if visible else QColor("#9E9E9E")
+        icon_color = QColor(color) if visible \
+            else QColor(self._palette['cursor_dim'])
         icon = self.create_colored_icon(icon_color, visible)
         icon_label.setPixmap(icon.pixmap(18, 18))
         display = f"ƒ  {label}"
@@ -137,12 +150,40 @@ class _ListMixin:
         text_label.setAttribute(transparent, True)
         text_label.setStyleSheet(
             f"color: {color}; font-weight: 500; font-style: italic;" if visible
-            else "color: #757575; font-weight: normal; font-style: italic;")
+            else f"color: {self._palette['cursor_dim']}; font-weight: normal; "
+                 "font-style: italic;")
         layout.addWidget(icon_label)
         layout.addWidget(text_label)
         layout.addStretch()
         self.waveform_list.setItemWidget(item, widget)
         item.setText(display)
+
+    def refresh_list_theme(self) -> None:
+        """Rebuild every row widget against the current palette.
+
+        Each row is a hand-built QWidget carrying an inline stylesheet and a
+        painted swatch, so re-installing the window's sheet does not reach it —
+        a light/dark toggle used to leave the hidden-trace rows in the previous
+        theme's grey. Called from the plot window's theme apply.
+        """
+        for i in range(self.waveform_list.count()):
+            item = self.waveform_list.item(i)
+            if item is None:
+                continue
+            index = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(index, int):
+                continue
+            if index >= 0:
+                if index in self.traces:
+                    self.update_list_item_appearance(item, index)
+                continue
+            f_idx = -index - 1
+            if f_idx >= len(self._func_traces):
+                continue
+            label, _fx, _fy, color, *_ = self._func_traces[f_idx]
+            visible = (f_idx < len(self._func_visible)
+                       and self._func_visible[f_idx])
+            self._update_func_item_appearance(item, label, color, visible)
 
     def _sync_func_trace_list(self) -> None:
         """Remove all func-trace list items and re-add from current _func_traces.
@@ -314,14 +355,21 @@ class _ListMixin:
         menu.exec(self.waveform_list.mapToGlobal(position))
 
     def populate_color_menu(self, menu: QMenu, selected_items: List[QListWidgetItem]) -> None:
+        # Popup chrome from the live palette: a hardcoded #FFFFFF panel with
+        # #E0E0E0/#212121 swatch borders was a glaring white card punched into
+        # the dark theme, and the hover border vanished against it.
+        p = self._palette
         color_widget = QWidget()
-        color_widget.setStyleSheet("background-color: #FFFFFF;")
+        color_widget.setStyleSheet(f"background-color: {p['panel']};")
         grid_layout = QGridLayout(color_widget)
         grid_layout.setSpacing(2)
         for i, color in enumerate(self.color_palette):
             btn = QPushButton()
             btn.setFixedSize(24, 24)
-            btn.setStyleSheet(f"QPushButton{{background-color:{color};border:1px solid #E0E0E0;border-radius:2px;}}QPushButton:hover{{border:2px solid #212121;}}")
+            btn.setStyleSheet(
+                f"QPushButton{{background-color:{color};"
+                f"border:1px solid {p['border_strong']};border-radius:2px;}}"
+                f"QPushButton:hover{{border:2px solid {p['text']};}}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, c=color: self.change_color_and_close(selected_items, c, menu))
             grid_layout.addWidget(btn, i // 4, i % 4)

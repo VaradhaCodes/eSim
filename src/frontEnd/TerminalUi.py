@@ -139,7 +139,15 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.progressBar.setMaximum(100)
         self.progressBar.setProperty("value", 100)
 
-        cancelFormat = '<span style="color:#FF8624; font-size:26px;">{}</span>'
+        # Semantic colour from the console palette, not the old off-palette
+        # #FF8624 at 26px: that amber belonged to neither theme and the size
+        # made a one-line status read as a headline.
+        from frontEnd.console_colors import (
+            current_console_colors, BANNER_PX, BANNER_WEIGHT)
+        cancelFormat = ('<span style="color:%s; font-size:%dpx; '
+                        'font-weight:%d;">{}</span>'
+                        % (current_console_colors()['warn'],
+                           BANNER_PX, BANNER_WEIGHT))
         self.simulationConsole.appendHtml(
             cancelFormat.format("Simulation Cancelled!"))
         self.simulationConsole.verticalScrollBar().setValue(

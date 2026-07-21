@@ -816,15 +816,36 @@ class Application(QtWidgets.QMainWindow):
         return menu
 
     def _set_sim_status(self, state):
-        """Tint the status-bar simulation dot: idle/running/ok/failed."""
+        """Tint the status-bar simulation dot: idle/running/ok/failed.
+
+        The four tints come from the ACTIVE theme's tokens. They used to be the
+        dark set unconditionally, which put mint (#42E6A4) and yellow (#FACC15)
+        on the light theme's #F3F7FC status bar — technically painted, visually
+        gone. The state is remembered so a light/dark flip can re-tint the dot
+        it is currently showing (see _retint_sim_status)."""
+        from frontEnd import tokens
+        from frontEnd.theme_utils import current_theme_is_dark
+        self._last_sim_state = state
+        t = tokens.theme(current_theme_is_dark())
         colors = {
-            "idle": "#5F728D", "running": "#FACC15",
-            "ok": "#42E6A4", "failed": "#FB7185",
+            "idle": t["text_subtle"], "running": t["warning"],
+            "ok": t["success"], "failed": t["danger"],
         }
-        c = colors.get(state, "#5F728D")
+        c = colors.get(state, t["text_subtle"])
         if hasattr(self, 'sim_status_dot'):
+            # Colour + size only: the padding lives in the QLabel#simStatusDot
+            # QSS rule, and duplicating it here would be a second source.
             self.sim_status_dot.setStyleSheet(
-                "color: %s; font-size: 13px; padding: 0 6px;" % c)
+                "color: %s; font-size: 13px;" % c)
+
+    def _retint_sim_status(self):
+        """Re-paint the status dot in the new theme's tokens.
+
+        Called from apply_theme's top-level-widget sweep. The dot carries a
+        widget-level stylesheet, which no amount of re-polishing will re-derive
+        — only re-running _set_sim_status can, and it needs to know which state
+        is on screen, hence _last_sim_state."""
+        self._set_sim_status(getattr(self, '_last_sim_state', 'idle'))
 
     def initMenuAndStatus(self):
         """No menu bar -- eSim is icon-driven. The snapshots panel is a
