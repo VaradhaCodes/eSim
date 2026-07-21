@@ -1,0 +1,187 @@
+# eSim Maker / HDL-Toolchain / Installer Audit
+
+**Scope:** `C:\Users\itsva\eSim-dev-src` @ `e05e89d6` (branch `dev`) — the whole HDL-conversion and dependency stack:
+- `src/maker/` (Maker, NgVeri, ModelGeneration, VerilogVerifier, ToolchainCheck, CosimConfig, CosimLogger, DesignBus, createkicad, createkicadCosim, kicad_symlib, model_teardown, hdl/*)
+- `nghdl/` (install-nghdl.sh, src/ngspice_ghdl.py, src/model_generation.py, ghdlserver/*)
+- d_cosim runtime path (`kicadtoNgspice/Convert.py::_cosim_model_line`, `ngspiceSimulation/NgspiceWidget.py` d_cosim hooks)
+- Installers both OSes: `Ubuntu/install-eSim.sh`, `Ubuntu/bootstrap.sh`, `windows/build-windows.ps1`, `windows/installer.iss`, `windows/windows_bootstrap.py`, `windows/deps-manifest.json`, `windows/esim.bat`, `windows/msys-dll-closure.sh`, `windows/requirements-windows.txt`
+
+**Method:** full manual read of every file above (~10k lines), plus targeted sweeps for subprocess/chdir/parsing/atomicity hazards. Companion to `CRASH_AUDIT.md` (crash surface) and `UI_AUDIT.md` (visual surface) — findings already in those are NOT repeated here.
+**Status:** AUDIT ONLY. No file modified except this report.
+
+**Context the fixer must know.** This stack was heavily reworked already and much of it is *good*: arg-list subprocess everywhere in `src/maker` (no `sh -c` strings), `cwd=` instead of `os.chdir` in the build pipeline, exit-code-based verdicts (not "grep the log for 'error'"), atomic symbol-library writes (`kicad_symlib._write_lib`), a real toolchain doctor (`ToolchainCheck`) gating every flow, hash-pinned Windows dependency manifest, hermetic MSYS2 builds with bare-PATH verification, and vendored drift-guarded copies of shared helpers. **Do not regress these while fixing.** The findings below are ranked by user impact: HIGH = silently wrong artifacts / data loss / false success; MEDIUM = plausible breakage with a confusing failure; LOW = hygiene/polish. Each has an exact fix direction — follow it as written.
+
+---
+
+## HIGH — correctness: the model that gets built can be silently wrong
+
+### M1. `verilogParse` strips `wire`/`reg` by substring — mangles identifiers containing them
+- **File:** `src/maker/ModelGeneration.py:398-399` (`code.replace("wire", " ")`, `code.replace("reg", " ")`). Same pattern in `src/maker/Maker.py:237-238` (`" wire "`/`" reg "` with spaces — narrower but still wrong for line-start/`\t`-adjacent tokens).
+- **Root cause:** bare substring replace. Any identifier containing the letters — `regfile`, `reg_out`, `wired`, `shift_reg`, `program_counter` contains neither, but `x_reg`, `wire_sel`, `addr_reg` do — gets holes punched in it before hdlparse sees the code. The port list, and therefore `connection_info.txt`, the KiCad symbol, the ifspec and the generated C, are then built from a corrupted identifier or the parse silently drops the port.
+- **Trigger:** convert any Verilog whose module header names a port like `data_reg` or `wire_en`. No error — just a wrong model.
+- **Fix direction:** exactly the fix this same file already applied for `top` (line 353, `re.sub(r'\btop\b', ...)`): `code = re.sub(r'\b(wire|reg)\b', ' ', code)`. Apply the identical change in `Maker.runmakerchip`. Add a parse test with a port named `out_reg` to `src/maker/tests/test_model_generation_config.py`.
+
+### M2. Port-direction detection double-counts ports whose *name* contains a direction keyword — three copies of the bug
+- **Files:**
+  - `src/maker/ModelGeneration.py:482-509` (`getPortInfo`: `re.findall("INPUT", line)` / `"INOUT"` / `"OUTPUT"` over the WHOLE line)
+  - `src/maker/createkicad.py:392-422` (`PortInfo.getPortInfo`, identical)
+  - `nghdl/src/model_generation.py:111-141` (`readPortInfo`: worse — matches bare `"IN"`/`"OUT"` substrings, so a port named `sout`, `main`, `win`, `count` misclassifies)
+- **Root cause:** `connection_info.txt` lines are exactly `name direction bits`, but direction is detected by substring-searching the whole line. An *input* port named `output_valid` lands in BOTH `input_list` and `output_list`; in nghdl, an input named `dout_en` (contains "out") does too. Result: duplicated/phantom ports in the ifspec, the KiCad symbol pin count, and the generated cfunc — a subtly corrupt model with no error.
+- **Fix direction:** parse the line structurally in all three places: `parts = line.split(); if len(parts) < 3: continue; name, direction, bits = parts[0], parts[1].lower(), parts[2]` then exact-match `direction in ("input", "inout")` / `== "output"` (nghdl: `== "in"`/`== "out"`). While there, fix M3 (same loops). Add one shared test fixture with ports named `output_valid`, `dout`, `sout`, `input_load` and assert counts. The three copies MUST get the same fix (createkicad's copy feeds the symbol, ModelGeneration's feeds the C, nghdl's feeds the VHDL testbench).
+
+### M3. Latent `NameError` in the same three loops when the first line is blank
+- **Files:** same three functions as M2 (`ModelGeneration.py:492-504`, `createkicad.py:403-421`, `nghdl/src/model_generation.py:128-141`).
+- **Root cause:** the blank-line branch does `pass` instead of `continue`, then falls into `if in_items:` — on the FIRST iteration `in_items` is not yet bound → `NameError`. Today generated files don't start with a blank line, so this sleeps; any future format tweak (or a hand-edited connection_info.txt) detonates it.
+- **Fix direction:** the M2 rewrite (`continue` on short/blank lines) removes this class entirely. No separate fix needed if M2 is done structurally.
+
+### M4. Model-name derivation is split between `os.path.splitext` and `split('.')[0]` — dotted filenames build broken models
+- **Files (the `split('.')[0]` holdouts):** `src/maker/ModelGeneration.py` — `build_cosim` (562), `cfuncmod` (700, 705, 725, 732…), `ifspecwrite` (923-925), `sim_main_header` (1023-1038), `sim_main` (1051+), `modpathlst` (1226); `src/maker/NgVeri.py:127, 223, 323`; `src/maker/createkicad.py:44` (`AutoSchematic.init`); `nghdl/src/ngspice_ghdl.py:446` (`createModelDirectory`); `nghdl/src/model_generation.py` (throughout).
+- **Root cause:** `verilogfile()` was already fixed to use `os.path.splitext` (line 331, with a comment explaining why: `counter` IndexError'd, `model.v.bak` misparsed) — but the rest of the pipeline still uses `split('.')[0]`. For a file `fir.v1.v`: the source is copied to `<digital>/Ngveri/fir.v1/fir.v1.v` (splitext stem) while cfunc/ifspec/sim_main/modpath all use model name `fir` (split-dot stem). The build then fails cryptically in cmpp/make — or, for d_cosim, the vvp is built under one name and looked up under another.
+- **Fix direction:** one helper on `ModelGeneration` — `self.model_stem = os.path.splitext(self.fname)[0]` set in `__init__` — and mechanical replacement of every `self.fname.split('.')[0]` with it (this is a rename-level change; the generated-content strings are otherwise untouched). Same one-liner in `NgVeri` (use `os.path.splitext(os.path.basename(...))[0].lower()`), `createkicad.AutoSchematic.init`, and both nghdl files. **Additionally** validate the stem once at entry (`re.fullmatch(r'[A-Za-z_]\w*', stem)`) and refuse with a clear dialog otherwise — the stem is spliced into C function names, VHDL entities, make targets and paths, so a hyphen or space in the filename currently breaks four layers deeper.
+
+### M5. `bootstrap.sh` tree-update drops all d_cosim model XML — user's Dual Co-sim models orphaned
+- **File:** `Ubuntu/bootstrap.sh:120-129` (`for d in Nghdl Ngveri; do ...` — preserved dirs on re-run)
+- **Root cause:** the curl-one-liner update path preserves `library/modelParamXML/{Nghdl,Ngveri}` across the `rm -rf $ESIM_DIR && mv fresh`, but NOT `NgVeriCosim` — the directory that IS the source of truth for d_cosim model existence (`model_teardown._resolve_backend`, `NgVeri._list_models`). After an update: symbols still in `~/.esim/kicad_symbols/eSim_NgVeriCosim.kicad_sym`, vvp still in the digital-model tree, but the XML is gone → the netlister can't emit the `.model d_cosim` line, the remove dialog can't list the model, and `_resolve_backend` misroutes teardown to the ngveri path.
+- **Trigger:** build any Dual Co-sim model, later re-run the install one-liner.
+- **Fix direction:** add `NgVeriCosim` to both `for d in ...` loops (lines 120 and 126). One-word fix, do it first.
+
+### M6. `ngspice_ghdl.py` QProcess chain ignores exit codes; verdict is a stderr-substring sniff
+- **File:** `nghdl/src/ngspice_ghdl.py:596-608` (`readAllStandard`: `stderror.toUpper().contains(b"ERROR")` sets `errorFlag`), 656 (`finished.connect(self.runMakeInstall)`), 697 (`finished.connect(self.createSchematicLib)`).
+- **Root cause:** exactly the antipattern the maker side already eliminated (see `_legacy_build_pipeline`'s comment). `make` failing → `runMakeInstall` runs anyway → `createSchematicLib` runs anyway; the only gate is whether the literal text "ERROR" appeared on stderr. GNU make's `*** [target] Error 2` happens to contain it, but a gcc ICE, a killed process, or a localized toolchain message does not — the user then gets a KiCad symbol for a model whose `ghdl.cm` never rebuilt, and simulation fails later with no connection to the cause.
+- **Fix direction:** `QProcess.finished` delivers `(exitCode, exitStatus)`. Change both `finished` slots to accept them and short-circuit: on `exitCode != 0` or `exitStatus == CrashExit`, append a red failure line, re-enable the buttons, set `errorFlag = True`, and do NOT chain to the next step. Keep the "ERROR" sniff only as a secondary signal if you want, but the gate must be the exit code (mirror `ModelGeneration._run`). Also wrap the two `str(..., encoding='utf-8')` decodes with `errors='replace'` — mingw tools can emit cp1252 bytes and a decode error in this slot kills the output stream.
+
+### M7. `ghdlserver.c` binds `INADDR_ANY` — the VHDL testbench server listens on every interface
+- **File:** `nghdl/src/ghdlserver/ghdlserver.c:207` (`serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);`)
+- **Root cause:** during every NGHDL co-simulation, each model instance runs a TCP server on port `5000+instance_id` bound to all interfaces. The client only ever connects from a `127.0.0.x` loopback address (see generated cfunc). So this is pure exposure: any host on the LAN can connect to the socket while a simulation runs, and on Windows it triggers the firewall consent dialog on first sim (confusing, and clicking "Cancel" breaks the sim in a way nobody connects to the popup).
+- **Fix direction:** bind to loopback. The server already receives the IP the client will use (the generated testbench passes `sock_ip` from `sock_pkg`); bind to that address, or minimally `htonl(INADDR_LOOPBACK)`. This is a 2-line change in `create_server_socket` + re-tarring nothing (ghdlserver.c is compiled per-model at upload time from `SRC_HOME`, so the fix applies to new uploads immediately).
+
+### M8. Stale vvp runs if the model is rebuilt but the netlist isn't reconverted
+- **File:** `src/kicadtoNgspice/Convert.py:552-566` (`_cosim_model_line` copies the vvp into the project dir at *conversion* time).
+- **Root cause:** ngspice's ivlng loads `sim_args=["<model>"]` relative to its cwd, so the vvp is staged next to the netlist during KiCad→Ngspice conversion. Correct — but the copy happens ONLY then. Workflow: convert once, notice a logic bug, rebuild the model in the NgVeri tab, hit Simulate again → the *old* vvp in the project dir runs. User sees their fix "not working".
+- **Fix direction:** re-stage at simulation start: in `NgspiceWidget._start_process`, when `self.uses_dcosim`, re-copy each staged vvp whose source (`CosimConfig.cosim_vvp_path(name)`) is newer than the project copy (mtime compare; names are recoverable by scanning the netlist for `sim_args=["..."]` with a regex, or simpler: for every file in the project dir that has a same-named, newer vvp at the canonical path, overwrite). Log via `CosimLog` ("restaged newer vvp for X"). Keep the conversion-time copy as-is.
+
+---
+
+## MEDIUM — robustness, install and lifecycle
+
+### M9. Fresh-tree crash: `verilogfile()` uses `os.mkdir` and `modpathlst()` opens `modpath.lst` read-only
+- **File:** `src/maker/ModelGeneration.py:333-334` (`os.mkdir(self.modelpath)` — parent `<DIGITAL_MODEL>/Ngveri` may not exist), 1221 (`open(self.digital_home + '/modpath.lst', 'r')` — file may not exist).
+- **Root cause:** when config is missing, `CosimConfig.digital_model_root()` falls back to `~/.nghdl/DigitalModelLibrary`, which exists only after `NgVeri._list_models()` happens to run (it creates the file+dir on demand, line 559-562). A convert triggered before ever opening the remove dialog on such a tree throws `FileNotFoundError` — caught by the generic handler, but the message ("Error in Ngspice code model generation…") says nothing useful.
+- **Fix direction:** `os.makedirs(self.modelpath, exist_ok=True)` in `verilogfile`; in `modpathlst`, create-if-missing before reading (mirror the 4 lines in `NgVeri._list_models`), or refactor both call sites onto one `_ensure_modpath()` helper in `model_teardown` (stdlib-only, already the shared home for modpath logic).
+
+### M10. `createXML` (both variants) still uses `os.chdir` — process-global CWD mutation from GUI + epilogue paths
+- **Files:** `src/maker/createkicad.py:149-183`, `src/maker/createkicadCosim.py:165-203`.
+- **Root cause:** the whole build pipeline was migrated to `cwd=`-style isolation precisely because chdir strands eSim's CWD (the file's own comments elsewhere say so), but both XML writers still `os.chdir(xmlDestination)` … `tree.write(name + '.xml')` … `os.chdir(cwd)`. An exception between the two chdirs (e.g. read-only dir) strands the app's CWD in the XML directory; worse, the cosim epilogue runs on the GUI thread while a legacy build may be running in a worker whose relative paths then resolve differently.
+- **Fix direction:** delete the chdir dance; `tree.write(os.path.join(xmlDestination, str(self.modelname) + '.xml'))`. Two-line change in each file.
+
+### M11. Generated C has fixed 1024-wide buffers with no bound check
+- **Files:** `src/maker/ModelGeneration.py` (`sim_main_header` — `int <m>_temp_<port>[1024]`, `foo_` instance array `[1024]`); `nghdl/src/model_generation.py` (`char temp_<port>[1024]`, `send_data[1024]`, `recv_data[1024]` + the snprintf of ALL ports into one 1024-byte message).
+- **Root cause:** a port vector wider than 1024 bits (or, nghdl: total ports serialization exceeding 1024 chars — reachable with ~15 32-bit ports given the `name:%s` framing) overflows a C array in the generated model / truncates the socket message, corrupting co-sim data silently (`snprintf` truncates; the server then parses a half message).
+- **Fix direction:** don't fix the C — fix the generator: at generation time compute total bits and the serialized message length; refuse with a clear dialog above 1024 (or size the arrays from the actual widths: the generator knows every width, emit `[<width>]` and `send_data[<computed>]`). The sizing fix is mechanical and better; do that.
+
+### M12. nghdl POSIX branch hardcodes `$HOME/nghdl-simulator/...` in the generated cfunc, ignoring `DIGITAL_MODEL`
+- **File:** `nghdl/src/model_generation.py:585-590` (the `else` branch of the `start_server.sh` command: `self.home + '/nghdl-simulator/src/xspice/icm/ghdl/...'`).
+- **Root cause:** the Windows branch correctly derives the path from `parser.get('NGHDL', 'DIGITAL_MODEL')` (568-583); the POSIX branch bakes the default install location. Anyone who relocates the nghdl tree (or a future installer change) gets models whose INIT spawns a server script that doesn't exist — sim hangs at "Client-Initialising GHDL...".
+- **Fix direction:** use `self.digital_home` (already computed for nt at 569-570 — hoist it above the branch) in both branches: `self.digital_home + '/' + stem + '/DUTghdl/start_server.sh %d %s &'`. Note the path is baked into the compiled model either way — that's inherent to the design — but it must at least honor the config at generation time.
+
+### M13. nghdl POSIX subprocess calls are `shell=True` string concat — spaced paths break; Windows branch was already fixed
+- **File:** `nghdl/src/ngspice_ghdl.py:586-589` (`subprocess.call("bash " + path + "/DUTghdl/compile.sh", shell=True)` etc.).
+- **Root cause:** the nt branch (567-584) was rewritten to arg-list + `creationflags` precisely for quoting safety; the POSIX branch kept the old form. `$HOME` containing a space is rare on Linux but legal, and the pattern is an injection surface for a hostile model path.
+- **Fix direction:** mirror the nt branch: `subprocess.call(['bash', os.path.join(path, 'DUTghdl', 'compile.sh')])` (cwd already chdir'ed there — better: pass `cwd=` and drop the chdir), `subprocess.call(['chmod', 'a+x', 'start_server.sh'], cwd=...)`.
+
+### M14. `_run` watchdog kills only the direct child — make's gcc children survive on Windows
+- **File:** `src/maker/ModelGeneration.py:275-284` (`proc.kill()` on timeout).
+- **Root cause:** `Popen.kill()` on Windows is `TerminateProcess` on mingw32-make only; in-flight gcc/ld children keep running, holding file locks in the model dir — the user's retry then fails on "Permission denied" removing/rewriting `.o` files, which looks like a new unrelated bug.
+- **Fix direction:** kill the tree. `psutil` is already a hard dependency (requirements-windows.txt, apt list): `p = psutil.Process(proc.pid); [c.kill() for c in p.children(recursive=True)]; p.kill()` inside `_kill_on_timeout`, wrapped in try/except `psutil.NoSuchProcess`. Same in `hdl/icarus.CancelToken._terminate`.
+
+### M15. Non-atomic rewrites of small-but-critical config files
+- **Files:** `src/maker/kicad_symlib.py:236-237` (`ensure_lib_registered` writes `sym-lib-table` with plain `open(w)`), `windows/windows_bootstrap.py:193-195` (`fix_spinit` rewrites `spinit` in place), `src/maker/NgVeri.py:707-709` + `model_teardown._strip_modpath_line/_prune_modpath` (modpath.lst rewrite).
+- **Root cause:** the project already solved this class for `.kicad_sym` (`_write_lib`: temp file + fsync + `os.replace`, with a comment explaining the kill-mid-write failure mode) — but a crash mid-write of `sym-lib-table` corrupts the user's KiCad library table (every KiCad launch then errors), and a mid-write of `spinit` breaks ALL code-model loading (every simulation fails with "codemodel not found", nowhere near the cause).
+- **Fix direction:** extract `_write_lib`'s tempfile+replace core into a small `_atomic_write(path, data)` in `kicad_symlib` (it's already the vendored-everywhere helper) and route the three writers through it. Keep the vendored nghdl copy in sync (drift-guard test exists).
+
+### M16. `ifspecwrite` appends output ports to `in_port_table`; `out_port_table` is dead — in both copies
+- **Files:** `src/maker/ModelGeneration.py:954-975`, `nghdl/src/model_generation.py:682-703`.
+- **Root cause:** the output-port loop does `in_port_table.append(...)`; the later `for item in out_port_table:` writes nothing. Output is correct *by accident* (single list preserves order), but the code lies, and any future edit that touches only `out_port_table` silently does nothing.
+- **Fix direction:** append to `out_port_table` in the second loop (behavior identical: it's written right after). Also fix the copy-paste description string `"Model generated from ghdl code"` in the *Verilator* ifspec (`ModelGeneration.py:925`) to say Verilog/Verilator — it shows up in ngspice error messages and misdirects debugging.
+
+### M17. `install-nghdl.sh --uninstall` purges shared apt packages and leaves no ngspice
+- **File:** `nghdl/install-nghdl.sh:461-470`.
+- **Root cause:** uninstall does `apt-get purge -y ghdl-llvm ghdl-gcc verilator` (packages the user may use outside eSim) and `rm -f /usr/bin/ngspice` (the symlink) without restoring a distro ngspice — a user who uninstalls NGHDL but keeps using ngspice-based tools is left with nothing, silently.
+- **Fix direction:** prompt before purging the shared packages (mirror `cleanLegacyEsim`'s `/usr/local/bin/ghdl` prompt), and print a post-uninstall note: "system ngspice was removed; `sudo apt install ngspice` to restore the distro build". Cheap, prevents a support ticket class.
+
+### M18. `installer.iss` grants `users-modify` on the entire `{app}` tree
+- **File:** `windows/installer.iss:73-79`.
+- **Root cause:** the rationale (model builds write into the tree) is real, but the grant covers `python\`, `eSim.exe`, `tools\kicad\bin` — any local user on a shared machine can replace binaries another user will run. That's a textbook local privilege/tamper vector on lab machines (eSim's main audience).
+- **Fix direction:** scope the ACL to the dirs that are actually written at runtime: `{app}\tools\nghdl` (model sources land in `src\xspice\icm`, rebuilds run in `release`, `make install` writes `install_dir`), `{app}\library\modelParamXML`, `{app}\library\kicadLibrary` (netlister/symbol reads only — verify, likely droppable), and `{app}\Examples` if the app copies examples. Multiple `[Dirs]` lines with `Permissions: users-modify` on those; drop it from `{app}` root. Test: Full install as admin, launch as standard user, build one NgVeri + one d_cosim + one NGHDL model.
+
+### M19. Dependency pinning gaps (both OSes) — the "everything pinned" story has four holes
+- **Files/holes:**
+  1. `windows/deps-manifest.json:36` — `iverilog` (Bleyer fallback) has `"sha256": ""`. Any `-SkipSimBuild` build either dies or (with `-AcceptNewHashes`) trusts first-download. Fill the hash.
+  2. `windows/requirements-windows.txt:22` + `Ubuntu/install-eSim.sh:272` — `pyhdlparser` installed from `tarball/master` (moving ref). Pin the commit: `https://github.com/hdl/pyhdlparser/tarball/<sha>` in both.
+  3. `makerchip-app`, `sandpiper-saas`, `volare` unpinned on both OSes. Windows records `pip freeze` after the fact (good) but resolution is still unpinned; add `>=`,`<` bounds or exact pins refreshed per release.
+  4. MSYS2 base tarball is pinned but `pacman -Syu` + package installs are rolling (`build-windows.ps1:373-377`) — two builds a week apart ship different gcc/verilator/ghdl. Minimum fix: after provisioning, `pacman -Q > tools/msys64/PACKAGES.lock` staged into the tree (like `python-wheels.lock`) so releases are at least *auditable*; full fix (pinned pkg URLs from repo.msys2.org archive) is optional.
+- **Fix direction:** as itemized. Ubuntu side: also wrap the four `pip install X || warn` lines with versions from one place (a `PIP_PINS` array at the top of install-eSim.sh) so bumping is one edit.
+
+### M20. `install-nghdl.sh` iverilog fallback clones full history; extracted tree replaced non-atomically
+- **File:** `nghdl/install-nghdl.sh:314-319` (git clone), 236-239 (`tar -x` to `$HOME` then `rm -rf` old tree then `mv`).
+- **Root cause:** (a) `git clone` of the full iverilog repo (~200 MB) when the tarball is absent — slow on the exact machines this path serves. (b) The nghdl-simulator extraction order is extract → `rm -rf $HOME/nghdl-simulator` → `mv`; if the `mv` fails (name mismatch, cross-device), the `|| true` swallows it and the subsequent `cd` kills the install with a generic error *after* the old tree is already deleted — a failed upgrade destroys the working simulator.
+- **Fix direction:** (a) shallow-fetch the pinned commit: `git init && git remote add origin ... && git fetch --depth 1 origin $ICARUS_REF && git checkout FETCH_HEAD`. (b) drop the `|| true`, and reorder: extract to `$HOME/nghdl-simulator-source`, verify it looks sane (`[ -x configure ]`), THEN `rm -rf` + `mv` — so the old tree dies only when the new one is proven present.
+
+### M21. `ngspice_ghdl.createModelFiles` generates into eSim's CWD, then moves
+- **File:** `nghdl/src/ngspice_ghdl.py:513-594` (`os.chdir(self.cur_dir)`; ModelGeneration's constructor writes `connection_info.txt` etc. to CWD; then `shutil.move` into the model dir).
+- **Root cause:** the whole flow assumes eSim's launch CWD is writable. Launched from a read-only dir (packaged launchers, `/` on some setups) the constructor's `open('connection_info.txt', 'w')` fails; and the chdir dance is exactly what `src/maker` was refactored away from (this file even documents restoring CWD in `finally`, i.e. the hazard is known).
+- **Fix direction:** generate into `tempfile.mkdtemp(prefix='nghdl-')` — pass the dir into `ModelGeneration` (constructor takes an `outdir`, writes `os.path.join(outdir, ...)` instead of bare relative names), move from there, remove the chdir entirely. This also makes `model_generation.py` unit-testable, which it currently isn't (writes to CWD as an import-time side effect of the constructor).
+
+### M22. `addingModelInModpath` glues the new name onto a final line lacking `\n`
+- **File:** `nghdl/src/ngspice_ghdl.py:494-511` (`open('r+')`, iterate, then `f.write(self.modelname + "\n")`).
+- **Root cause:** append after full read positions at EOF; if the last line has no trailing newline (hand-edited file), the write produces `oldmodelnewmodel` — a ghost entry that makes cmpp abort the whole ghdl.cm build (the exact failure `_prune_modpath` exists to clean).
+- **Fix direction:** read lines, exact-match strip check (it already does), then write `('\n' if content and not content.endswith('\n') else '') + name + '\n'`. Or route through a shared helper in the vendored `model_teardown` (add `_append_modpath_line`), keeping both packages in sync.
+
+### M23. d_cosim GUI log colors are hardcoded light-theme values — the exact bug fixed elsewhere in this file's siblings
+- **File:** `src/maker/CosimLogger.py:104-114` (`'info': '#000000'`, `'phase': '#0000FF'`, `'stdout': '#333333'`).
+- **Root cause:** `ModelGeneration.termtext/termtitle` were deliberately changed to inherit the palette ("was #000000, invisible on dark") — but `CosimLog`, which renders the entire d_cosim build story into the same terminal, still paints info-level lines black and phases in #0000FF. On the dark theme the d_cosim log is mostly invisible.
+- **Fix direction:** drop the `color` style for `info`/`stdout` (inherit palette, like termtext); keep semantic colors for ok/warn/error/fix but use the theme-tested values already used elsewhere (`#00AA00`, `#E07B00`, `#FF0000`, phase → weight/size only). This is 6 lines in `_COLOR` + `_span`.
+
+---
+
+## LOW — hygiene, docs, small traps
+
+### L1. `createkicadCosim.deleteKicadSymbol` / teardown consistency is good — but `NgVeri.__init__` reads `xml_loc` via `createkicad.Appconfig.Appconfig.xml_loc` class attribute (`NgVeri.py:73-76`), a different access path than everywhere else (`self.App_obj.xml_loc`). Unify to an instance read so a future Appconfig refactor can't split them.
+### L2. `Maker.py:50` writes the TOS marker with bare `open(...).close()` and string concat `home + "/.makerchip_accepted"` — use `os.path.join` + `with` (style outlier; everything around it was modernized).
+### L3. `ModelGeneration.build_cosim` imports `subprocess/tempfile/time/shlex` inside the function; `_tool_version` re-imports subprocess. Hoist to module top (subprocess already is) — the local imports read as if they were lazy-Qt guards, which they are not.
+### L4. `install-nghdl.sh` `createSoftLink` points `/usr/local/bin/nghdl` at the repo checkout (`$src_dir/src/ngspice_ghdl.py`). Deleting/moving the eSim tree leaves a dangling symlink with a confusing shebang error. Add a note to the uninstall message, or install a tiny wrapper script that error-messages when the target is gone.
+### L5. `ToolchainCheck._check_ngspice` hint mentions "reinstall eSim with the Full component set" — Windows component is named "HDL toolchain (MSYS2)" in installer.iss; align wording (users grep dialogs verbatim).
+### L6. `windows/collect-logs.ps1` and `Ubuntu` launcher scripts were not deep-audited (out of blast radius); `scripts/nghdl.sh` (6 lines) still references the standalone launcher — verify it's shipped/used or delete.
+### L7. `getPortInfo`'s inout→input folding is a known d_cosim limitation and is *warned* in `build_cosim` (good) but NOT in the legacy flow, where the ifspec silently emits `Direction: in` for an inout. Add the same `log.warn` in the legacy path (`ModelGeneration.getPortInfo` or `verilogParse`).
+### L8. `deps-manifest.json` innosetup 6.3.3: fine, but note Inno 6.3.x has had security fixes since; bump on next release cycle (build-machine only, low risk).
+
+---
+
+## Test gaps (what would have caught the above)
+
+The maker test suite is genuinely good (22 files: teardown safety, symlib parsing, toolchain check fakes, bootstrap round-trips) — but the *generators* are untested:
+
+1. **Port parsing**: no test feeds `connection_info.txt` lines with direction-keyword-containing names (M2/M3) or checks `verilogParse` against identifiers containing `wire`/`reg` (M1). Add `test_port_parsing.py` with the fixture from M2 covering all three parser copies (import nghdl's via path, or move the parser into `model_teardown`-style shared module — better).
+2. **Model-name stems**: parametrized test over `counter.v`, `fir.v1.v`, `counter` (no ext), `Model.V` asserting every derived artifact name matches one stem (M4).
+3. **nghdl/src is entirely untested** — `model_generation.py` can't even be imported without side effects (M21's fix unlocks testing it). After M21, add generation smoke tests (given a 2-port VHDL, assert cfunc/ifspec/testbench contain the right port lines).
+4. **Installer lint**: no shellcheck in CI for `install-eSim.sh`/`install-nghdl.sh`/`bootstrap.sh`. Add a GitHub Action running `shellcheck -S warning` (the scripts are close to clean already).
+5. **modpath append edge**: test M22's no-trailing-newline case via the shared helper.
+
+---
+
+## Fix order for the Opus session
+
+Do them in this order — it front-loads user-visible correctness and keeps each commit independently testable:
+
+1. **M5** (bootstrap.sh one-liner — data loss) → commit alone.
+2. **M2+M3** (structural port parsing, all three copies, + shared test fixture).
+3. **M1** (`\b(wire|reg)\b`, both files, + test).
+4. **M4** (model_stem unification + name validation, + test). Touches many lines but is mechanical; run the existing `test_model_generation_*` suite after.
+5. **M6** (nghdl exit-code gating) + **M13** (POSIX arg-list) + **M22** — one nghdl-side commit.
+6. **M9, M10, M15, M16, M23** — small maker-side batch.
+7. **M7** (ghdlserver loopback bind).
+8. **M8** (vvp restage at sim start).
+9. **M11, M12, M14, M17, M20, M21** — second batch.
+10. **M18, M19** (installer hardening/pinning) — needs a Windows rebuild to verify; do last, verify with a Full install + standard-user model-build test.
+
+Rules for the fixer: preserve the existing idioms named in the context paragraph (arg-list subprocess, `cwd=`, exit-code verdicts, atomic writes, doctor gating). Where a fix touches `kicad_symlib.py` or `model_teardown.py`, update BOTH vendored copies (`src/maker/` and `nghdl/src/`) — the drift-guard test will fail otherwise, which is by design. Never add a fix that writes to `/usr/share` at runtime or reads a hardcoded install path — every path goes through `CosimConfig` / `configuration.paths` / the config.ini files.
