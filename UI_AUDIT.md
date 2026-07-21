@@ -620,6 +620,185 @@ the a11y gap S2 flagged: a keyboard-focused Welcome tile has no visible ring.
 
 ---
 
+### S4 — 2026-07-22 · 2.1, 2.3, 2.4, 2.5, 2.9, 2.2 (Python half), C7, C5
+
+Verifier: `audit_harness/verify_ui_s4.py` (43/43 offscreen). S1/S2/S3 re-run on
+this tree: 11/11, 16/16, 22/22. `smoke_no_qsci` and `smoke_no_watchdog`: PASS.
+Full suite **581 passed / 9 failed / 22 skipped — byte-identical to the
+pre-session baseline** (the 9 are the documented Windows env failures:
+`test_toolchain_check` ×6, `test_cosim_config` vvp, `test_nghdl_embed` ×2).
+Ruff `F,E9,B,E501,W291,W293` diffed against HEAD for all 14 touched files:
+**zero new findings, 2 pre-existing cleared**.
+
+**2.1 — the elevation scale went from one call site to all of them.** The
+finding was adoption, so the work is mostly deletion: `Welcome._apply_tile_shadow`,
+the tooltip card's shadow block, `apply_toolbar_depth`'s per-bar magic numbers,
+`install_menu_depth`'s, and (same finding class, one file past its receipts)
+`EditorWindow`'s find-bar shadow are all gone. `p21_no_consumer_hand_rolls_a_shadow`
+asserts no consumer constructs a `QGraphicsDropShadowEffect` at all any more;
+`p21_no_black_shadow_literals_remain` asserts none of them names black.
+
+`motion.set_shadow` keeps its job as the low-level primitive but defaults its
+colour from `tokens.theme(is_dark)["shadow_rgb"]`, which is the audit's own
+one-move fix: every frame-by-frame caller inherits the tint without knowing it
+exists. `apply_panel_depth` / `apply_popup_depth` became `elevate(w, "e2")` /
+`elevate(w, "e4")` outright — the blur/y/alpha kwargs `VerilogVerifier` was
+passing are deleted, not re-passed.
+
+Three things fell out of doing it properly:
+- **`elevate` bakes the colour in, so nothing ever re-tinted.** A toolbar
+  elevated at startup kept its dark-theme shadow after a switch to light —
+  which makes the whole light track (blue-grey at half the alpha) unreachable
+  in the one direction users actually travel. New `elevation.retint(w)` reads
+  the level back off a `_esim_elevation` property, and `theme_utils.
+  _refresh_graphics_effects` — a walk over every widget of every window that
+  already ran on each theme change — drives it. One walk, not two.
+- **The toolbars keep their offsets and lose everything else.** `(0,5)` and
+  `(4,6)` are load-bearing (the left rail's blur must not bleed up into the
+  inverted-L joint), so `elevate` gained an `offset=` override that changes
+  direction only. Blur, alpha and tint now come off `e3` for both bars.
+- **The tooltip pad was too small for e3.** 34/2 + 10 = 27px of reach against
+  a 16px transparent margin would clip the shadow square — the exact artefact
+  that widget exists to avoid. `_PAD` is 28 and the verifier computes the
+  requirement rather than hardcoding it. The card is also re-elevated in
+  `show_text`, because that window is built once and reused all session.
+
+**Welcome's tiles are elevated on first show, not in `__init__` — and that is
+worth reading before someone "simplifies" it.** Elevating during construction
+means asking an unshown, unpolished, unparented widget which theme it is in.
+On this tree that palette read *on that path* tips a latent fault: the full
+suite dies with an access violation inside `apply_theme`'s `setStyleSheet`
+during `test_widget_event_loops[MainView]`. It is **not** this session's bug —
+the identical crash reproduces on an otherwise-pristine HEAD with nothing added
+but an inert `widget.palette().color(Window).lightness()` inside the old
+`_apply_tile_shadow` (bisected in seven full-suite runs: the crash follows the
+palette read, not the colour, the alpha, the blur or the dynamic property).
+Deferring to `showEvent` is the correct design independently — at first show
+the page is parented, polished and carries the theme it will be seen in — and
+it puts the suite back on its exact baseline. **The latent fault itself is still
+there and wants its own finding:** something in the configuration + frontEnd
+test sequence leaves state that makes a MainView re-theme fragile; no single
+configuration test file triggers it, only the set.
+
+**2.2 (Python half) — the Welcome page has no colour literals left.** The hover
+glow, the hover wash and the hero orb read `tokens` through a new
+`widgets.accent_color(widget, alpha, key)`; the dead `GradientLabel` import is
+gone. `p22_hover_wash_differs_between_themes` proves it by rendering: it grabs
+the tile at hover 0 and hover 1 and asserts the second pixel is *this* theme's
+accent composited over the first at 42/255 — so the check needs no assumption
+about what the backdrop is, and a light-theme tile washed with dark-theme cyan
+fails it. That was the actual defect: `#53D7FF` over white, in a UI whose light
+accent is `#0077A8`.
+
+**C5 — `HoverSurfaceMixin` moved into `widgets.py`.** The audit left this
+conditional ("if a second card-like surface ever appears"), and §2.1 answered
+it: the mixin now interpolates an *elevation level* into an *accent token*, so
+it is design-system machinery that happens to have one consumer, not page code
+that happens to be generic. It also stops re-inventing the resting shadow —
+the old copy faded from black-alpha-48 upward, a value that existed nowhere
+else and was invisible in light mode; it now starts from exactly what
+`elevate(w, REST_LEVEL)` painted. `widgets.py` gains its first live class,
+which is where §3.2 wants that file to end up.
+
+**2.3 — FlowNavigator's `_pill_tokens` reads the tokens it claimed to.** Same
+method as §2.4 below; the dict shape is untouched, so `_apply_pill_theme` did
+not change. Four mappings are deliberately asymmetric and each carries its
+reason in place: `bar_bg` is `bg_raise` on dark but `bg` on light (S1's note —
+light chrome strips sit flat on the window, and "fixing" that shifts the whole
+header); hover moves one step *away* from the strip in the direction of
+contrast, so dark lifts to `surface_2` and light sinks to `bg_sunken`, which is
+what the light sheet's own hover rules already paint; the checked tint needs
+0.18 alpha on dark and 0.13 on light; and `reload_fg` is `warning` on dark but
+amber-800 `#92400E` on light, because `#D97706` on its own 10% wash is 3.2:1.
+That amber is the one value in the file that is not a token, it is measured
+(5.9:1) and pinned, and it is the same call `STYLE_LIGHT`'s InfoBar made in S2.
+Three of the four dark values it used to copy were phantoms anyway
+(`#9FB1CC`/`#F4F8FF` appear in neither sheet — the drift class §C2 cleared).
+
+While in the file: `_placeholder`'s error HTML hardcoded `#8a939b` (3.0:1 on
+the light page, in neither theme's palette) — same finding class, now
+`text_muted`. Inline HTML cannot inherit a QSS colour, so it has to name one;
+it does not have to invent one.
+
+**2.4 — `_about_palette` derives all 14 values.** Shape and consumers
+unchanged (`p24_about_keys_are_unchanged` pins the key set, since
+`PreferencesDialog._build_about_page` indexes the same dict). `sep` and
+`chip_border` are built from the theme's `text` rgb, `pill_bg` from its
+`accent` rgb, and the verifier checks the *components*, not the strings. Two
+asymmetries kept and documented: the logo chip drops to `bg_raise` on dark
+(a well for the bronze coin) where light has nowhere below the card to go, and
+`link`/`pill_fg` take `accent_hi` on dark but `accent` on light — the tone that
+steps away from the page. On white, `accent_hi` is 3.0:1; `accent` is 4.6:1,
+and it is also the pixel this dialog already shipped. Also caught here: an
+inline `font-weight: 650`, left behind by S2's sweep because that sweep only
+covered the .qss files.
+
+**2.5 — the fullscreen toggle uses eSim's own SVGs.** `SP_TitleBarMaxButton` /
+`SP_TitleBarNormalButton` resolve to the platform's title-bar glyphs — a
+Windows chrome square on one OS, an icon-theme arrow on another — which is the
+divergence `icon_paths` was created to end, and `fullscreen_icon` /
+`dock_back_icon` were sitting there unused for exactly this. The icons bake the
+theme's foreground into the raster, so the button re-renders on `PaletteChange`.
+
+**That re-render must be deferred, and the first version of it was a hard
+crash.** `PaletteChange` is delivered from inside the polish that
+`setStyleSheet`/`setPalette` is running; rasterising an SVG and calling
+`setIcon` there re-enters that polish, which re-delivers `PaletteChange` — with
+one of these toggles in every docked panel (KicadToNgspice, the Makerchip flow
+strip, the plot toolbar) it is unbounded recursion, i.e. a C-stack overflow.
+The refresh now runs on the next tick behind a pending flag, which also
+coalesces the burst a single toggle produces into one re-render.
+`p25_retint_never_runs_inside_the_handler` asserts both halves: nothing renders
+synchronously, and five queued events produce exactly one re-render.
+
+**2.9 — one mono resolver, and it actually reaches the widget.** The audit's
+premise turned out to be half right, and the measurement changed the fix:
+- `VerilogVerifier`'s `QFont("Segoe UI", 10)` and `QFont("Consolas", 11)` were
+  **dead**, not live. With an app-level sheet installed, the SHEET wins: both
+  `QLabel#verilogSidebarTitle` and `QTextEdit#verilogConsole` resolve to the
+  sheet's values with the `setFont` in place, verified by rendering
+  (`p29_sheet_owns_the_verifier_console_font`). They are deleted as the
+  misleading dead weight they were — a reader who saw `QFont("Consolas")` had
+  every reason to think the console was Consolas on Windows only.
+- The *live* half is the opposite defect: a `QPlainTextEdit` that is **not**
+  styled by an objectName rule cannot hold a mono face through `setFont` at
+  all, because the app sheet's `QWidget` font rule beats it. So the toolchain
+  doctor's column-aligned report and the QScintilla-less fallback editor were
+  both rendering in **Inter**. Both now set a widget-level sheet, the only
+  thing that outranks the app sheet — new `theme.mono_font_css()`, with the
+  measurement written down where the next reader will need it.
+- Resolution is one chain: `codeEditor.theme.editor_font` delegates to
+  `frontEnd.widgets.mono_family()` (its local `_FONT_PREFS` stays as the
+  fallback for a `codeEditor` imported without `frontEnd`), so the QScintilla
+  editor, the plain editor, the doctor and the QSS consoles land on the same
+  face. That adopts `mono_family` per §3.2/§C6 instead of deleting it, and it
+  head-aligns the resolver with what the sheets DECLARE (`JetBrains Mono`,
+  `Cascadia Mono`, `Consolas`). Consequence worth recording: the code editor's
+  first preference moves from Cascadia *Code* to Cascadia *Mono*, i.e. no
+  ligatures — the declared stack wins over an undeclared local preference.
+  `mono_family` also stopped caching its failure: before a QGuiApplication
+  exists `families()` is empty, and caching that pinned every later caller to
+  the generic.
+
+**C7 — the About dialog tracks its content.** `setFixedSize(440, 500)` →
+`setMinimumSize` + `adjustSize()` after the content exists. `build_qss` scales
+every px metric by the zoom preference, so at 150–200% the type grew inside a
+frame that could not: the credits clipped. `pc7_about_grows_with_the_zoom_level`
+builds the real dialog at 100% and 200% (patching `exec`, not reimplementing
+the dialog) and asserts the frame is at least its own size hint. The rest of
+C7 is deliberately not done, per the finding: text-driven surfaces follow font
+metrics already, and full zoom propagation into local sheets is not worth the
+complexity.
+
+**Not done in S4, still open:** all of P3, §C1's `theme_utils`/`recolor` half,
+§C3, §C4, §C6's bundling question, and the remainder of §C7. Two findings this
+session *created* rather than closed, both recorded above: the latent
+MainView/`apply_theme` access violation (pre-existing, now reproducible on
+demand) and — still, from S2 — the missing focus ring on a keyboard-focused
+Welcome tile.
+
+---
+
 ## Verification checklist for the fixing session
 
 1. `pytest src/frontEnd/tests src/ngspiceSimulation/tests/test_plot_window_theme.py -q` green.

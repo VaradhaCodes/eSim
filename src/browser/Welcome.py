@@ -10,9 +10,11 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 import os
 
 try:
-    from frontEnd.widgets import GradientLabel
-except Exception:  # pragma: no cover
-    GradientLabel = None
+    from frontEnd.elevation import elevate
+    from frontEnd.widgets import HoverSurfaceMixin, accent_color
+except Exception:  # pragma: no cover - flat sys.path (script / harness run)
+    from elevation import elevate
+    from widgets import HoverSurfaceMixin, accent_color
 
 
 # Repo root: src/browser/Welcome.py -> ../.. -> repo root, where images/ lives.
@@ -52,62 +54,12 @@ def _rounded_pixmap(path: str, size: int, radius_ratio: float = 0.18) -> QtGui.Q
     return canvas
 
 
-# --------------------------------------------------------------------- hover mixin
-class HoverSurfaceMixin:
-    def _init_hover_anim(self):
-        self._hover_progress = 0.0
-        self._hover_anim = QtCore.QPropertyAnimation(self, b"hoverProgress", self)
-        self._hover_anim.setDuration(180)
-        self._hover_anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
-
-    def getHoverProgress(self):
-        return self._hover_progress
-
-    def setHoverProgress(self, value):
-        self._hover_progress = float(value)
-        self.update()
-
-        eff = self.graphicsEffect()
-        if isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
-            dark = self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
-
-            # Base shadow vs Glow shadow
-            base_a = 48
-            if dark:
-                glow_c = QtGui.QColor(83, 215, 255, 160)
-            else:
-                glow_c = QtGui.QColor(0, 119, 168, 120)
-
-            r = int(0 + (glow_c.red() - 0) * value)
-            g = int(0 + (glow_c.green() - 0) * value)
-            b = int(0 + (glow_c.blue() - 0) * value)
-            a = int(base_a + (glow_c.alpha() - base_a) * value)
-
-            eff.setColor(QtGui.QColor(r, g, b, a))
-            eff.setBlurRadius(26 + int(20 * value))
-            eff.setOffset(0, 6 - int(6 * value))
-
-    hoverProgress = QtCore.pyqtProperty(float, fget=getHoverProgress, fset=setHoverProgress)
-
-    def enterEvent(self, event):
-        self._hover_anim.stop()
-        self._hover_anim.setStartValue(self._hover_progress)
-        self._hover_anim.setEndValue(1.0)
-        self._hover_anim.start()
-        if hasattr(super(), 'enterEvent'):
-            super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover_anim.stop()
-        self._hover_anim.setStartValue(self._hover_progress)
-        self._hover_anim.setEndValue(0.0)
-        self._hover_anim.start()
-        if hasattr(super(), 'leaveEvent'):
-            super().leaveEvent(event)
-
-
 # --------------------------------------------------------------------- card
 class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
+    """A tool tile. Hover is painted here and ONLY here — the QSS
+    ``QFrame#welcomeCard:hover`` rule was deleted in S2 because the two
+    highlight systems were stacking (UI_AUDIT §2.2)."""
+
     def __init__(
         self,
         name: str,
@@ -168,8 +120,10 @@ class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
             return
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        color = QtGui.QColor(83, 215, 255, int(42 * self._hover_progress))
-        painter.setBrush(color)
+        # The wash is the theme's accent, not dark-theme cyan: on the light
+        # sheet this tile is white, and #53D7FF over white is a different
+        # brand colour than the one the rest of the light UI paints.
+        painter.setBrush(accent_color(self, int(42 * self._hover_progress)))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 16, 16)
 
@@ -287,11 +241,11 @@ class HeroBanner(QtWidgets.QFrame):
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect()
         dark = self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
-        accent = QtGui.QColor("#53D7FF" if dark else "#0077A8")
-        violet = QtGui.QColor("#9B7CFF" if dark else "#6D5DF6")
+        # Light needs the weaker wash: the same alpha that reads as a glow on
+        # #050812 reads as a stain on #F3F7FC.
+        accent = accent_color(self, 64 if dark else 34, "accent")
+        violet = accent_color(self, 54 if dark else 28, "accent_2")
         orb = QtGui.QRadialGradient(QtCore.QPointF(rect.right() - 40, rect.top() + 30), max(rect.width(), rect.height()) * 0.65)
-        accent.setAlpha(64 if dark else 34)
-        violet.setAlpha(54 if dark else 28)
         orb.setColorAt(0.0, accent)
         orb.setColorAt(0.45, violet)
         orb.setColorAt(1.0, QtCore.Qt.GlobalColor.transparent)
@@ -320,6 +274,9 @@ class Welcome(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
+        # Tiles are elevated on first show, not here — see _elevate_later.
+        self._pending_elevation = []
+
         # Outer container that scrolls so smaller docks still work
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -342,8 +299,8 @@ class Welcome(QtWidgets.QWidget):
 
         # ---- Hero ----
         hero = HeroBanner()
-        self._apply_tile_shadow(hero, blur=38, y=10, alpha=68)
         inner_layout.addWidget(hero)
+        self._elevate_later(hero, "e3")
         inner_layout.addSpacing(6)
 
         # ---- Quick-start actions ----
@@ -366,8 +323,8 @@ class Welcome(QtWidgets.QWidget):
                 attr,
                 self.trigger_action,
             )
-            self._apply_tile_shadow(card, blur=26, y=6, alpha=48)
             quick.addWidget(card, 0, n)
+            self._elevate_later(card, ToolCard.REST_LEVEL)
             quick.setColumnStretch(n, 1)
         inner_layout.addLayout(quick)
 
@@ -404,22 +361,33 @@ class Welcome(QtWidgets.QWidget):
                 attr,
                 self.trigger_action,
             )
-            self._apply_tile_shadow(card, blur=26, y=6, alpha=48)
             grid.addWidget(card, row, col)
+            self._elevate_later(card, ToolCard.REST_LEVEL)
             grid.setColumnStretch(col, 1)
 
         inner_layout.addLayout(grid)
 
         inner_layout.addStretch(1)
 
-    @staticmethod
-    def _apply_tile_shadow(widget, blur=28, y=6, alpha=64):
-        """Apply a soft drop shadow so the tile floats above the base layer."""
-        eff = QtWidgets.QGraphicsDropShadowEffect(widget)
-        eff.setBlurRadius(blur)
-        eff.setOffset(0, y)
-        eff.setColor(QtGui.QColor(0, 0, 0, alpha))
-        widget.setGraphicsEffect(eff)
+    def _elevate_later(self, widget, level):
+        """Queue a tile for elevation on first show.
+
+        Elevating during __init__ would have to ask a half-built, unshown
+        widget which theme it is in — and reading a palette on this path is
+        also what tips a latent fault in the style repolish (see showEvent).
+        Deferring is the more correct answer anyway: at first show the page is
+        parented, polished and carries the theme it will actually be seen in.
+        """
+        self._pending_elevation.append((widget, level))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # One-shot: the queue empties, so a hide/show does not re-elevate.
+        # A theme change re-tints these through elevation.retint(), driven by
+        # apply_theme's effect sweep — not from here.
+        pending, self._pending_elevation = self._pending_elevation, []
+        for widget, level in pending:
+            elevate(widget, level)
 
     # ------------------------------------------------------------------ dispatch
     def trigger_action(self, attr_name):

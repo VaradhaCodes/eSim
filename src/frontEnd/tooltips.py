@@ -11,9 +11,16 @@ shadow. Install once via :func:`install_tooltips`; an app-level event filter
 then intercepts every ``QEvent.ToolTip``, suppresses the native tip and shows
 ours instead.
 
-No project imports — safe to import in headless contexts.
+Imports nothing beyond the design system itself (``tokens`` is pure values,
+``elevation`` is that plus PyQt) — safe to import in headless contexts.
 """
 from PyQt6 import QtCore, QtGui, QtWidgets
+
+try:
+    from frontEnd import elevation, tokens
+except Exception:  # pragma: no cover - import when run as a script
+    import elevation
+    import tokens
 
 
 def _is_dark(app):
@@ -33,7 +40,7 @@ def _tip_colors(app):
     dark = _is_dark(app)
     acc = app.palette().color(QtGui.QPalette.ColorRole.Highlight)
     if not acc.isValid():
-        acc = QtGui.QColor("#53D7FF" if dark else "#0077A8")
+        acc = QtGui.QColor(tokens.theme(dark)["accent"])
     bg = "rgba(13,23,40,0.98)" if dark else "rgba(16,27,46,0.98)"
     text = "#EAF3FF"
     border = "rgba(%d,%d,%d,0.42)" % (acc.red(), acc.green(), acc.blue())
@@ -48,7 +55,12 @@ class AuroraToolTip(QtWidgets.QWidget):
     is the inner ``QFrame`` whose rounded corners are genuine (the window is
     translucent, so its own square corners are invisible)."""
 
-    _PAD = 16  # transparent margin around the card for the shadow blur
+    # Transparent margin around the card for the shadow blur. It must clear
+    # e3's reach — half the blur radius plus the downward offset, 34/2 + 10 —
+    # or the shadow is clipped square by the window edge, which is the exact
+    # artefact this widget exists to avoid. _place() subtracts the pad again,
+    # so growing it does not move the visible card.
+    _PAD = 28
 
     def __init__(self):
         super().__init__(None)
@@ -82,11 +94,10 @@ class AuroraToolTip(QtWidgets.QWidget):
         outer.setContentsMargins(self._PAD, self._PAD, self._PAD, self._PAD)
         outer.addWidget(self._card)
 
-        shadow = QtWidgets.QGraphicsDropShadowEffect(self._card)
-        shadow.setBlurRadius(28)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QtGui.QColor(0, 0, 0, 160))
-        self._card.setGraphicsEffect(shadow)
+        # Depth comes from the elevation scale (e3, the floating-chrome step);
+        # re-applied on every show_text so a theme toggle between two tips
+        # re-tints it — this window is built once and reused for the session.
+        elevation.elevate(self._card, "e3")
 
         self._hide_timer = QtCore.QTimer(self)
         self._hide_timer.setSingleShot(True)
@@ -103,6 +114,8 @@ class AuroraToolTip(QtWidgets.QWidget):
             "background:transparent;border:none;" % fg
         )
         self._label.setText(text)
+        # Re-elevate: the card outlives every theme change in the session.
+        elevation.elevate(self._card, "e3")
         self.adjustSize()
         self._place(global_pos)
         self.show()

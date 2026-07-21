@@ -3,6 +3,12 @@ import sys
 import weakref
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+try:
+    from frontEnd import elevation, tokens
+except Exception:  # pragma: no cover - import when run as a script
+    import elevation
+    import tokens
+
 # Motion (button glows) is ON everywhere, Windows included. What made it a
 # structural drag on Windows was not the glow itself but that EVERY button
 # carried a permanent QGraphicsDropShadowEffect — Qt renders each one to an
@@ -61,29 +67,43 @@ def is_dark_widget(widget):
 def accent_qcolor(widget):
     c = widget.palette().color(QtGui.QPalette.ColorRole.Highlight)
     if not c.isValid():
-        c = QtGui.QColor("#53D7FF" if is_dark_widget(widget) else "#0077A8")
+        c = QtGui.QColor(tokens.theme(is_dark_widget(widget))["accent"])
     return c
 
 
 def set_shadow(widget, blur=24, x=0, y=8, alpha=70, color=None):
+    """The low-level shadow primitive. Prefer ``elevation.elevate`` for a
+    named step on the scale; this stays for the callers that animate blur and
+    alpha frame by frame.
+
+    ``color`` defaults to the ACTIVE THEME's shadow tint, not black: light mode
+    tints it blue-grey so depth reads as ambient occlusion, where a black
+    smudge on the #F3F7FC window just reads as dirt (or, at these alphas, as
+    nothing at all).
+    """
     eff = widget.graphicsEffect()
     if not isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
         eff = QtWidgets.QGraphicsDropShadowEffect(widget)
         widget.setGraphicsEffect(eff)
     eff.setBlurRadius(blur)
     eff.setOffset(x, y)
-    c = QtGui.QColor(color) if color else QtGui.QColor(0, 0, 0)
+    if color:
+        c = QtGui.QColor(color)
+    else:
+        c = QtGui.QColor(*tokens.theme(is_dark_widget(widget))["shadow_rgb"])
     c.setAlpha(alpha)
     eff.setColor(c)
     return eff
 
 
-def apply_panel_depth(widget, blur=28, y=8, alpha=76):
-    return set_shadow(widget, blur=blur, y=y, alpha=alpha)
+def apply_panel_depth(widget):
+    """A card/panel floating on the window — elevation ``e2``."""
+    return elevation.elevate(widget, "e2")
 
 
 def apply_popup_depth(widget):
-    return set_shadow(widget, blur=42, y=14, alpha=128)
+    """A dialog or message box over the app — elevation ``e4``."""
+    return elevation.elevate(widget, "e4")
 
 
 def apply_accent_glow(widget, blur=22, alpha=74):
@@ -649,27 +669,23 @@ def apply_toolbar_depth(window):
     shadow at the joint, hiding the seam. The left rail's own shadow is
     pushed slightly DOWN (y=6) so its blur does not bleed upward into
     the corner.
+
+    Both bars sit at elevation ``e3`` (the dock/toolbar step) — only the
+    DIRECTION is per-bar, which is why this passes an ``offset`` and nothing
+    else: blur, alpha and the theme's shadow tint come from the scale.
     """
-    specs = {
-        "topToolbar": (34, 0, 5, 82),
-        "leftToolBar": (24, 4, 6, 72),
+    offsets = {
+        "topToolbar": (0, 5),
+        "leftToolBar": (4, 6),
     }
-    for name, (blur, x, y, alpha) in specs.items():
+    for name, offset in offsets.items():
         tb = window.findChild(QtWidgets.QToolBar, name)
         if not tb:
             continue
-        eff = QtWidgets.QGraphicsDropShadowEffect(tb)
-        eff.setBlurRadius(blur)
-        eff.setOffset(x, y)
-        eff.setColor(QtGui.QColor(0, 0, 0, alpha))
-        tb.setGraphicsEffect(eff)
+        elevation.elevate(tb, "e3", offset=offset)
 
 
 def install_menu_depth(root):
     """Pre-install depth shadows on menu bars for consistent 3D presence."""
     for menu in root.findChildren(QtWidgets.QMenu):
-        eff = QtWidgets.QGraphicsDropShadowEffect(menu)
-        eff.setBlurRadius(34)
-        eff.setOffset(0, 12)
-        eff.setColor(QtGui.QColor(0, 0, 0, 120))
-        menu.setGraphicsEffect(eff)
+        elevation.elevate(menu, "e4")

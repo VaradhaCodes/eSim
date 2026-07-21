@@ -11,7 +11,6 @@ TEXT_SELECTABLE = QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
 WIN_MAX = QtCore.Qt.WindowType.WindowMaximizeButtonHint
 WIN_MIN = QtCore.Qt.WindowType.WindowMinimizeButtonHint
 ORIENT_HORIZ = QtCore.Qt.Orientation.Horizontal
-FONT_BOLD = QtGui.QFont.Weight.Bold
 TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
 TOOLBTN_INSTANT = QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
 
@@ -561,7 +560,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         
         lbl_sidebar = QtWidgets.QLabel("Module Hierarchy")
         lbl_sidebar.setObjectName("verilogSidebarTitle")
-        lbl_sidebar.setFont(QtGui.QFont("Segoe UI", 10, FONT_BOLD))
+        # No setFont: QLabel#verilogSidebarTitle already carries the size,
+        # weight, uppercase transform and tracking in both sheets. The old
+        # QFont("Segoe UI", 10) was Windows-only -- it silently fell back to
+        # something else on Linux and beat the sheet everywhere (§2.9).
         sidebar_layout.addWidget(lbl_sidebar)
         
         self.btn_auto_detect = QtWidgets.QPushButton("Auto-Detect")
@@ -823,10 +825,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console = ConsoleEdit()
         self.console.setReadOnly(True)
         self.console.setPlaceholderText("Console logs will appear here...\nDouble-click a syntax error (e.g. design.v:5: error) to jump directly to the line.")
-        self.console.setFont(QtGui.QFont("Consolas", 11))
         self.console.error_clicked.connect(self.jump_to_error)
         # Aurora styles the console via #verilogConsole (and #verilogConsoleError
-        # for the error state, toggled in _set_console_error). No inline sheet,
+        # for the error state, toggled in _set_console_error). No inline sheet
+        # and no setFont -- both sheets declare the mono stack and the size on
+        # that selector, and a widget font set here would beat them (§2.9) --
         # so it tracks dark/light theme switches.
         self.console.setObjectName("verilogConsole")
         self.console_tabs.addTab(self.console, "Console Output")
@@ -863,8 +866,9 @@ class VerilogVerifier(QtWidgets.QWidget):
                 install_tab_kinetics, install_context_menu_motion)
             # Static panel depth is always on (matches the design: only the
             # animated glow / kinetics are perf-gated behind the motion pref).
+            # Depth is the elevation scale's e2 step now — no local blur/alpha.
             for w in (self.hierarchy_list, self.editor_tabs, self.console_tabs):
-                apply_panel_depth(w, blur=28, y=8, alpha=82)
+                apply_panel_depth(w)
             if motion_enabled():
                 install_button_motion(self)
                 install_tab_kinetics(self)

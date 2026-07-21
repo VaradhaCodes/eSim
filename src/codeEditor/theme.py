@@ -79,6 +79,9 @@ CURRENT_INDICATOR = 9
 #: stable Scintilla message id (lexer property setter)
 _SCI_SETPROPERTY = getattr(QsciScintilla, "SCI_SETPROPERTY", 4004)
 
+#: Local fallback chain, used only when the frontEnd package is not importable
+#: (codeEditor opened standalone). The app-wide resolver is
+#: ``frontEnd.widgets.mono_family`` — see editor_font().
 _FONT_PREFS = [
     "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Fira Code",
     "Consolas", "Menlo", "DejaVu Sans Mono", "Liberation Mono",
@@ -87,13 +90,41 @@ _FONT_PREFS = [
 
 
 def editor_font(size=11):
-    """Best available monospace font."""
-    available = set(QFontDatabase.families())
-    family = next((f for f in _FONT_PREFS if f in available), "Monospace")
+    """Best available monospace font.
+
+    Resolved through ``frontEnd.widgets.mono_family()`` so the QScintilla
+    editor, the plain-text fallback editor, the toolchain report and the
+    QSS-styled consoles all land on the SAME face (UI_AUDIT §2.9 / §C6) —
+    previously each carried its own chain or its own Windows-only literal, so
+    one machine could show four different monospace fonts.
+    """
+    family = None
+    try:
+        from frontEnd.widgets import mono_family
+        family = mono_family()
+    except Exception:
+        family = None
+    if not family or family == "monospace":
+        available = set(QFontDatabase.families())
+        family = next((f for f in _FONT_PREFS if f in available), "Monospace")
     font = QFont(family, size)
     font.setStyleHint(QFont.StyleHint.Monospace)
     font.setFixedPitch(True)
     return font
+
+
+def mono_font_css(font=None):
+    """``font-family``/``font-size`` declarations for *font*, as QSS.
+
+    A widget-level sheet is the ONLY way to hold a QSS-styled text view on the
+    monospace face: eSim installs an app-wide stylesheet whose ``QWidget`` rule
+    names the UI font, and the app sheet beats ``setFont()`` for every property
+    it declares — measured, not assumed. Without this, a plain QPlainTextEdit
+    asked to be monospace still rendered in Inter (UI_AUDIT §2.9).
+    """
+    f = font or editor_font()
+    size = "%dpt" % f.pointSize() if f.pointSize() > 0 else "%dpx" % f.pixelSize()
+    return 'font-family: "%s"; font-size: %s;' % (f.family(), size)
 
 
 def _mute(hex_colour, amount=0.55):

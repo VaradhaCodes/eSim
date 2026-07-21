@@ -479,7 +479,20 @@ def show_dialog(parent=None):
 
     view = QtWidgets.QPlainTextEdit(dlg)
     view.setReadOnly(True)
-    mono = QtGui.QFont('Monospace')
+    # This report is column-aligned, so the face matters. Two problems here,
+    # both UI_AUDIT §2.9: 'Monospace' is an X11 alias that resolved to a
+    # different font on every platform, AND the app-wide sheet's QWidget font
+    # rule beat this setFont outright -- the "monospace report" was rendering
+    # in the proportional UI font. A widget-level sheet is what actually wins.
+    try:
+        from codeEditor import theme as _editor_theme
+        mono = _editor_theme.editor_font(10)
+        view.setStyleSheet(_editor_theme.mono_font_css(mono))
+    except Exception:
+        # Last resort: the CSS generic, which Qt maps per platform. Naming a
+        # concrete family here is what caused the problem in the first place.
+        mono = QtGui.QFont()
+        view.setStyleSheet('font-family: monospace;')
     mono.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
     view.setFont(mono)
     lay.addWidget(view)

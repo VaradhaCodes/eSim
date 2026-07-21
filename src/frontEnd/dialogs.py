@@ -1,6 +1,11 @@
 from PyQt6 import QtWidgets, QtGui, QtCore
 import os
 
+try:
+    from frontEnd import tokens
+except Exception:  # pragma: no cover - import when run as a script
+    import tokens
+
 
 def _prepare_msg(msg, kind):
     msg.setObjectName("esimMessageBox")
@@ -109,27 +114,41 @@ ESIM_VERSION = "2.6.0"
 def _about_palette(parent):
     """Theme-aware colour set for the About surfaces. Restrained, on-brand —
     a single quiet accent, neutral chip for the (warm bronze) logo, no loud
-    full-saturation gradient."""
+    full-saturation gradient.
+
+    Every value is derived from ``tokens`` rather than hand-copied beside it
+    (UI_AUDIT §2.4): this dict used to hold ~14 literals per theme, three of
+    which had already drifted off the sheets. The SHAPE is unchanged — both
+    consumers (``show_about_dialog`` and ``PreferencesDialog._build_about_page``)
+    read the same keys.
+    """
     dark = parent.palette().color(
         QtGui.QPalette.ColorRole.Window).lightness() < 128
-    if dark:
-        return dict(
-            dark=True,
-            page="#0E1728", header="#121E33",
-            chip="#0A1220", chip_border="rgba(255,255,255,0.10)",
-            title="#F4F8FF", muted="#9FB1CC", subtle="#6C7F99",
-            accent="#53D7FF", link="#8BEAFF",
-            sep="rgba(255,255,255,0.08)",
-            pill_bg="rgba(83,215,255,0.14)", pill_fg="#8BEAFF",
-        )
+    t = tokens.theme(dark)
+    text_rgb = tokens.hex_to_rgb(t["text"])
+    acc_rgb = tokens.hex_to_rgb(t["accent"])
+
+    def rgba(rgb, a):
+        return "rgba(%d,%d,%d,%s)" % (rgb[0], rgb[1], rgb[2], a)
+
     return dict(
-        dark=False,
-        page="#FFFFFF", header="#F5F8FC",
-        chip="#FFFFFF", chip_border="rgba(20,32,51,0.12)",
-        title="#142033", muted="#5A6E89", subtle="#9AAABE",
-        accent="#0077A8", link="#0077A8",
-        sep="rgba(20,32,51,0.08)",
-        pill_bg="rgba(0,119,168,0.10)", pill_fg="#0077A8",
+        dark=dark,
+        # The card, and the band across its top, one surface step apart.
+        page=t["surface"], header=t["surface_2"],
+        # Dark drops the logo chip BELOW the card so the bronze coin sits in a
+        # well; light has nowhere lower to go than the card itself.
+        chip=t["bg_raise"] if dark else t["surface"],
+        chip_border=rgba(text_rgb, "0.12"),
+        title=t["text"], muted=t["text_muted"], subtle=t["text_subtle"],
+        accent=t["accent"],
+        # The link steps AWAY from the page: brightest accent on dark, and on
+        # light the base accent, which is already the darkest readable one
+        # (4.6:1 on #FFFFFF — accent_hi would be 3.0:1).
+        link=t["accent_hi"] if dark else t["accent"],
+        sep=rgba(text_rgb, "0.08"),
+        # Same tint, deeper on dark where a 10% wash disappears.
+        pill_bg=rgba(acc_rgb, "0.14" if dark else "0.10"),
+        pill_fg=t["accent_hi"] if dark else t["accent"],
     )
 
 
@@ -207,7 +226,11 @@ def show_about_dialog(parent):
     header (no loud gradient), correct version, product blurb and credits."""
     dlg = QtWidgets.QDialog(parent)
     dlg.setWindowTitle("About eSim")
-    dlg.setFixedSize(440, 500)
+    # Minimum, not fixed (UI_AUDIT §C7): build_qss scales every px metric by
+    # the zoom preference, so at 150% the type inside this dialog grew while a
+    # fixed 440x500 frame did not — the credits clipped. adjustSize() below,
+    # once the content exists, lets the frame track what it actually holds.
+    dlg.setMinimumSize(440, 500)
     dlg.setObjectName("aboutDialog")
 
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -256,7 +279,7 @@ def show_about_dialog(parent):
 
     org = QtWidgets.QLabel("FOSSEE, IIT Bombay")
     org.setStyleSheet(
-        f"color: {c['title']}; font-size: 14px; font-weight: 650; "
+        f"color: {c['title']}; font-size: 14px; font-weight: 700; "
         "background: transparent;")
     content_layout.addWidget(org)
 
@@ -297,4 +320,7 @@ def show_about_dialog(parent):
         except Exception:
             pass
 
+    # Grow to the content (never below the minimum above) so a zoomed sheet
+    # gets the frame it needs instead of a scrollbar-less clip.
+    dlg.adjustSize()
     dlg.exec()

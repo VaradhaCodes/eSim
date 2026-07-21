@@ -292,21 +292,30 @@ def get_preferences(user_home=None):
 
 
 def _refresh_graphics_effects(app):
-    """Invalidate cached QGraphicsEffect renders after a theme change.
+    """Invalidate cached QGraphicsEffect renders after a theme change, and
+    re-tint the ones the elevation scale owns.
 
     A QGraphicsDropShadowEffect keeps a cached pixmap of its source widget.
     A stylesheet/palette swap repaints the widget but leaves the effect cache
     stale, so the widget (e.g. a themed button) can render blank until a hover
     forces it dirty. Toggling enabled off/on re-validates the source and
     triggers an immediate repaint. Cheap: theme changes are rare.
+
+    The colour is a second, separate staleness: ``elevation.elevate`` bakes the
+    theme's shadow tint in at call time, so a toolbar elevated at startup keeps
+    a dark-theme black shadow after a switch to light — where the whole point
+    of the light track is a blue-grey ambient tint at half the alpha. This walk
+    already visits every widget, so the re-tint rides along with it.
     """
     from PyQt6 import QtWidgets
+    from frontEnd import elevation
     for tlw in app.topLevelWidgets():
         try:
             targets = [tlw] + tlw.findChildren(QtWidgets.QWidget)
             for w in targets:
                 eff = w.graphicsEffect()
                 if eff is not None and eff.isEnabled():
+                    elevation.retint(w)
                     eff.setEnabled(False)
                     eff.setEnabled(True)
             tlw.update()

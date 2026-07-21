@@ -24,6 +24,11 @@
 # =========================================================================
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+try:
+    from frontEnd import tokens
+except Exception:  # pragma: no cover - flat sys.path (script / harness run)
+    import tokens
+
 from . import Maker
 from . import NgVeri
 from .DesignBus import DesignBus
@@ -238,34 +243,46 @@ class FlowNavigator(QtWidgets.QWidget):
         return False
 
     def _pill_tokens(self):
-        """Color set for the flow chrome, keyed to the active theme. Values
-        are Aurora's own tokens (frontEnd/tokens.py) so the toggle/tabs read as
-        part of the same design language as the rest of eSim — cyan accent in
-        place of the old standalone brand orange."""
-        if self._is_dark():
-            return {
-                "bar_bg": "#0A1020", "bar_border": "#1D2B45",
-                "seg_bg": "#0E1728", "seg_border": "#1D2B45",
-                "seg_fg": "#9FB1CC", "seg_hover_fg": "#F4F8FF",
-                "accent": "#53D7FF", "accent_fg": "#03121C",
-                "stage_fg": "#9FB1CC", "stage_hover_fg": "#F4F8FF",
-                "stage_hover_bg": "#121E33",
-                "stage_checked_fg": "#53D7FF",
-                "stage_checked_bg": "rgba(83,215,255,0.18)",
-                "reload_bg": "rgba(250,204,21,0.10)",
-                "reload_border": "#FACC15", "reload_fg": "#FACC15",
-            }
+        """Color set for the flow chrome, keyed to the active theme.
+
+        Every value is READ from Aurora's tokens (frontEnd/tokens.py) — the
+        previous version claimed the same thing while hand-copying the hexes,
+        so a palette retune drifted this bar silently (UI_AUDIT §2.3). Four
+        mappings are deliberately asymmetric and each is called out below;
+        everything else is the same token in both themes.
+        """
+        dark = self._is_dark()
+        t = tokens.theme(dark)
+        acc = tokens.hex_to_rgb(t["accent"])
+        warn = tokens.hex_to_rgb(t["warning"])
+
+        def rgba(rgb, a):
+            return "rgba(%d,%d,%d,%s)" % (rgb[0], rgb[1], rgb[2], a)
+
         return {
-            "bar_bg": "#F3F7FC", "bar_border": "#DCE6F1",
-            "seg_bg": "#FFFFFF", "seg_border": "#DCE6F1",
-            "seg_fg": "#5A6E89", "seg_hover_fg": "#142033",
-            "accent": "#0077A8", "accent_fg": "#FFFFFF",
-            "stage_fg": "#5A6E89", "stage_hover_fg": "#142033",
-            "stage_hover_bg": "#EAF1F9",
-            "stage_checked_fg": "#0077A8",
-            "stage_checked_bg": "rgba(0,119,168,0.13)",
-            "reload_bg": "rgba(217,119,6,0.10)",
-            "reload_border": "#D97706", "reload_fg": "#92400E",
+            # The strip itself. Dark lifts it off the window (bg_raise); light
+            # sits it FLAT on the window (bg) — light chrome strips read as
+            # part of the page, and lifting it here shifts the whole header.
+            "bar_bg": t["bg_raise"] if dark else t["bg"],
+            "bar_border": t["stroke"],
+            "seg_bg": t["surface"], "seg_border": t["stroke"],
+            "seg_fg": t["text_muted"], "seg_hover_fg": t["text"],
+            "accent": t["accent"], "accent_fg": t["text_invert"],
+            "stage_fg": t["text_muted"], "stage_hover_fg": t["text"],
+            # Hover moves one step AWAY from the strip in the direction of
+            # contrast: dark lifts to surface_2, light sinks to bg_sunken —
+            # which is exactly what the light sheet's own hover rules paint.
+            "stage_hover_bg": t["surface_2"] if dark else t["bg_sunken"],
+            "stage_checked_fg": t["accent"],
+            # The checked tint needs more alpha on dark to read at all.
+            "stage_checked_bg": rgba(acc, "0.18" if dark else "0.13"),
+            "reload_bg": rgba(warn, "0.10"),
+            "reload_border": t["warning"],
+            # Dark can put warning-yellow text on a dark wash; light cannot —
+            # #D97706 on its own 10% tint is 3.2:1. Amber-800 is 5.9:1, the
+            # same call STYLE_LIGHT's InfoBar makes (S2), and the one value
+            # here that is not a token.
+            "reload_fg": t["warning"] if dark else "#92400E",
         }
 
     def _apply_pill_theme(self):
@@ -533,7 +550,11 @@ class FlowNavigator(QtWidgets.QWidget):
         lay.setContentsMargins(24, 24, 24, 24)
         body = message
         if detail:
-            body += ("<br/><br/><small style='color:#8a939b'>Details: " +
+            # Inline HTML cannot inherit a QSS colour, so the tone has to be
+            # named here -- from the palette, not from a grey that belongs to
+            # neither theme (it was #8A939B, 3.0:1 on the light page).
+            muted = tokens.theme(self._is_dark())["text_muted"]
+            body += ("<br/><br/><small style='color:%s'>Details: " % muted +
                      detail + "</small>")
         label = QtWidgets.QLabel(body)
         label.setWordWrap(True)

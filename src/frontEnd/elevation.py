@@ -14,6 +14,10 @@ try:
 except Exception:  # pragma: no cover - import when run as a script
     import tokens
 
+#: Stamped on every widget ``elevate`` touches, so a theme change can find
+#: what this module painted and re-tint it (see ``retint``).
+LEVEL_PROP = "_esim_elevation"
+
 # level: (blur, dx, dy, alpha_dark, alpha_light)
 _SCALE = {
     "e1": (16, 0, 3,  60,  30),   # resting buttons / list rows
@@ -29,22 +33,19 @@ def is_dark(widget) -> bool:
         QtGui.QPalette.ColorRole.Window).lightness() < 128
 
 
-def elevate(widget, level="e2", tint=None):
-    """Apply (or update) a layered drop shadow at a named elevation.
+def spec(level="e2"):
+    """The raw ``(blur, dx, dy, alpha_dark, alpha_light)`` row for a level."""
+    return _SCALE.get(level, _SCALE["e2"])
 
-    ``tint`` optionally colours the shadow with an accent for a 'glow'.
-    Light mode otherwise uses a blue-grey tinted shadow (premium ambient
-    occlusion) rather than pure black.
+
+def shadow_color(widget, level="e2", tint=None) -> QtGui.QColor:
+    """Exactly the colour ``elevate`` would paint on ``widget`` at ``level``.
+
+    Exposed so a painter that animates its own shadow (the Welcome tiles fade
+    theirs out into an accent glow) can start from the elevation the widget
+    rests at, instead of re-inventing a black one beside this table.
     """
-    if level not in _SCALE:
-        level = "e2"
-    blur, dx, dy, ad, al = _SCALE[level]
-    eff = widget.graphicsEffect()
-    if not isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
-        eff = QtWidgets.QGraphicsDropShadowEffect(widget)
-        widget.setGraphicsEffect(eff)
-    eff.setBlurRadius(blur)
-    eff.setOffset(dx, dy)
+    _, _, _, ad, al = spec(level)
     dark = is_dark(widget)
     if tint:
         c = QtGui.QColor(tint)
@@ -52,8 +53,56 @@ def elevate(widget, level="e2", tint=None):
         r, g, b = tokens.theme(dark)["shadow_rgb"]
         c = QtGui.QColor(r, g, b)
     c.setAlpha(ad if dark else al)
-    eff.setColor(c)
+    return c
+
+
+def elevate(widget, level="e2", tint=None, offset=None):
+    """Apply (or update) a layered drop shadow at a named elevation.
+
+    ``tint`` optionally colours the shadow with an accent for a 'glow'.
+    Light mode otherwise uses a blue-grey tinted shadow (premium ambient
+    occlusion) rather than pure black.
+
+    ``offset`` overrides only the direction ``(dx, dy)``, keeping the level's
+    blur, alpha and colour. It exists for surfaces whose shadow must be aimed
+    rather than dropped — the two toolbars meeting at the inverted-L joint are
+    the only case (see ``motion.apply_toolbar_depth``).
+    """
+    blur, dx, dy, _, _ = spec(level)
+    if offset is not None:
+        dx, dy = offset
+    eff = widget.graphicsEffect()
+    if not isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
+        eff = QtWidgets.QGraphicsDropShadowEffect(widget)
+        widget.setGraphicsEffect(eff)
+    eff.setBlurRadius(blur)
+    eff.setOffset(dx, dy)
+    eff.setColor(shadow_color(widget, level, tint))
+    # Only untinted shadows are tagged: a tint is a caller's own colour and
+    # retint() must not overwrite it.
+    if not tint:
+        widget.setProperty(LEVEL_PROP, level)
     return eff
+
+
+def retint(widget):
+    """Re-colour ``widget``'s shadow for the theme it is in NOW, if it was
+    elevated by this module. Returns True when a shadow was re-coloured.
+
+    ``elevate`` bakes the colour at call time, so without this every shadow
+    keeps its old theme's tint until the widget happens to be re-elevated —
+    which for a toolbar or a project tree is 'never'. The level is read back
+    off the widget rather than tracked in a registry so a destroyed widget
+    cannot strand an entry.
+    """
+    level = widget.property(LEVEL_PROP)
+    if not level:
+        return False
+    eff = widget.graphicsEffect()
+    if not isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
+        return False
+    eff.setColor(shadow_color(widget, level))
+    return True
 
 
 def clear(widget):

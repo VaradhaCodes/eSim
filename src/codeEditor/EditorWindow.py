@@ -288,11 +288,14 @@ class EditorWindow(QtWidgets.QMainWindow):
         # Find/replace is a floating overlay pinned to the editor's
         # top-right (VS Code style), not a row that steals layout space.
         self.find_bar = FindBar(central, host=self)
-        shadow = QtWidgets.QGraphicsDropShadowEffect(self.find_bar)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QtGui.QColor(0, 0, 0, 70))
-        self.find_bar.setGraphicsEffect(shadow)
+        # Floating overlay -> elevation e2. Guarded because this window is the
+        # one piece of eSim that can be opened as a standalone editor; if the
+        # frontEnd package is not importable the bar simply has no shadow.
+        try:
+            from frontEnd.elevation import elevate
+            elevate(self.find_bar, "e2")
+        except Exception:
+            pass
 
         self._build_menu()
         self._build_status_bar()

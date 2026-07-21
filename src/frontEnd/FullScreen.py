@@ -19,18 +19,28 @@
 # =========================================================================
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 
+try:
+    from frontEnd.icon_paths import dock_back_icon, fullscreen_icon
+except Exception:  # pragma: no cover - flat sys.path (script / harness run)
+    from icon_paths import dock_back_icon, fullscreen_icon
+
 
 class FullScreenToggle(QtWidgets.QToolButton):
     """Per-panel fullscreen toggle. Drop one into any panel's header; it finds
     its host QDockWidget at click time, so no wiring is needed."""
+
+    _ICON_PX = 14
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._win = None
         self._dock = None
         self._content = None
+        self._full = False
+        self._icon_refresh_pending = False
         self.setAutoRaise(True)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setIconSize(QtCore.QSize(self._ICON_PX, self._ICON_PX))
         self.setStyleSheet(
             "QToolButton { border:none; background:transparent; padding:2px 6px; }")
         self._set_state(full=False)
@@ -38,11 +48,46 @@ class FullScreenToggle(QtWidgets.QToolButton):
 
     # ------------------------------------------------------------------ #
     def _set_state(self, full):
-        std = QtWidgets.QStyle.StandardPixmap
-        self.setIcon(self.style().standardIcon(
-            std.SP_TitleBarNormalButton if full else std.SP_TitleBarMaxButton))
+        # eSim's own SVG pair, not SP_TitleBarMaxButton/SP_TitleBarNormalButton:
+        # the standard pixmaps resolve to the platform's title-bar glyphs, so
+        # this button was a Windows chrome square on one OS and an icon-theme
+        # arrow on another -- exactly what icon_paths exists to end.
+        self._full = bool(full)
+        self.setIcon(dock_back_icon(self._ICON_PX) if full
+                     else fullscreen_icon(self._ICON_PX))
         self.setToolTip("Exit fullscreen  (Esc)" if full
                         else "Fullscreen this panel  (Esc to exit)")
+
+    def changeEvent(self, event):
+        # icon_paths bakes the theme's foreground INTO the rasterised SVG, so
+        # an icon built under dark keeps painting near-white after a switch to
+        # light. Re-render on the palette change; the state is unaffected.
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            self._schedule_icon_refresh()
+
+    def _schedule_icon_refresh(self):
+        """Re-render on the NEXT tick, never inside the handler.
+
+        PaletteChange is delivered from inside the style polish that
+        setStyleSheet/setPalette is running. Rasterising an SVG and calling
+        setIcon() there re-enters that polish, which re-delivers PaletteChange
+        -- with one of these toggles in every docked panel that is unbounded
+        recursion, i.e. a C-stack overflow (an access violation on Windows),
+        not a slow repaint. Deferring also coalesces the burst of events a
+        single theme toggle produces into one re-render.
+        """
+        if self._icon_refresh_pending:
+            return
+        self._icon_refresh_pending = True
+        QtCore.QTimer.singleShot(0, self._refresh_icon)
+
+    def _refresh_icon(self):
+        self._icon_refresh_pending = False
+        # The panel can be torn down between the event and the tick.
+        if sip.isdeleted(self):
+            return
+        self._set_state(self._full)
 
     def _resolve_host(self):
         """Walk up to the enclosing QDockWidget; the widget just beneath it is

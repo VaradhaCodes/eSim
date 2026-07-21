@@ -8,9 +8,9 @@ dependency.  Pure PyQt6 -- no Qsci import.
 import os
 import tempfile
 
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
-from codeEditor import lexers
+from codeEditor import lexers, theme
 
 
 class PlainEditor(QtWidgets.QPlainTextEdit):
@@ -23,9 +23,18 @@ class PlainEditor(QtWidgets.QPlainTextEdit):
         super().__init__(parent)
         self.file_path = file_path
         self.encoding = "utf-8"
-        font = QtGui.QFont("Monospace", 11)
-        font.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+        # Same resolver as the QScintilla editor this stands in for, so the
+        # fallback is a different WIDGET, not a different typeface. "Monospace"
+        # was an X11 alias that resolved per-platform (UI_AUDIT §2.9).
+        #
+        # The sheet is not belt-and-braces: QScintilla paints its own text and
+        # so honours setFont, but this is a real QWidget, and eSim's app-wide
+        # sheet styles `QWidget { font-family: ... }` — which beats setFont.
+        # Without the local sheet the fallback editor rendered code in the UI's
+        # proportional font, columns and all.
+        font = theme.editor_font(11)
         self.setFont(font)
+        self.setStyleSheet(theme.mono_font_css(font))
         with open(file_path, "r", encoding="utf-8",
                   errors="replace") as handle:
             self.setPlainText(handle.read())
