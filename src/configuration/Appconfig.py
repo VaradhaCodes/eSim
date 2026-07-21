@@ -89,6 +89,12 @@ class Appconfig:
     #: here so the full console panel can stay collapsed by default.
     statusbar = None
 
+    #: The GUI-thread reporter (a QObject) that print_* emit through once the
+    #: window is up. None in headless/test/pre-GUI runs -- print_* then write
+    #: the plain-list sink directly. Created on the GUI thread by
+    #: attach_gui_reporter(); see the M9 note there.
+    _reporter = None
+
     # class-level, shared -- seeded by load_config(). Default None so ModelicaUI
     # reading Appconfig.modelica_map_json gets None (not AttributeError) if
     # config.ini is missing the key or is unreadable on Win10.
@@ -197,33 +203,156 @@ class Appconfig:
         """Append to the log sink. Before the GUI attaches its console,
         noteArea['Note'] is a plain list (class-level, never cleared) -- bound
         it so a long pre-GUI session cannot grow it without limit. After the
-        GUI attaches, it is a QTextEdit that manages its own buffer."""
+        GUI attaches, it is a QTextEdit that manages its own buffer.
+
+        MUST run on the GUI thread once the sink is a QTextEdit -- callers reach
+        it only through _dispatch(), which marshals worker-thread calls onto the
+        GUI thread via the reporter (M9)."""
         notes = self.noteArea['Note']
-        notes.append(line)
+        try:
+            notes.append(line)
+        except RuntimeError:        # QTextEdit was destroyed (app closing)
+            return
         if isinstance(notes, list) and len(notes) > 5000:
             del notes[:1000]
 
     def print_info(self, info):
-        self._append_note('[INFO]: ' + info)
-        self._echo_status('[INFO]: ' + info)
+        self._dispatch('[INFO]: ' + info)
 
     def print_warning(self, warning):
-        self._append_note('[WARNING]: ' + warning)
-        self._echo_status('[WARNING]: ' + warning)
+        self._dispatch('[WARNING]: ' + warning)
 
     def print_error(self, error):
-        self._append_note('[ERROR]: ' + error)
-        self._echo_status('[ERROR]: ' + error)
+        self._dispatch('[ERROR]: ' + error)
+
+    def _dispatch(self, line):
+        """Route one already-tagged log line to the console panel + status bar.
+
+        The console sink is a QTextEdit and the status bar is a QStatusBar once
+        the GUI is up; touching either from a thread other than the GUI thread
+        is undefined behaviour in Qt and can corrupt state natively (M9). The
+        codebase does not print from workers today, but nothing stops a future
+        BackgroundJob fn from calling print_info -- so route through the
+        GUI-thread reporter when it exists: its signals use AutoConnection, so a
+        same-thread emit runs the slot directly (order preserved, identical to
+        the old inline path) while a worker-thread emit is queued onto the GUI
+        thread. Before the GUI attaches (and in headless/test runs it never
+        does) there is no reporter and no live widget, so write the plain-list
+        sink directly."""
+        reporter = Appconfig._reporter
+        if reporter is not None:
+            try:
+                reporter.note.emit(line)
+                reporter.status.emit(line)
+                return
+            except RuntimeError:
+                # Reporter's C++ object was torn down (QApplication gone, e.g.
+                # a stale reporter left over between test QApplications). Fall
+                # through to the direct sink rather than crash the caller.
+                Appconfig._reporter = None
+        self._append_note(line)
+        self._echo_status(line)
 
     def _echo_status(self, msg):
         """Mirror the newest log line to the status bar (if Application has
-        wired one), so the bottom console panel can stay collapsed."""
+        wired one), so the bottom console panel can stay collapsed. GUI thread
+        only once wired -- reached via _dispatch()/the reporter."""
         bar = Appconfig.statusbar
         if bar is not None:
             try:
                 bar.showMessage(' '.join(msg.split()), 0)
             except RuntimeError:        # bar was destroyed (app closing)
                 Appconfig.statusbar = None
+
+    @classmethod
+    def attach_gui_reporter(cls):
+        """Create the GUI-thread log reporter. Call once, ON THE GUI THREAD,
+        after QApplication exists (Application startup does this). Idempotent.
+
+        The reporter is a tiny QObject constructed here (on the GUI thread), so
+        it LIVES on the GUI thread -- the one place the console QTextEdit, the
+        QStatusBar and any QWidget dialog may be touched. It carries two kinds
+        of signal, both of which deliver their slot on the GUI thread:
+
+        * ``note`` / ``status`` (AutoConnection) -- M9. A same-thread emit runs
+          the slot directly (order preserved, identical to the old inline
+          print_* path); a worker-thread emit is queued onto the GUI thread.
+        * ``deferred`` (QueuedConnection, carries a callable) -- B1 + M12. It is
+          queued even for a same-thread emit, so post_to_gui() below always
+          defers: safe from a worker thread AND safe from inside a
+          paint/close/teardown handler (it cannot re-enter the event loop that
+          is already running). The excepthook posts its modal dialog through
+          this.
+
+        This is the single queued-signal error reporter the crash audit's
+        systemic note 1 asks for ('B1/B2/M9 are the same disease; one object
+        fixes the class').
+
+        Defined lazily inside the method so ``import Appconfig`` stays Qt-free
+        for the many non-GUI importers (matching this module's no-import-side-
+        effects contract)."""
+        if cls._reporter is not None:
+            return
+        from PyQt6 import QtCore
+
+        class _GuiReporter(QtCore.QObject):
+            note = QtCore.pyqtSignal(str)
+            status = QtCore.pyqtSignal(str)
+            deferred = QtCore.pyqtSignal(object)
+
+            def __init__(self):
+                super().__init__()
+                # AutoConnection (the default): same-thread emit -> direct call
+                # (keeps note-before-status ordering); cross-thread emit ->
+                # queued onto this object's (GUI) thread.
+                self.note.connect(self._on_note)
+                self.status.connect(self._on_status)
+                # QueuedConnection: ALWAYS deferred to the next GUI event-loop
+                # turn, even on the GUI thread -- that is the M12 reentrancy fix.
+                self.deferred.connect(
+                    self._on_deferred,
+                    QtCore.Qt.ConnectionType.QueuedConnection)
+
+            @QtCore.pyqtSlot(str)
+            def _on_note(self, line):
+                Appconfig()._append_note(line)
+
+            @QtCore.pyqtSlot(str)
+            def _on_status(self, msg):
+                Appconfig()._echo_status(msg)
+
+            @QtCore.pyqtSlot(object)
+            def _on_deferred(self, fn):
+                # Runs on the GUI thread, off the emitting stack. fn guards
+                # itself; a raising fn must never take the reporter down.
+                try:
+                    fn()
+                except Exception:
+                    pass
+
+        cls._reporter = _GuiReporter()
+
+    @classmethod
+    def post_to_gui(cls, fn):
+        """Queue ``fn`` (a no-arg callable) to run on the GUI thread's event
+        loop, always deferred. Returns True if it was queued, False if no GUI
+        reporter exists yet (very early startup / headless) or the reporter was
+        torn down.
+
+        This is the marshalling primitive the excepthook uses to show its error
+        dialog: PyQt6's ``QTimer.singleShot`` has no (msec, context, slot)
+        overload, so a callable cannot be posted to *another* thread's loop that
+        way -- only a signal on a GUI-thread QObject crosses threads correctly.
+        See attach_gui_reporter (the ``deferred`` signal)."""
+        reporter = cls._reporter
+        if reporter is None:
+            return False
+        try:
+            reporter.deferred.emit(fn)
+            return True
+        except RuntimeError:        # reporter C++ side gone (stale QApplication)
+            cls._reporter = None
+            return False
 
     def save_current_project(self):
         try:
