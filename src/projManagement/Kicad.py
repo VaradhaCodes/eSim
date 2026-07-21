@@ -69,6 +69,24 @@ class Kicad:
             # .kicad_sch and kicad4 .sch, independent of the folder name).
             schematic_file = main_schematic(self.projDir, self.projName)
 
+            # main_schematic returns a best-guess <stem>.kicad_sch even when
+            # nothing exists yet (projectPaths.main_schematic tail). Launching
+            # eeschema on a phantom path makes it silently open a blank/new
+            # schematic or emit its own confusing error -- either reads as the
+            # app misbehaving. Surface a clear dialog when the file is missing
+            # (project incomplete, or the .sch/.kicad_sch was moved/deleted
+            # externally) instead of shelling out to eeschema on it.
+            if not os.path.exists(schematic_file):
+                Dialogs.critical(
+                    None, "Error Message",
+                    "The schematic file for this project could not be "
+                    "found:\n" + schematic_file + "\n\nThe project may be "
+                    "incomplete, or the schematic was moved or deleted. "
+                    "Recreate or reopen the project.")
+                self.obj_appconfig.print_warning(
+                    'Schematic file not found for project ' + self.projDir)
+                return
+
             # Path is quoted so workspaces containing spaces still launch
             # (Worker runs the command through shlex.split).
             self.cmd = "eeschema " + shlex.quote(schematic_file)

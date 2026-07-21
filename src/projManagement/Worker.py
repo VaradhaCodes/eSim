@@ -156,9 +156,16 @@ class WorkerThread(QtCore.QThread):
 
     def __del__(self):
         """
-        __del__ is a called whenever garbage collection is initialised
-        Here, it waits (self.wait()) for the thread to finish executing
-        before garbage collecting it
+        __del__ is called whenever garbage collection is initialised.
+        Here it waits (bounded) for the thread to finish executing before
+        garbage collecting it.
+
+        The wait is capped at 2000 ms: an unbounded ``self.wait()`` during
+        interpreter shutdown (when a still-running child holds the thread
+        alive) could block process exit indefinitely. The retention list
+        (``worker_threads``) already keeps a live worker off the GC path, so
+        in practice this __del__ only fires on an already-finished thread and
+        returns at once; the cap is purely a shutdown-stall backstop.
 
         @params
 
@@ -166,7 +173,7 @@ class WorkerThread(QtCore.QThread):
             None
         """
         try:
-            self.wait()
+            self.wait(2000)
         except BaseException:
             pass
 
