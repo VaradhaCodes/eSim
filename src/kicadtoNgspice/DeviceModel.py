@@ -899,12 +899,12 @@ class DeviceModel(QtWidgets.QWidget):
 
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        analysisfile = open(os.path.join(projpath, filename))
-        # analysisfile = open(os.path.join(projpath, 'analysis'))
-        content = analysisfile.read()
+        # Read the netlist and close the handle immediately rather than leaking
+        # it until GC; the output file is opened at the end under a `with` too
+        # (audit R3-13).
+        with open(os.path.join(projpath, filename)) as analysisfile:
+            content = analysisfile.read()
         contentlines = content.split("\n")
-        parsedfile = open(os.path.join(projpath, filename+'.parsed.v'), 'w')
-        parsedfile.write("")
         # print("module "+filename)
         i = 1
         inputlist = []
@@ -995,9 +995,11 @@ Converter developed at FOSSEE, IIT Bombay\n")
 
         print('\n**************Generated Verilog File: ' +
               filename + '.parsed.v***************\n')
-        for j in parsedcontent:
-            print(j)
-            parsedfile.write(j+"\n")
+        parsed_path = os.path.join(projpath, filename + '.parsed.v')
+        with open(parsed_path, 'w') as parsedfile:
+            for j in parsedcontent:
+                print(j)
+                parsedfile.write(j + "\n")
         print(
             '\n*************************************\
 ************************************\n')
