@@ -112,18 +112,20 @@ ensure_tree() {
         elif [ -f "$ESIM_DIR/$MARKER" ]; then
             log "Updating the bootstrap-managed eSim tree at $ESIM_DIR"
             fetch_tree; fresh="$FETCHED_TREE"
-            # Keep the user's runtime-built NgVeri/NGHDL model XML: eSim
-            # writes it into the tree, and their symbols/models in ~/.esim
-            # would dangle without it.
+            # Keep the user's runtime-built NGHDL / NgVeri / Dual Co-sim
+            # model XML: eSim writes it into the tree, and their symbols and
+            # models in ~/.esim would dangle without it. NgVeriCosim is the
+            # source of truth for d_cosim model existence (model_teardown,
+            # NgVeri._list_models) — dropping it orphans every d_cosim model.
             keep=$(mktemp -d)
             _tmpdirs+=("$keep")
-            for d in Nghdl Ngveri; do
+            for d in Nghdl Ngveri NgVeriCosim; do
                 [ -d "$ESIM_DIR/library/modelParamXML/$d" ] \
                     && cp -a "$ESIM_DIR/library/modelParamXML/$d" "$keep/"
             done
             rm -rf "$ESIM_DIR"
             mv "$fresh" "$ESIM_DIR"
-            for d in Nghdl Ngveri; do
+            for d in Nghdl Ngveri NgVeriCosim; do
                 [ -d "$keep/$d" ] \
                     && cp -a "$keep/$d/." "$ESIM_DIR/library/modelParamXML/$d/"
             done

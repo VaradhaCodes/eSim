@@ -185,3 +185,15 @@ Do them in this order — it front-loads user-visible correctness and keeps each
 10. **M18, M19** (installer hardening/pinning) — needs a Windows rebuild to verify; do last, verify with a Full install + standard-user model-build test.
 
 Rules for the fixer: preserve the existing idioms named in the context paragraph (arg-list subprocess, `cwd=`, exit-code verdicts, atomic writes, doctor gating). Where a fix touches `kicad_symlib.py` or `model_teardown.py`, update BOTH vendored copies (`src/maker/` and `nghdl/src/`) — the drift-guard test will fail otherwise, which is by design. Never add a fix that writes to `/usr/share` at runtime or reads a hardcoded install path — every path goes through `CosimConfig` / `configuration.paths` / the config.ini files.
+
+---
+
+## FIX LOG
+
+Landed fixes, in fix-order. Each entry: what changed, why it's safe, how it was verified. Branch `fix/maker-hardening` off `fix/crash-hardening-integration`.
+
+### M5 — bootstrap.sh update path preserves NgVeriCosim (d_cosim) model XML
+- **Commit:** (this commit) — `Ubuntu/bootstrap.sh`
+- **Change:** added `NgVeriCosim` to both `for d in Nghdl Ngveri` loops in `ensure_tree` (the keep-before-`rm -rf` loop and the restore-after-`mv` loop). Widened the adjacent comment to name Dual Co-sim and why NgVeriCosim is the source of truth for d_cosim model existence.
+- **Why safe:** `library/modelParamXML/NgVeriCosim/` already ships as a tracked (empty) dir in the fresh tree, so the restore `cp -a "$keep/NgVeriCosim/." ".../NgVeriCosim/"` has an existing target — same shape as the Nghdl/Ngveri legs, no new failure mode. Purely additive to the dir list; Nghdl/Ngveri behavior unchanged.
+- **Verified:** `bash -n Ubuntu/bootstrap.sh` clean. Round-trip fixture replicating both loops verbatim: with the OLD list a seeded `NgVeriCosim/mymodel.xml` is LOST across an update; with the NEW list all three (Nghdl, Ngveri, NgVeriCosim) are KEPT.
