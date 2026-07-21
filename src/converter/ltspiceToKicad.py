@@ -25,9 +25,21 @@ class LTspiceConverter:
         # Get the base name of the file without the extension
         filename = os.path.splitext(os.path.basename(file_path))[0]
         conPath = os.path.dirname(file_path)
-        
+
+        # getsize on a path the user typed, or on a file a sync client removed
+        # between the file-dialog pick and now, raises FileNotFoundError on the
+        # GUI thread (excepthook dialog). Read the size defensively so a
+        # missing / unreadable source degrades to a clear dialog instead.
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            Dialogs.critical(
+                self.parent, "File not found",
+                "The selected file could not be read:\n\n" + str(e))
+            return
+
         # Check if the file is not empty
-        if os.path.getsize(file_path) > 0:
+        if file_size > 0:
             # Get the absolute path of the current script's directory
             script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -60,13 +72,26 @@ class LTspiceConverter:
                 workspace_directory = self.get_workspace_directory()
                 if workspace_directory:
                         print(f"Workspace directory found: {workspace_directory}")
-                        shutil.copytree(
-                            newFile,
-                            os.path.join(workspace_directory,
-                                         "LTspice_" + filename),
-                            dirs_exist_ok=True, copy_function=shutil.copy2)
-                        msg_box.setText(f"The file has been converted successfully.  Saved in {workspace_directory}.  Open the Project manually.")
-                        print("File added under the project explorer.")
+                        try:
+                            shutil.copytree(
+                                newFile,
+                                os.path.join(workspace_directory,
+                                             "LTspice_" + filename),
+                                dirs_exist_ok=True,
+                                copy_function=shutil.copy2)
+                            msg_box.setText(f"The file has been converted successfully.  Saved in {workspace_directory}.  Open the Project manually.")
+                            print("File added under the project explorer.")
+                        except OSError as e:
+                            # Conversion itself succeeded; only the copy into the
+                            # workspace failed (locked by a sync client, read-only
+                            # target, or the tree vanished). Report the copy
+                            # failure without throwing away the converted output.
+                            print("Copy to workspace failed:", e)
+                            msg_box.setIcon(QMessageBox.Icon.Warning)
+                            msg_box.setText(
+                                "Converted, but the result could not be copied "
+                                f"into the workspace:\n\n{e}\n\nCopy it manually "
+                                f"from {newFile}.")
                 else:
                         print("Workspace directory not found.")
                 result = msg_box.exec()
