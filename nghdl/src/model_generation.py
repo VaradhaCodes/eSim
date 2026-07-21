@@ -2,13 +2,32 @@ import re
 import os
 from configparser import ConfigParser
 
+# Both limits live in nghdl/src/ghdlserver/ghdlserver.h and ghdlserver.c and
+# belong to the VHDL-side server this generated model talks to:
+#   SERVER_RECV_CAP  - receive_buffer[MAX_BUF_SIZE]; one recv() per event, so a
+#                      client message longer than this is truncated.
+#   SERVER_REPLY_CAP - Data_Send builds its reply in calloc(1, 2048).
+# The generator refuses a model whose framing would exceed either, because both
+# failure modes are silent: a truncated message is parsed as a short one and the
+# co-simulation quietly computes with wrong bits.
+SERVER_RECV_CAP = 4096
+SERVER_REPLY_CAP = 2048
+
 
 class ModelGeneration:
 
-    def __init__(self, file):
+    def __init__(self, file, outdir=None):
 
         # Script starts from here
         print("Arguement is : ", file)
+        # Every generated file lands in outdir. It used to be the CWD -- eSim's
+        # launch directory -- so a read-only CWD (packaged launcher, "/" on some
+        # setups) failed on the very first write below, and importing this
+        # module's class had a file-writing side effect that made it untestable.
+        # The caller passes a tempfile.mkdtemp(); the default keeps the old
+        # behaviour for any direct user of this class.
+        self.outdir = os.path.abspath(outdir) if outdir else os.getcwd()
+        os.makedirs(self.outdir, exist_ok=True)
         self.fname = os.path.basename(file)
         # ONE canonical model stem. os.path.splitext strips only the final
         # extension ("adder.v1.vhdl" -> "adder.v1"), where the old
@@ -103,7 +122,7 @@ class ModelGeneration:
         print("Port Info :", port_info)
 
         # Open connection_info.txt file
-        con_ifo = open('connection_info.txt', 'w')
+        con_ifo = open(self._out('connection_info.txt'), 'w')
 
         for item in port_info:
             word = item.split(':')
@@ -112,6 +131,83 @@ class ModelGeneration:
             )
             con_ifo.write("\n")
         con_ifo.close()
+
+    def _out(self, name):
+        """Absolute path of a generated file inside this run's output dir."""
+        return os.path.join(self.outdir, name)
+
+    @staticmethod
+    def _port_width(item):
+        """Bit width of a "name:bits" port entry, at least 1. Never 0: the
+        generated C sizes an array from it and every loop would then run out of
+        bounds."""
+        try:
+            return max(1, int(str(item).split(':')[1]))
+        except (IndexError, ValueError):
+            return 1
+
+    def _message_sizes(self):
+        """Exact byte sizes of the two co-simulation messages.
+
+        Client -> server is ``name:<bits>`` per input joined with ``,``; server
+        -> client is ``name:<bits>;`` per output (see ghdlserver.c Data_Send).
+        Both are returned INCLUDING the terminating NUL, so they can be used
+        verbatim as C array sizes. Raises ValueError when either exceeds what
+        the server can carry -- the old fixed 1024-byte buffers truncated the
+        message instead, and a half-parsed message is wrong data, not an error.
+        """
+        send = 1
+        for i, item in enumerate(self.input_port):
+            if i:
+                send += 1                       # the ',' separator
+            send += len(item.split(':')[0]) + 1 + self._port_width(item)
+
+        recv = 1
+        for item in self.output_port:
+            # name + ':' + bits + ';'
+            recv += len(item.split(':')[0]) + 2 + self._port_width(item)
+
+        if send > SERVER_RECV_CAP:
+            raise ValueError(
+                "This model's input ports need a " + str(send) + "-byte "
+                "message, but the VHDL testbench server can only receive " +
+                str(SERVER_RECV_CAP) + " bytes at once. Split the model or "
+                "narrow its input ports and rebuild.")
+        if recv - 1 > SERVER_REPLY_CAP:
+            raise ValueError(
+                "This model's output ports need a " + str(recv - 1) + "-byte "
+                "reply, but the VHDL testbench server can only build " +
+                str(SERVER_REPLY_CAP) + " bytes. Split the model or narrow its "
+                "output ports and rebuild.")
+        return send, recv
+
+    def _start_server_command(self, windows):
+        """The C string literal INIT passes to system() to start this model's
+        VHDL testbench server (the returned text closes the literal it opens).
+
+        BOTH branches now derive the path from config.ini's DIGITAL_MODEL. The
+        POSIX branch used to bake "$HOME/nghdl-simulator/src/xspice/icm/ghdl":
+        byte-identical to the default install, but wrong for anyone who
+        relocated the nghdl tree -- INIT then launched a script that does not
+        exist and the simulation hung forever at "Client-Initialising GHDL...".
+        Split out of createCfuncModFile so both branches stay unit-testable on
+        either OS (patching os.name globally is not an option: it makes pathlib
+        build POSIX paths on Windows and breaks pytest itself).
+        """
+        root = self.parser.get('NGHDL', 'DIGITAL_MODEL')
+        self.digital_home = os.path.join(root, "ghdl")
+        if windows:
+            dut = os.path.normpath(
+                '"' + self.digital_home + "/" + self.model_stem + "/DUTghdl/"
+            ).replace("\\", "/")
+            return ('start mintty.exe -t \\"VHDL-Testbench Logs\\" -h always '
+                    'bash.exe -c \\' + dut +
+                    '/start_server.sh %d %s & read\\""')
+        # Forward slashes are built by hand: this string is baked into C source
+        # for a POSIX target, so it must not pick up a host separator.
+        dut = (root.replace("\\", "/").rstrip("/") + "/ghdl/" +
+               self.model_stem + "/DUTghdl")
+        return dut + '/start_server.sh %d %s &"'
 
     def readPortInfo(self):
 
@@ -122,7 +218,7 @@ class ModelGeneration:
         output_list = []
 
         # Reading connection_info.txt file for port infomation
-        read_file = open('connection_info.txt', 'r')
+        read_file = open(self._out('connection_info.txt'), 'r')
         data = read_file.readlines()
         read_file.close()
 
@@ -164,7 +260,11 @@ class ModelGeneration:
         # ############## Creating content for cfunc.mod file ############## #
 
         print("Starting With cfunc.mod file")
-        cfunc = open('cfunc.mod', 'w')
+        # Sizes first: a model whose framing cannot fit through the server is
+        # refused BEFORE any file is written, so a failed generation leaves no
+        # half-built model behind.
+        send_size, recv_size = self._message_sizes()
+        cfunc = open(self._out('cfunc.mod'), 'w')
         print("Building content for cfunc.mod file")
 
         comment = '''/* This is cfunc.mod file auto generated by \
@@ -205,13 +305,18 @@ class ModelGeneration:
                 ", *_op_" + item.split(':')[0] + "_old;"
             )
 
+        # send_data/recv_data are sized from the ACTUAL port framing (see
+        # _message_sizes) instead of a blanket 1024. With ~15 32-bit ports the
+        # old buffer overflowed: snprintf truncated the message, the server
+        # parsed the fragment, and the co-simulation ran on wrong bits with no
+        # error anywhere.
         var_section = '''
             // Declaring components of Client
             FILE *log_client = NULL;
             log_client=fopen("client.log","a");
             int bytes_recieved;
-            char send_data[1024];
-            char recv_data[1024];
+            char send_data[''' + str(send_size) + '''];
+            char recv_data[''' + str(recv_size) + '''];
             char *key_iter;
             struct hostent *host;
             struct sockaddr_in server_addr;
@@ -225,8 +330,10 @@ class ModelGeneration:
 
         temp_input_var = []
         for item in self.input_port:
+            # width bits + the '\0' the assignment loop writes at [PORT_SIZE].
             temp_input_var.append(
-                "char temp_" + item.split(':')[0] + "[1024];"
+                "char temp_" + item.split(':')[0] +
+                "[" + str(self._port_width(item) + 1) + "];"
             )
 
         # Start of INIT function
@@ -482,7 +589,9 @@ class ModelGeneration:
 
         recv_data = '''
 
-            bytes_recieved=recv(socket_fd,recv_data,sizeof(recv_data),0);
+            /* sizeof-1: the NUL below is written AT bytes_recieved, so a
+               completely full buffer would put it one past the end. */
+            bytes_recieved=recv(socket_fd,recv_data,sizeof(recv_data)-1,0);
             if ( bytes_recieved <= 0 )
             {
                 perror("Client-Either Connection Closed or Error ");
@@ -567,31 +676,13 @@ class ModelGeneration:
         cfunc.write("\n")
         cfunc.write(client_setup_ip)
         cfunc.write("\n")
-        cfunc.write("\t\tchar command[1024];\n")
-
-        if os.name == 'nt':
-            self.digital_home = self.parser.get('NGHDL', 'DIGITAL_MODEL')
-            self.digital_home = os.path.join(self.digital_home, "ghdl")
-
-            cmd_str2 = "/start_server.sh %d %s & read" + "\\" + "\"" + "\""
-            cmd_str1 = os.path.normpath(
-                "\"" + self.digital_home + "/" +
-                self.model_stem + "/DUTghdl/"
-            )
-            cmd_str1 = cmd_str1.replace("\\", "/")
-
-            cfunc.write(
-                '\t\tsnprintf(command,1024, "start mintty.exe -t ' +
-                '\\"VHDL-Testbench Logs\\" -h always bash.exe -c ' +
-                '\\' + cmd_str1 + cmd_str2 + ', sock_port, my_ip);'
-            )
-        else:
-            cfunc.write(
-                '\t\tsnprintf(command,1024,"' + self.home +
-                '/nghdl-simulator/src/xspice/icm/ghdl/' +
-                self.model_stem +
-                '/DUTghdl/start_server.sh %d %s &", sock_port, my_ip);'
-            )
+        launch = self._start_server_command(os.name == 'nt')
+        # Size the buffer from the command that is actually emitted (+64 for
+        # the %d port and the %s loopback IP) instead of a fixed 1024, which a
+        # long install path silently truncated into an unrunnable command.
+        cfunc.write("\t\tchar command[" + str(len(launch) + 64) + "];\n")
+        cfunc.write('\t\tsnprintf(command,sizeof(command), "' + launch +
+                    ', sock_port, my_ip);')
 
         cfunc.write('\n\t\tsystem(command);')
         cfunc.write("\n\t}")
@@ -641,7 +732,7 @@ class ModelGeneration:
         # ################### Creating ifspec.ifs file #################### #
 
         print("Starting with ifspec.ifs file")
-        ifspec = open('ifspec.ifs', 'w')
+        ifspec = open(self._out('ifspec.ifs'), 'w')
 
         print("Gathering Al the content for ifspec file")
 
@@ -767,7 +858,7 @@ class ModelGeneration:
 
         print("Starting with testbench file")
 
-        testbench = open(self.model_stem + '_tb.vhdl', 'w')
+        testbench = open(self._out(self.model_stem + '_tb.vhdl'), 'w')
         print(self.model_stem + '_tb.vhdl')
 
         # comment
@@ -1073,7 +1164,7 @@ class ModelGeneration:
         self.digital_home = self.parser.get('NGHDL', 'DIGITAL_MODEL')
         self.digital_home = os.path.join(self.digital_home, "ghdl")
 
-        start_server = open('start_server.sh', 'w')
+        start_server = open(self._out('start_server.sh'), 'w')
 
         start_server.write("#!/bin/bash\n\n")
         start_server.write(
@@ -1133,7 +1224,7 @@ class ModelGeneration:
 
         # ########### Creating and writing in sock_pkg_create.sh ########### #
 
-        sock_pkg_create = open('sock_pkg_create.sh', 'w')
+        sock_pkg_create = open(self._out('sock_pkg_create.sh'), 'w')
 
         sock_pkg_create.write("#!/bin/bash\n\n")
         sock_pkg_create.write(

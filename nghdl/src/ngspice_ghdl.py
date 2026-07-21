@@ -7,6 +7,7 @@ import re
 import sys
 import shutil
 import subprocess
+import tempfile
 from PyQt6 import QtGui, QtCore, QtWidgets
 from configparser import ConfigParser
 from Appconfig import Appconfig
@@ -524,15 +525,20 @@ class Mainwindow(QtWidgets.QWidget):
 
     def createModelFiles(self):
         print("Create Model Files Called")
-        # This method must chdir into the model dir for the relative file ops
-        # and compile script below. Wrap it so eSim's CWD is always restored,
-        # even on error.
+        # Generate into a private temp dir and move the results into place.
+        # The generator used to write cfunc.mod/ifspec.ifs/the testbench into
+        # eSim's CWD -- so a read-only launch directory (packaged launcher, "/"
+        # on some setups) failed on the very first write -- and this method then
+        # chdir'ed twice, mutating the whole application's process-global CWD
+        # for the duration of a build. Neither is needed: every path below is
+        # absolute and the compile step gets cwd= like the rest of the pipeline.
+        path = os.path.join(self.digital_home, self.modelname)
+        dut = os.path.join(path, "DUTghdl")
+        ghdlsrc = os.path.join(self.home, self.src_home, "src", "ghdlserver")
+        workdir = tempfile.mkdtemp(prefix="nghdl-")
         try:
-            os.chdir(self.cur_dir)
-            print("Current Working directory changed to " + self.cur_dir)
-
             # Generate model corresponding to the uploaded VHDL file
-            model = ModelGeneration(str(self.ledit.text()))
+            model = ModelGeneration(str(self.ledit.text()), outdir=workdir)
             model.readPortInfo()
             model.createCfuncModFile()
             model.createIfSpecFile()
@@ -541,47 +547,35 @@ class Mainwindow(QtWidgets.QWidget):
             model.createSockScript()
 
             # Moving file to model directory
-            path = os.path.join(self.digital_home, self.modelname)
-            shutil.move("cfunc.mod", path)
-            shutil.move("ifspec.ifs", path)
+            shutil.move(os.path.join(workdir, "cfunc.mod"), path)
+            shutil.move(os.path.join(workdir, "ifspec.ifs"), path)
 
             # Creating directory inside model directoy
-            print("Creating DUT directory at " + os.path.join(path, "DUTghdl"))
-            os.mkdir(path + "/DUTghdl/")
+            print("Creating DUT directory at " + dut)
+            os.makedirs(dut, exist_ok=True)
             print("Copying required file to DUTghdl directory")
-            shutil.move("connection_info.txt", path + "/DUTghdl/")
-            shutil.move("start_server.sh", path + "/DUTghdl/")
-            shutil.move("sock_pkg_create.sh", path + "/DUTghdl/")
-            shutil.move(self.modelname + "_tb.vhdl", path + "/DUTghdl/")
+            for name in ("connection_info.txt", "start_server.sh",
+                         "sock_pkg_create.sh", self.modelname + "_tb.vhdl"):
+                shutil.move(os.path.join(workdir, name), dut)
 
-            shutil.copy(str(self.filename), path + "/DUTghdl/")
-            shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/compile.sh", path + "/DUTghdl/")
-            shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/uthash.h", path + "/DUTghdl/")
-            shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/ghdlserver.c", path + "/DUTghdl/")
-            shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/ghdlserver.h", path + "/DUTghdl/")
-            shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/Utility_Package.vhdl",
-                        path + "/DUTghdl/")
-            shutil.copy(os.path.join(self.home, self.src_home) +
-                        "/src/ghdlserver/Vhpi_Package.vhdl", path + "/DUTghdl/")
+            shutil.copy(str(self.filename), dut)
+            for name in ("compile.sh", "uthash.h", "ghdlserver.c",
+                         "ghdlserver.h", "Utility_Package.vhdl",
+                         "Vhpi_Package.vhdl"):
+                shutil.copy(os.path.join(ghdlsrc, name), dut)
 
             # (Winsock is linked with -lws2_32 by the generated
             # start_server.sh; no bundled libws2_32.a copy is needed.)
 
             for file in self.file_list:
-                shutil.copy(str(file), path + "/DUTghdl/")
+                shutil.copy(str(file), dut)
 
-            os.chdir(path + "/DUTghdl")
             if os.name == 'nt':
                 # Compile ghdlserver.c with the MSYS2 mingw64 gcc. A bare
                 # (non-login) bash has no /mingw64/bin on PATH, so export it
                 # explicitly; run via cwd + relative script so spaced install
-                # paths cannot split the command (this process chdir'd into
-                # DUTghdl just above). Arg-list form: nothing to re-quote.
+                # paths cannot split the command. Arg-list form: nothing to
+                # re-quote.
                 self.msys_home = self.parser.get('COMPILER', 'MSYS_HOME')
                 bash = os.path.join(self.msys_home, 'usr', 'bin', 'bash.exe')
                 mingw_env = "export PATH=/mingw64/bin:/usr/bin:$PATH && "
@@ -589,26 +583,29 @@ class Mainwindow(QtWidgets.QWidget):
                 # bash.exe would otherwise flash its own blank console window.
                 no_window = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                 subprocess.call([bash, '-c', mingw_env + 'sh compile.sh'],
-                                creationflags=no_window)
+                                cwd=dut, creationflags=no_window)
                 subprocess.call([bash, '-c', 'chmod a+x start_server.sh'],
-                                creationflags=no_window)
+                                cwd=dut, creationflags=no_window)
                 subprocess.call([bash, '-c', 'chmod a+x sock_pkg_create.sh'],
-                                creationflags=no_window)
+                                cwd=dut, creationflags=no_window)
             else:
-                # cwd is DUTghdl (chdir'd just above), so relative script
-                # names resolve here. Arg-list form, like the nt branch: a
-                # spaced or metacharacter-bearing install path can neither
-                # split the command into extra arguments nor be shell-
-                # interpreted -- the old shell=True string concatenation did
-                # both and was an injection surface for a hostile model path.
-                subprocess.call(['bash', 'compile.sh'])
-                subprocess.call(['chmod', 'a+x', 'start_server.sh'])
-                subprocess.call(['chmod', 'a+x', 'sock_pkg_create.sh'])
+                # cwd=DUTghdl instead of an os.chdir, so relative script names
+                # resolve there without moving eSim's own working directory.
+                # Arg-list form, like the nt branch: a spaced or
+                # metacharacter-bearing install path can neither split the
+                # command into extra arguments nor be shell-interpreted -- the
+                # old shell=True string concatenation did both and was an
+                # injection surface for a hostile model path.
+                subprocess.call(['bash', 'compile.sh'], cwd=dut)
+                subprocess.call(['chmod', 'a+x', 'start_server.sh'], cwd=dut)
+                subprocess.call(['chmod', 'a+x', 'sock_pkg_create.sh'], cwd=dut)
 
-            os.remove("compile.sh")
+            os.remove(os.path.join(dut, "compile.sh"))
             # os.remove("ghdlserver.c")
         finally:
-            os.chdir(self.cur_dir)
+            # Best-effort: a leftover temp dir is harmless, a raised cleanup
+            # error would mask the real failure the caller is reporting.
+            shutil.rmtree(workdir, ignore_errors=True)
 
     # Slot to redirect stdout and stderr to window console
     @QtCore.pyqtSlot()

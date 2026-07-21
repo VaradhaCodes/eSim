@@ -41,6 +41,7 @@ from configuration import Appconfig
 from . import createkicad
 from . import CosimConfig
 from .hdl import icarus
+from .hdl.procs import kill_process_tree
 from .CosimLogger import CosimLog
 from .model_teardown import (
     _ensure_modpath, _append_modpath_line, _prune_modpath)
@@ -135,6 +136,20 @@ class ModelGeneration(QtWidgets.QWidget):
         (fir.v1), hyphen or space would silently break the build four layers
         deeper (invalid C identifier, broken make target); refuse it up front."""
         return bool(stem) and re.fullmatch(r'[A-Za-z_]\w*', stem) is not None
+
+    @staticmethod
+    def _port_width(item):
+        """Bit width of a "name:bits" port entry, at least 1.
+
+        The generated C sizes one array per port from this, so it must never
+        return 0 (a zero-length array is a GNU extension and every loop over it
+        would be an out-of-bounds write). Anything unparsable falls back to 1 --
+        the scalar case -- rather than raising in the middle of file generation.
+        """
+        try:
+            return max(1, int(str(item).split(':')[1]))
+        except (IndexError, ValueError):
+            return 1
 
     def require_legacy_toolchain(self):
         """Report a missing legacy toolchain cleanly instead of crashing.
@@ -293,10 +308,13 @@ class ModelGeneration(QtWidgets.QWidget):
 
         def _kill_on_timeout():
             timed_out.set()
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            # Kill the whole tree, not just the direct child: on Windows
+            # Popen.kill() is TerminateProcess on mingw32-make alone, so the
+            # gcc/ld it already spawned keep running and keep their handles on
+            # the .o/.exe files in the model dir. The user's retry then fails
+            # with "Permission denied" rewriting an object file -- a confusing
+            # second bug with no visible link to the step that timed out.
+            kill_process_tree(proc)
 
         watchdog = threading.Timer(self.PROCESS_TIMEOUT, _kill_on_timeout)
         watchdog.daemon = True
@@ -1075,10 +1093,17 @@ and set the load for input ports */
               self.model_stem + ".h file")
         simh.write("int foo_" + self.model_stem + "(int,int);")
         extern_var = []
+        # One array per port, sized from the port's ACTUAL width instead of a
+        # blanket [1024]. The ifspec pins Vector_Bounds to [width width], so
+        # ngspice connects exactly `width` bits and every loop here runs
+        # 0..PORT_SIZE-1 == 0..width-1. The old fixed size silently overflowed
+        # for a port wider than 1024 bits (corrupt co-sim data, no diagnostic)
+        # and wasted 4 KB per port for the ordinary 1-8 bit case.
         for i, item in enumerate(self.input_port + self.output_port):
             extern_var.append('''
         int ''' + self.model_stem + '''_temp_''' +
-                              item.split(':')[0] + '''[1024];
+                              item.split(':')[0] + '''[''' +
+                              str(self._port_width(item)) + '''];
         int ''' + self.model_stem + '''_port_''' +
                               item.split(':')[0] + ''';''')
         for item in extern_var:
@@ -1122,13 +1147,22 @@ and set the load for input ports */
         #include <iostream>
         #include <cstring>
         using namespace std;
+
+        /* How many instances of this model one netlist may hold. The array
+           below is indexed by ngspice's instance_id, which is not known when
+           this file is generated, so the bound stays a compile-time constant --
+           but it is now CHECKED (see foo_ below) instead of being written past
+           silently. */
+        #define ''' + self.model_stem + '''_MAX_INSTANCES 1024
         '''
 
         extern_var = []
+        # Widths must match sim_main_<stem>.h, which owns the definitions.
         for i, item in enumerate(self.input_port + self.output_port):
             extern_var.append('''
         extern "C" int ''' + self.model_stem +
-                              '''_temp_''' + item.split(':')[0] + '''[1024];
+                              '''_temp_''' + item.split(':')[0] + '''[''' +
+                              str(self._port_width(item)) + '''];
         extern "C" int ''' + self.model_stem +
                               '''_port_''' + item.split(':')[0] + ''';''')
 
@@ -1161,8 +1195,18 @@ and set the load for input ports */
             Verilated::commandArgs(argc, argv);
             static VerilatedContext* contextp = new VerilatedContext;
             static V''' + self.model_stem + "* " + \
-            self.model_stem + '''[1024];
+            self.model_stem + '''[''' + self.model_stem + \
+            '''_MAX_INSTANCES];
             count--;
+            if (count < 0 || count >= ''' + self.model_stem + \
+            '''_MAX_INSTANCES)
+            {
+                fprintf(stderr, "''' + self.model_stem + ''': instance %d is \
+beyond the %d instances this model was built for; skipping it.\\n",
+                        count + 1, ''' + self.model_stem + \
+            '''_MAX_INSTANCES);
+                return -1;
+            }
             if (init==0)
             {
                 if (''' + self.model_stem + '''[count] != nullptr) {

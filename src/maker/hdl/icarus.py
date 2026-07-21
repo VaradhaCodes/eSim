@@ -14,6 +14,8 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
+from .procs import kill_process_tree
+
 # The eSim GUI process has no console, so console children (iverilog, vvp)
 # would each pop up a blank console window on Windows -- and closing one
 # aborts the run via CTRL_CLOSE_EVENT. 0 on POSIX.
@@ -82,10 +84,10 @@ class CancelToken:
     def _terminate(self):
         proc = self._proc
         if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            # Kill the whole tree: iverilog is a driver that spawns ivlpp/ivl,
+            # and those grandchildren keep the output file open after a plain
+            # Popen.kill() -- the next compile then fails on a locked artifact.
+            kill_process_tree(proc)
 
     @property
     def cancelled(self):
@@ -111,7 +113,7 @@ def _run_cmd(cmd, cwd, timeout, cancel, env=None):
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        kill_process_tree(proc)
         proc.communicate()
         raise
     return proc.returncode, out, err

@@ -234,9 +234,22 @@ installNGHDL() {
     log "Building nghdl-simulator (custom ngspice) from source"
 
     cd "$src_dir"
+    # Extract, PROVE the new tree is there, and only then replace the old one.
+    # The previous order was extract -> rm -rf -> `mv ... || true`: a failed
+    # move (name mismatch, cross-device, no space) was swallowed and the `cd`
+    # below died with a generic error AFTER the working simulator had already
+    # been deleted, i.e. a failed upgrade destroyed the installation.
+    local staged="$HOME/${nghdl}-source"
+    rm -rf "$staged"
     tar -xJf "${nghdl}-source.tar.xz" -C "$HOME"
+    if [ ! -f "$staged/configure" ]; then
+        echo "ERROR: ${nghdl}-source.tar.xz did not extract a usable tree"
+        echo "       ($staged/configure is missing). Your existing"
+        echo "       $HOME/$nghdl has been left untouched."
+        exit 1
+    fi
     rm -rf "$HOME/$nghdl"
-    mv "$HOME/${nghdl}-source" "$HOME/$nghdl" 2>/dev/null || true
+    mv "$staged" "$HOME/$nghdl"
     log "Extracted to $HOME/$nghdl"
 
     cd "$HOME/$nghdl"
@@ -315,8 +328,23 @@ installIcarus() {
             mkdir -p "$build"
             tar -xJf "$tarball" -C "$build" --strip-components=1
         else
-            git clone https://github.com/steveicarus/iverilog.git "$build"
-            git -C "$build" checkout "$ICARUS_REF"
+            # Fetch ONLY the pinned commit, one level deep: a full clone of
+            # iverilog is ~200 MB of history that is thrown away three lines
+            # later, on exactly the small/slow machines this fallback serves.
+            # Falls back to the old full clone if the server refuses a
+            # fetch-by-SHA.
+            mkdir -p "$build"
+            git -C "$build" init -q
+            git -C "$build" remote add origin \
+                https://github.com/steveicarus/iverilog.git
+            if git -C "$build" fetch -q --depth 1 origin "$ICARUS_REF"; then
+                git -C "$build" checkout -q FETCH_HEAD
+            else
+                warn "shallow fetch of $ICARUS_REF failed - falling back to a full clone"
+                rm -rf "$build"
+                git clone https://github.com/steveicarus/iverilog.git "$build"
+                git -C "$build" checkout "$ICARUS_REF"
+            fi
         fi
         cd "$build"
         sh autoconf.sh
@@ -463,11 +491,31 @@ case "$option" in
         sudo rm -rf "$HOME/$nghdl" "$HOME/.nghdl" \
                     /usr/share/kicad/library/eSim_Nghdl.lib \
                     /usr/local/bin/nghdl /usr/bin/ngspice 2>/dev/null || true
-        # GHDL/Verilator are apt packages shared with other tools — purge
-        # best-effort only.
-        sudo apt-get purge -y ghdl-llvm ghdl-gcc verilator 2>/dev/null || true
-        sudo apt-get autoremove -y 2>/dev/null || true
+        # GHDL and Verilator are ordinary apt packages that the user may well
+        # use outside eSim, so ASK before purging them — the old unconditional
+        # purge silently uninstalled tools this script never owned. Mirrors the
+        # /usr/local/bin/ghdl prompt in install-eSim.sh's cleanLegacyEsim.
+        # Non-interactive callers (CI, piped stdin) keep the packages.
+        purge_shared="n"
+        if [ -t 0 ]; then
+            read -rp "Also purge the shared apt packages ghdl-llvm, ghdl-gcc and verilator? (y/n): " purge_shared
+        else
+            warn "stdin is not a terminal — keeping ghdl/verilator installed."
+        fi
+        if [[ "$purge_shared" =~ ^[Yy] ]]; then
+            sudo apt-get purge -y ghdl-llvm ghdl-gcc verilator 2>/dev/null || true
+            sudo apt-get autoremove -y 2>/dev/null || true
+            log "Shared packages purged."
+        else
+            log "Keeping ghdl-llvm/ghdl-gcc/verilator."
+        fi
+        # The line above removed /usr/bin/ngspice — the symlink to the
+        # nghdl-simulator build. Nothing put a distro ngspice back, so say so:
+        # a user who keeps using other ngspice-based tools is otherwise left
+        # with no simulator at all and no idea why.
         log "NGHDL uninstalled."
+        echo "NOTE: the system ngspice (/usr/bin/ngspice) was removed with it."
+        echo "      Run 'sudo apt install ngspice' to restore the distro build."
         ;;
 
     *)

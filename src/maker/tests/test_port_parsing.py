@@ -106,13 +106,15 @@ def _load_nghdl_model_generation():
     return mod
 
 
-def test_nghdl_readportinfo(tmp_path, monkeypatch):
+def test_nghdl_readportinfo(tmp_path):
     mod = _load_nghdl_model_generation()
     conn = tmp_path / "connection_info.txt"
     _write_conn(str(conn), maker_tokens=False)
-    monkeypatch.chdir(tmp_path)  # readPortInfo reads connection_info.txt from CWD
 
     mg = mod.ModelGeneration.__new__(mod.ModelGeneration)
+    # Since MAKER_AUDIT M21 the generator reads and writes under outdir instead
+    # of the process CWD, so the __new__-bypassed instance must be given one.
+    mg.outdir = str(tmp_path)
     mg.readPortInfo()
 
     assert mg.input_port == ["clk:1", "output_valid:1", "dout:1", "data_reg:4"]
