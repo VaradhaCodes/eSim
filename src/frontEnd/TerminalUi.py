@@ -1,5 +1,8 @@
 from PyQt6 import QtCore, QtGui, QtWidgets, uic
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 class TerminalUi(QtWidgets.QMainWindow):
@@ -8,7 +11,7 @@ class TerminalUi(QtWidgets.QMainWindow):
     a progress bar, a console window which displays the log of the
     simulation and button required for re-simulation and cancellation
     of the simulation"""
-    def __init__(self, qProcess, args, ngspice_bin='ngspice'):
+    def __init__(self, qProcess, args, ngspice_bin='ngspice', pre_start=None):
         """The constructor of the TerminalUi class
         param: qProcess: a PyQt QProcess that runs ngspice
         type: qProcess: :class:`QtCore.QProcess`
@@ -17,6 +20,11 @@ class TerminalUi(QtWidgets.QMainWindow):
         param: ngspice_bin: ngspice executable to launch on re-run/redo (eSim's
                resolved ngspice; d_cosim netlists need the bundled build)
         type: ngspice_bin: str
+        param: pre_start: optional callable run just before a redo relaunches
+               ngspice, for work the owner also does before the first run
+               (NgspiceWidget re-stages rebuilt d_cosim models here). Kept as
+               a plain callback so this widget stays simulation-agnostic.
+        type: pre_start: callable or None
         """
         super(TerminalUi, self).__init__()
 
@@ -31,6 +39,7 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.qProcess = qProcess
         self.args = args
         self.ngspice_bin = ngspice_bin
+        self.pre_start = pre_start
 
         # Load the ui file
         uic.loadUi(os.path.join(os.path.dirname(__file__), "TerminalUi.ui"), self)
@@ -153,6 +162,15 @@ class TerminalUi(QtWidgets.QMainWindow):
         self.Flag = self._resolveNgspicePlotChoice()
 
         self.qProcess.setProperty("redoPlotFlag", self.Flag)
+
+        # A redo is a fresh run: give the owner the same pre-launch hook the
+        # first run got. Never let a hook failure block the re-simulation --
+        # the run is still valid, it just may use the artifacts it already had.
+        if callable(self.pre_start):
+            try:
+                self.pre_start()
+            except Exception:
+                logger.exception("redoSimulation: pre_start hook failed")
 
         self.qProcess.start(self.ngspice_bin, self.args)
 

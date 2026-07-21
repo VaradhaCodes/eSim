@@ -1,4 +1,5 @@
 import os
+import re
 import shlex
 import shutil
 import codecs
@@ -107,8 +108,12 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.uses_dcosim = self._netlist_uses_dcosim(netlist)
 
         self.process = QtCore.QProcess(self)
+        # Redo restarts ngspice from inside TerminalUi, bypassing
+        # _start_process, so a model rebuilt between the two runs would go
+        # unnoticed there. Hand it the same re-staging step as a callback.
         self.terminal_ui = TerminalUi.TerminalUi(
-            self.process, self.ngspice_args, self.ngspice_bin)
+            self.process, self.ngspice_args, self.ngspice_bin,
+            pre_start=self._restage_on_redo if self.uses_dcosim else None)
 
         # One-shot completion bookkeeping, shared with the abandon reporter so
         # a run is reported exactly once no matter which path ends it: a clean
@@ -256,9 +261,15 @@ class NgspiceWidget(QtWidgets.QWidget):
             clog.info("ngspice: " + str(self.ngspice_bin))
             clog.info("ivlng libvvp dir: " +
                       (CosimConfig.iverilog_libdir() or "<none>"))
+            restaged = self._restage_dcosim_vvps(
+                self.netlist_path, self.project_dir, clog)
             self.terminal_ui.simulationConsole.insertPlainText(
                 "\n[eSim] d_cosim co-simulation: loading Verilog model(s) "
                 "via ngspice ivlng/libvvp ...\n")
+            if restaged:
+                self.terminal_ui.simulationConsole.insertPlainText(
+                    "[eSim] refreshed rebuilt model(s): "
+                    + ", ".join(restaged) + "\n")
         logger.info(f"Launching ngspice -> {self.ngspice_bin}")
         self.process.start(self.ngspice_bin, self.ngspice_args)
         logger.debug(f"Process dictionary: {self.obj_appconfig.proc_dict}")
@@ -332,6 +343,90 @@ class NgspiceWidget(QtWidgets.QWidget):
                 return "d_cosim" in handle.read().lower()
         except OSError:
             return False
+
+    # '.model u5 d_cosim simulation="ivlng" sim_args=["adder"]' -> 'adder'.
+    # lib_args (also a quoted vector on the same line) must not match.
+    _SIM_ARGS_RE = re.compile(r'\bsim_args\s*=\s*\[\s*"([^"]+)"')
+
+    @staticmethod
+    def _dcosim_model_names(netlist: str) -> List[str]:
+        """Verilog model names the netlist's d_cosim blocks load, in file
+        order, de-duplicated (one model may back several instances)."""
+        try:
+            with open(netlist, "r", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            return []
+        names: List[str] = []
+        for match in NgspiceWidget._SIM_ARGS_RE.finditer(text):
+            name = match.group(1)
+            if name not in names:
+                names.append(name)
+        return names
+
+    def _restage_on_redo(self) -> None:
+        """TerminalUi's redo hook: same re-staging as a fresh run, announced
+        on the console the redo just cleared."""
+        refreshed = self._restage_dcosim_vvps(
+            self.netlist_path, self.project_dir, CosimLog())
+        if refreshed:
+            self.terminal_ui.simulationConsole.insertPlainText(
+                "[eSim] refreshed rebuilt model(s): "
+                + ", ".join(refreshed) + "\n")
+
+    @staticmethod
+    def _restage_dcosim_vvps(netlist: str, project_dir: str,
+                             log=None) -> List[str]:
+        """Refresh the staged vvp of every d_cosim model that was rebuilt
+        since the netlist was converted. Returns the names refreshed.
+
+        ivlng loads sim_args relative to ngspice's working directory, so
+        ``Convert._cosim_model_line`` copies each compiled vvp next to the
+        netlist -- but only at *conversion* time. Convert once, spot a logic
+        bug, rebuild the model in the NgVeri tab, hit Simulate again, and the
+        stale copy runs: the user's fix silently "does nothing". Compare
+        mtimes against the canonical build output (the same
+        ``CosimConfig.cosim_vvp_path`` both the builder and the netlister
+        use) and re-copy what is older, at every simulation start.
+
+        ``project_dir`` -- not the netlist's dirname -- is what ngspice runs
+        in (``_configure_process`` sets it as the working directory), so it
+        is the directory ivlng will resolve the model name from.
+
+        Staging only: a model that was never built, or whose build output is
+        gone, is left to the existing error path in the netlister and to
+        ngspice itself. copy2 preserves the source mtime, so a refreshed
+        model compares equal on the next run and is not copied again.
+        """
+        refreshed: List[str] = []
+        for name in NgspiceWidget._dcosim_model_names(netlist):
+            src = CosimConfig.cosim_vvp_path(name)
+            if not src or not os.path.isfile(src):
+                continue
+            dst = os.path.join(project_dir, name)
+            if os.path.isdir(dst):
+                # copy2 would happily write INSIDE it (<dst>/<name>), leaving
+                # ivlng to load a directory. Report instead.
+                if log is not None:
+                    log.error('d_cosim: cannot stage the vvp for "%s": %s is '
+                              'a directory' % (name, dst))
+                continue
+            try:
+                staged = os.path.isfile(dst)
+                if staged and os.path.getmtime(dst) >= os.path.getmtime(src):
+                    continue
+                shutil.copy2(src, dst)
+            except OSError as error:
+                if log is not None:
+                    log.error('d_cosim: could not refresh the staged vvp for '
+                              '"%s": %s' % (name, str(error)))
+                continue
+            refreshed.append(name)
+            if log is not None:
+                log.info('d_cosim: %s vvp for "%s" -> %s'
+                         % ("restaged newer" if staged else "staged missing",
+                            name, dst))
+        return refreshed
 
     def _is_linux(self) -> bool:
         return os.name != "nt"
