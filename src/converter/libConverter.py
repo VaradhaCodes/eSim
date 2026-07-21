@@ -13,9 +13,21 @@ class PspiceLibConverter:
         # Get the base name of the file without the extension
         filename = os.path.splitext(os.path.basename(file_path))[0]
         conPath = os.path.dirname(file_path)
-        
+
+        # getsize on a path the user typed, or on a file a sync client removed
+        # between the file-dialog pick and now, raises FileNotFoundError on the
+        # GUI thread (excepthook dialog). Read the size defensively so a
+        # missing / unreadable source degrades to a clear dialog instead.
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            Dialogs.critical(
+                self.parent, "File not found",
+                "The selected file could not be read:\n\n" + str(e))
+            return
+
         # Checks if the file is not empty
-        if os.path.getsize(file_path) > 0:
+        if file_size > 0:
             # Get the absolute path of the current script's directory
             script_dir = os.path.dirname(os.path.abspath(__file__))
 

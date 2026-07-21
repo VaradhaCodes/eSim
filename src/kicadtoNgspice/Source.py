@@ -53,6 +53,11 @@ class Source(QtWidgets.QWidget):
         print("===========================================================")"""
         kicadFile = self.clarg1
 
+        # Pre-bind so ``root`` is always defined even when the prev-values XML
+        # is missing or has no <source> child; the restore loops below skip
+        # cleanly instead of relying on a swallowed UnboundLocalError (the
+        # latent root-may-be-unbound pattern flagged in audit R3-13).
+        root = None
         try:
             f = open(
                 previous_values_path(kicadFile),

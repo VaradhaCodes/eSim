@@ -113,6 +113,17 @@ class ProjectExplorer(QtWidgets.QWidget):
         except Exception:
             pass
         self.fs_watcher.directoryChanged.connect(self.handleDirectoryChanged)
+        # Coalesce QFileSystemWatcher storms. A cloud-sync client (OneDrive /
+        # Dropbox) rewriting a watched project folder can fire directoryChanged
+        # dozens of times in a burst; refreshing the branch on every event
+        # rebuilds its children on the GUI thread each time, which janks the
+        # whole tree. Collect the changed paths and refresh them once, a short
+        # delay after the burst goes quiet -- restarting the single-shot timer
+        # on each event debounces the storm into a single rebuild.
+        self._pending_dir_changes = set()
+        self._dir_refresh_timer = QtCore.QTimer(self)
+        self._dir_refresh_timer.setSingleShot(True)
+        self._dir_refresh_timer.timeout.connect(self._flushDirectoryChanges)
         # NOT refreshing on expand: rebuilding a branch's children mid-expand
         # destroys QTreeWidget's drop-down animation (jittery/broken). The
         # fs_watcher above already keeps the tree fresh on directory changes.
@@ -177,11 +188,23 @@ class ProjectExplorer(QtWidgets.QWidget):
             node.setExpanded(True)
 
     def handleDirectoryChanged(self, path):
-        for i in range(self.treewidget.topLevelItemCount()):
-            item = self.treewidget.topLevelItem(i)
-            if item.text(1) == path and item.isExpanded():
-                index = self.treewidget.indexFromItem(item)
-                self.refreshProject(indexItem=index)
+        # Debounced: a lone event and a cloud-sync burst both collapse to a
+        # single refresh once the timer fires (see __init__). Restarting the
+        # timer on every event pushes the flush to ~300 ms after the last one.
+        self._pending_dir_changes.add(path)
+        self._dir_refresh_timer.start(300)
+
+    def _flushDirectoryChanges(self):
+        # Snapshot and clear first: refreshProject below can re-enter the
+        # watcher and queue a fresh event, which must land in the next batch.
+        paths = self._pending_dir_changes
+        self._pending_dir_changes = set()
+        for path in paths:
+            for i in range(self.treewidget.topLevelItemCount()):
+                item = self.treewidget.topLevelItem(i)
+                if item.text(1) == path and item.isExpanded():
+                    index = self.treewidget.indexFromItem(item)
+                    self.refreshProject(indexItem=index)
 
     def refreshInstant(self):
         for i in range(self.treewidget.topLevelItemCount()):
@@ -393,7 +416,13 @@ class ProjectExplorer(QtWidgets.QWidget):
         if (os.path.isfile(str(self.filePath))):
             self.openInEditor(str(self.filePath))
         else:
-            self.refreshProject(self.filePath)
+            # refreshProject shows its own "does not exist" dialog and returns
+            # False for a vanished folder (stale USB / unmounted network drive).
+            # Bail out then -- setting a dead path current makes every later tool
+            # click operate on a ghost project (eeschema on a missing file,
+            # "netlist not found", NgspiceWidget on a nonexistent cwd) -- M4.
+            if not self.refreshProject(self.filePath):
+                return
 
             self.obj_appconfig.print_info(
                 'The current project is: ' + self.filePath
@@ -491,6 +520,18 @@ class ProjectExplorer(QtWidgets.QWidget):
                 parentnode = self.treewidget.currentItem()
             else:
                 parentnode = self.treewidget.itemFromIndex(self.indexItem)
+            # openProject can call this with a filePath but no current selection,
+            # so currentItem() may be None; locate the node by path first.
+            if parentnode is None:
+                parentnode = self._findNode(filePath)
+            if parentnode is None:
+                # The folder exists but has no tree node to rebuild against.
+                # Record its contents and report success rather than raising
+                # AttributeError on None.childCount() (M4).
+                self.obj_appconfig.project_explorer[
+                    canonical_path(filePath)] = filelistnew
+                self._persist()
+                return True
             count = parentnode.childCount()
             for i in range(count):
                 parentnode.removeChild(parentnode.child(0))
@@ -645,20 +686,50 @@ class ProjectExplorer(QtWidgets.QWidget):
                     print("==================")
                     print("Error! Revert renaming project")
 
-                    # Revert updatedProjectFiles
+                    # The revert can hit the same lock/permission that broke the
+                    # forward pass (a schematic open in KiCad on Windows is the
+                    # norm). Guard every os.rename here too and remember what
+                    # could not be put back, instead of letting a second OSError
+                    # escape to the excepthook and strand the project in a mixed
+                    # old/new-stem state that resolve_stem can no longer resolve.
+                    stranded = []
                     for projectFile in updatedProjectFiles:
                         newFilePath = os.path.join(
                                         updatedProjectPath, projectFile)
-                        projectFile = projectFile.replace(
+                        origName = projectFile.replace(
                                 newBaseFileName, oldStem, 1)
                         oldFilePath = os.path.join(
-                                updatedProjectPath, projectFile)
-                        os.rename(newFilePath, oldFilePath)
+                                updatedProjectPath, origName)
+                        try:
+                            os.rename(newFilePath, oldFilePath)
+                        except OSError:
+                            stranded.append(projectFile)
 
-                    # Revert project folder name
-                    os.rename(updatedProjectPath, projectPath)
+                    # Only fold the directory name back once its contents are
+                    # consistent — a renamed-back folder still holding new-stem
+                    # files is exactly the mixed state we are trying to avoid.
+                    projectDir = updatedProjectPath
+                    if not stranded:
+                        try:
+                            os.rename(updatedProjectPath, projectPath)
+                            projectDir = projectPath
+                        except OSError:
+                            stranded.append(
+                                os.path.basename(updatedProjectPath))
+
                     print("==================")
-                    Dialogs.critical(self, "Error Message", str(e))
+                    if stranded:
+                        Dialogs.critical(
+                            self, "Error Message",
+                            "Could not rename the project, and it could not be "
+                            "fully restored to '" + oldStem + "':\n\n" + str(e)
+                            + "\n\nThe project is left in a mixed state under:\n"
+                            + projectDir + "\n\nClose anything using these "
+                            "files (e.g. an open schematic in KiCad), then "
+                            "rename the remaining items back to '" + oldStem
+                            + "' manually before reopening the project.")
+                    else:
+                        Dialogs.critical(self, "Error Message", str(e))
                     return
 
                 # Re-point the .proj's schematicFile token at the renamed

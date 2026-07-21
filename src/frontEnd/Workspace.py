@@ -101,9 +101,19 @@ class Workspace(QtWidgets.QDialog):
         path_row.addWidget(self.browse_btn)
 
         self.chkbox = QtWidgets.QCheckBox('Use this workspace by default')
-        self.chkbox.setCheckState(
-            QtCore.Qt.CheckState(int(self.obj_appconfig.workspace_check))
-        )
+        # Defense in depth: read_workspace already clamps the token, but this
+        # line runs during Application() construction and must never abort
+        # startup or set a bogus tri-state, whatever value the attribute holds
+        # (H7). This is a two-state box, so decide explicitly -- don't feed an
+        # unvalidated int into Qt.CheckState(): an out-of-range value raises on
+        # some Qt builds and silently coerces to Checked on others.
+        try:
+            raw_check = int(self.obj_appconfig.workspace_check)
+        except (TypeError, ValueError):
+            raw_check = 0
+        check_state = (QtCore.Qt.CheckState.Checked if raw_check == 2
+                       else QtCore.Qt.CheckState.Unchecked)
+        self.chkbox.setCheckState(check_state)
 
         form.addRow('Location', path_row)
         form.addRow('', self.chkbox)

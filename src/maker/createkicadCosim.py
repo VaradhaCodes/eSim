@@ -171,10 +171,8 @@ class CosimSchematic(createkicad.AutoSchematic):
             CosimConfig.cosim_vvp_path(), so there is exactly one source of truth
             and nothing absolute/stale to carry in the schematic.
         '''
-        cwd = os.getcwd()
         xmlDestination = os.path.join(self.xml_loc, 'NgVeriCosim')
-        if not os.path.isdir(xmlDestination):
-            os.makedirs(xmlDestination)
+        os.makedirs(xmlDestination, exist_ok=True)
 
         # d_cosim has a fixed 2-port ifspec (one d_in vector, one d_out vector),
         # so ALL input bits collapse into one bracket group and ALL output bits
@@ -186,7 +184,9 @@ class CosimSchematic(createkicad.AutoSchematic):
                        for i in range(self.input_length, len(self.portInfo)))
         self.splitText = str(in_bits) + "-V:" + str(out_bits) + "-V"
 
-        os.chdir(xmlDestination)
+        # Absolute-path write, no os.chdir: on a read-only install the write
+        # raises, but the process CWD is never stranded inside the library tree
+        # (which used to silently break later relative-path operations).
         root = ET.Element("model")
         ET.SubElement(root, "name").text = self.modelname
         ET.SubElement(root, "type").text = "NgVeriCosim"
@@ -198,5 +198,4 @@ class CosimSchematic(createkicad.AutoSchematic):
         ET.SubElement(param, "instance_id", default="1").text = (
             "Enter Instance ID (Between 0-99)")
         tree = ET.ElementTree(root)
-        tree.write(str(self.modelname) + '.xml')
-        os.chdir(cwd)
+        tree.write(os.path.join(xmlDestination, str(self.modelname) + '.xml'))

@@ -91,6 +91,14 @@ def read_workspace(default_path=None, default_check="0"):
             check, path = fh.readline().strip().split(" ", 1)
         if not path:
             raise ValueError("workspace path is empty")
+        # The check token feeds a two-state QCheckBox via Qt.CheckState(int(..))
+        # in Workspace -- only "0" (Unchecked) and "2" (Checked) are ever
+        # written. A hand-edited/corrupt token ("5", "x") otherwise reaches
+        # that constructor and aborts startup with a raw ValueError before any
+        # window appears (H7). Clamp anything unexpected to the default here,
+        # the single source every consumer reads.
+        if check not in ("0", "2"):
+            check = str(default_check)
         return check, path
     except (OSError, ValueError):
         return str(default_check), fallback

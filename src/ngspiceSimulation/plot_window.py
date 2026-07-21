@@ -305,7 +305,16 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         """
         key = color.lstrip('#')
         path = os.path.join(QtCore.QDir.tempPath(), f"esim_spin_{direction}_{key}.png")
-        if not os.path.exists(path):
+        # The cache is valid only if the PNG still exists AND is non-empty. A
+        # temp-dir cleaner (or a failed prior save) can delete or truncate the
+        # file between two apply_theme calls; a bare os.path.exists() would
+        # then keep pointing image: url() at a missing/zero-byte file and the
+        # spin arrows silently vanish. Re-render on a missing OR empty cache.
+        try:
+            cached = os.path.exists(path) and os.path.getsize(path) > 0
+        except OSError:
+            cached = False
+        if not cached:
             size = 16
             pm = QPixmap(size, size)
             pm.fill(Qt.GlobalColor.transparent)
@@ -322,6 +331,11 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 pts = [QtCore.QPointF(4, 6), QtCore.QPointF(8, 10), QtCore.QPointF(12, 6)]
             painter.drawPolyline(QtGui.QPolygonF(pts))
             painter.end()
+            # QPixmap.save returns False (no exception) when the temp dir is
+            # unwritable or was cleaned mid-write. Nothing actionable here --
+            # a missing image: url() just drops the arrow glyph (no crash),
+            # and the next apply_theme retries the render because the empty/
+            # absent file fails the cache check above.
             pm.save(path, "PNG")
         return path.replace(os.sep, '/')
 

@@ -212,11 +212,11 @@ class OpenModelicaEditor(QtWidgets.QWidget):
         dir_name = os.path.dirname(os.path.realpath(self.ngspiceNetlist))
         # file_basename = os.path.basename(self.ngspiceNetlist)
 
-        cwd = os.getcwd()
-
+        # No os.chdir: the converter is passed dir_name explicitly and writes
+        # the .mo via absolute paths, so mutating the process CWD here bought
+        # nothing and raced with any concurrent CWD-relative code on the GUI
+        # thread (the map_json is absolute too).
         try:
-            os.chdir(dir_name)
-
             obj_NgMoConverter = NgMoConverter(self.map_json)
             # Getting all the require information
             lines = obj_NgMoConverter.readNetlist(self.ngspiceNetlist)
@@ -224,6 +224,23 @@ class OpenModelicaEditor(QtWidgets.QWidget):
             # "lines ---------------->", lines)
             optionInfo, schematicInfo = \
                 obj_NgMoConverter.separateNetlistInfo(lines)
+
+            # An empty or comment-only netlist parses cleanly all the way down
+            # to a bare skeleton .mo with no components, which then reported a
+            # false "successfully converted" and wrote junk (audit R3-7).
+            # schematicInfo holds every device / source / subckt-instance line;
+            # if it is empty there is nothing to convert -- report it and write
+            # no output file instead of pretending success.
+            if not schematicInfo:
+                self.msg = Dialogs.make_error_message(self)
+                self.msg.setModal(True)
+                self.msg.setWindowTitle("Conversion Error")
+                self.msg.showMessage(
+                    'The Ngspice netlist has no circuit elements to convert. '
+                    'Generate the netlist first (Convert KiCad to Ngspice), '
+                    'then retry.'
+                )
+                return
             # print("All option details like analysis,subckt,.ic,.model  :" +
             # "OptionInfo------------------->", optionInfo)
             # print("Schematic connection info :schematicInfo", schematicInfo)
@@ -372,10 +389,6 @@ class OpenModelicaEditor(QtWidgets.QWidget):
                 'Unable to convert Ngspice netlist to Modelica netlist. ' +
                 'Check the netlist : ' + repr(e)
             )
-        finally:
-            # Always restore CWD — a mid-conversion exception used to leave
-            # the process chdir'd into the project dir (CWD-mutation hazard).
-            os.chdir(cwd)
 
     def callOMEdit(self):
 

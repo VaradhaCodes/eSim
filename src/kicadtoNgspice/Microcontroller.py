@@ -68,6 +68,14 @@ class Microcontroller(QtWidgets.QWidget):
 
         kicadFile = clarg1
         check = 1
+        # Previous-values restore node. The restore loops below iterate a plain
+        # local ``root`` (mirroring the Model tab); it used to be assigned to
+        # ``self.root`` while the loops read a never-defined bare ``root``, so
+        # every restore raised a NameError swallowed by "Passes previous
+        # values" and the Microcontroller tab never restored anything (audit
+        # R2-2). Kept as a local and pre-bound to None so a missing/empty XML
+        # simply skips the restore instead of relying on a caught exception.
+        root = None
         try:
             f = open(
                 previous_values_path(kicadFile),
@@ -77,9 +85,8 @@ class Microcontroller(QtWidgets.QWidget):
             parent_root = tree.getroot()
             for parent in parent_root:
                 if parent.tag == "microcontroller":
-                    self.root = parent
+                    root = parent
         except Exception:
-
             check = 0
             print("Microcontroller Previous Values XML is Empty")
 
@@ -159,7 +166,7 @@ class Microcontroller(QtWidgets.QWidget):
                             modelbox.setLayout(modelgrid)
                             self.hex_btns.append(addbtn)
                         try:
-                            for child in root:
+                            for child in root if root is not None else []:
                                 if (
                                         child.text == line[2]
                                         and child.tag == line[3]
@@ -223,7 +230,7 @@ class Microcontroller(QtWidgets.QWidget):
                         self.grid.addWidget(modelbox)
 
                     try:
-                        for child in root:
+                        for child in root if root is not None else []:
                             if child.text == line[2] and child.tag == line[3]:
                                 self.obj_trac.microcontroller_var[
                                     self.nextcount].setText(child[i].text)

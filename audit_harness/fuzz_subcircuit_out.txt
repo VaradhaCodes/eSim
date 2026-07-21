@@ -1,0 +1,34 @@
+Function: Validating New Project Information
+Validated: Creating subcircuit directory
+===================
+Current path of subcircuit file is C:\Users\itsva\AppData\Local\Temp\fuzzsub_07dt0ih_\ok_sub.sub
+Selected file is ok_sub.sub
+Final path of file is C:\Users\itsva\AppData\Local\Temp\esim_fuzz_sublib_swt2pooo\SubcircuitLibrary\ok_sub\ok_sub.sub
+===================
+[PASS] A. upload valid .sub (happy path) :: copied ok
+First line not found: ['ÿþ\x00\x01BINARY\x00garbageœ']
+Invalid file format
+[PASS] B. upload .sub with UTF-16/binary garbage content :: survived, dialogs=[('critical', 'Content of file does not meet the required format. Please ensure that file starts with **.subckt bin_sub ** and ends wit')]
+[RAISE] C. validateSubcir on file deleted after selection (M10 race)
+        FileNotFoundError: [WinError 2] The system cannot find the file specified: 'C:\\Users\\itsva\\AppData\\Local\\Temp\\fuzzsub_2rsy7s9c\\x.sub'
+        File "C:\Users\itsva\eSim-dev-src\src\projManagement\Validation.py", line 208, in validateSubcir
+[RAISE] D. validateSub on dir whose .sub vanishes mid-check
+        FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\itsva\\AppData\\Local\\Temp\\fuzzsubdir_srhyd_wb\\y.sub'
+        File "C:\Users\itsva\eSim-dev-src\src\projManagement\Validation.py", line 146, in validateSub
+[PASS] E. openSub on folder containing ZERO .sub files :: cmd=["eeschema 'C:\\Users\\itsva\\AppData\\Local\\Temp\\fuzzempty_j9i3p_gw\\fuzzempty_j9i3p_gw.sch'"]
+First line not found: ['.subckt', 'other', '1', '2']
+Invalid file format
+[PASS] F. upload .sub whose .subckt name mismatches filename :: survived, dialogs=[('critical', 'Content of file does not meet the required format. Please ensure that file starts with **.subckt mismatch ** and ends wi')]
+Function: Validating New Project Information
+Validated: Creating subcircuit directory
+===================
+Current path of subcircuit file is C:\Users\itsva\AppData\Local\Temp\fuzzsub_d4a97vx8\twice.sub
+Selected file is twice.sub
+Final path of file is C:\Users\itsva\AppData\Local\Temp\esim_fuzz_sublib_swt2pooo\SubcircuitLibrary\twice\twice.sub
+===================
+Function: Validating New Project Information
+Project name already exists.
+==========================
+[PASS] G. upload valid .sub twice (dir exists second time) :: survived, dialogs=[('critical', 'The project already exist. Please select a different name or delete existing project')]
+
+2/7 raised

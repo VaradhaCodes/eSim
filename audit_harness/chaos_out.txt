@@ -1,0 +1,29 @@
+[START] A. instant non-zero exit
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] A. instant non-zero exit               finish_calls=1 emits=1 results=[('NormalExit', 3)] dialogs=['error'] procstate=ProcessState.NotRunning
+[START] B. hard crash (abort)
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] B. hard crash (abort)                  finish_calls=2 emits=2 results=[('CrashExit', -1073740791), ('CrashExit', -1073740791)] dialogs=['error', 'error'] procstate=ProcessState.NotRunning
+[START] C. garbage bytes both channels
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] C. garbage bytes both channels         finish_calls=1 emits=1 results=[('NormalExit', 0)] dialogs=[] procstate=ProcessState.NotRunning
+[START] D. dies mid multibyte output
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] D. dies mid multibyte output           finish_calls=2 emits=2 results=[('CrashExit', -1073740791), ('CrashExit', -1073740791)] dialogs=['error', 'error'] procstate=ProcessState.NotRunning
+[START] E. binary missing (FailedToStart)
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] E. binary missing (FailedToStart)      finish_calls=1 emits=1 results=[('CrashExit', 0)] dialogs=['error'] procstate=ProcessState.NotRunning
+[START] F. clean success exit
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] F. clean success exit                  finish_calls=1 emits=1 results=[('NormalExit', 0)] dialogs=[] procstate=ProcessState.NotRunning
+[START] G. hang + user closes dock mid-run (B3)
+[CONSTRUCT] building widget
+[CONSTRUCT] built
+[CASE] G. hang + user closes dock mid-run (B3) finish_calls=0 emits=0 results=[] dialogs=[] procstate=widget-destroyed
+done
