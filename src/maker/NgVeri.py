@@ -35,7 +35,9 @@ from . import Maker
 from . import ModelGeneration
 from . import createkicad
 from . import createkicadCosim
-from .model_teardown import _safe_model_subdir, _resolve_backend
+from .model_teardown import (
+    _safe_model_subdir, _resolve_backend, _ensure_modpath,
+    _strip_modpath_line)
 from . import CosimConfig
 from .CosimLogger import CosimLog
 from .RemoveItemsDialog import RemoveItemsDialog
@@ -562,10 +564,7 @@ class NgVeri(QtWidgets.QWidget):
         '''
         badges = {}
 
-        modpath_file = self.digital_home + '/modpath.lst'
-        if not os.path.exists(modpath_file):
-            os.makedirs(self.digital_home, exist_ok=True)
-            open(modpath_file, 'w').close()
+        modpath_file = _ensure_modpath(self.digital_home + '/modpath.lst')
         with open(modpath_file) as fh:
             for line in fh:
                 name = line.strip()
@@ -701,21 +700,17 @@ class NgVeri(QtWidgets.QWidget):
         '''
             Remove every line equal to `text` from modpath.lst (idempotent).
             Returns True if a line was dropped. Logs via `log` when given.
+
+            Delegates to the stdlib-only shared helper so the rewrite is atomic
+            and identical to the NGHDL-side teardown: a crash part-way through
+            truncates the list, and cmpp then aborts EVERY later code-model
+            build with an error pointing nowhere near model removal.
         '''
-        path = self.digital_home + '/modpath.lst'
-        try:
-            with open(path) as f:
-                lines = f.readlines()
-        except OSError:
-            return False
-        kept = [ln for ln in lines if ln.strip() != str(text)]
-        if len(kept) == len(lines):
-            return False
-        with open(path, 'w') as f:
-            f.writelines(kept)
-        if log:
+        dropped = _strip_modpath_line(
+            self.digital_home + '/modpath.lst', str(text))
+        if dropped and log:
             log.info('Dropped "' + str(text) + '" from modpath.lst')
-        return True
+        return dropped
 
     def _remove_ngveri_model(self, text, rebuild=True):
         '''

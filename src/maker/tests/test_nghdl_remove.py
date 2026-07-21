@@ -15,6 +15,8 @@ import filecmp
 import os
 import shutil
 
+import pytest
+
 import maker.model_teardown as mt
 import maker.kicad_symlib as ksym
 
@@ -80,28 +82,27 @@ def test_append_is_idempotent(tmp_path):
 
 
 def test_append_repairs_missing_trailing_newline(tmp_path):
-    # A hand-edited list whose last line lacks a trailing newline used to
-    # produce "oldnamenewname" -- one ghost entry makes cmpp abort the WHOLE
-    # ghdl.cm build, for every model.
+    # The exact M22 bug: a last line without "\n" must not glue to the new
+    # name ("muxxor2"); the new entry has to start on its own line.
     mp = str(tmp_path / "modpath.lst")
     with open(mp, "w") as f:
-        f.write("oldname")
-    assert mt._append_modpath_line(mp, "newname") is True
-    assert _read_modpath(mp) == ["oldname", "newname"]
+        f.write("and2\nmux")           # no trailing newline
+    assert mt._append_modpath_line(mp, "xor2") is True
+    assert _read_modpath(mp) == ["and2", "mux", "xor2"]
 
 
 def test_append_blank_name_is_noop(tmp_path):
     mp = str(tmp_path / "modpath.lst")
     _write_modpath(mp, ["mux"])
     assert mt._append_modpath_line(mp, "   ") is False
+    assert mt._append_modpath_line(mp, "") is False
     assert _read_modpath(mp) == ["mux"]
 
 
-def test_append_creates_nothing_when_file_absent_but_writes(tmp_path):
-    # Absent file reads as empty, then the append creates it.
+def test_append_creates_missing_file(tmp_path):
     mp = str(tmp_path / "modpath.lst")
-    assert mt._append_modpath_line(mp, "solo") is True
-    assert _read_modpath(mp) == ["solo"]
+    assert mt._append_modpath_line(mp, "mux") is True
+    assert _read_modpath(mp) == ["mux"]
 
 
 # ── _prune_modpath ──────────────────────────────────────────────────────────
@@ -256,6 +257,83 @@ def test_add_remove_cycle_is_clean(tmp_path):
         assert not any(_present(env, "churn").values())
         # bystander intact throughout
         assert all(_present(env, "keeper").values())
+
+
+# ── _ensure_modpath: fresh-tree create-if-missing ───────────────────────────
+# The digital-model root is built lazily (the remove dialog or a build makes
+# it), so a first-ever convert on a fresh install used to die reading a
+# modpath.lst whose directory did not exist yet -- surfacing as a generic
+# "Error in Ngspice code model generation" that named nothing.
+
+def test_ensure_modpath_creates_parent_and_file(tmp_path):
+    mp = str(tmp_path / "DigitalModelLibrary" / "Ngveri" / "modpath.lst")
+    assert mt._ensure_modpath(mp) == mp
+    assert os.path.isfile(mp)
+    assert open(mp).read() == ""
+
+
+def test_ensure_modpath_does_not_truncate_existing(tmp_path):
+    mp = str(tmp_path / "modpath.lst")
+    _write_modpath(mp, ["mux", "and2"])
+    mt._ensure_modpath(mp)
+    assert _read_modpath(mp) == ["mux", "and2"]     # 'a', never 'w'
+
+
+def test_ensure_modpath_is_idempotent(tmp_path):
+    mp = str(tmp_path / "d" / "modpath.lst")
+    mt._ensure_modpath(mp)
+    mt._ensure_modpath(mp)
+    assert os.path.isfile(mp)
+
+
+# ── modpath.lst rewrites are atomic ─────────────────────────────────────────
+# A crash mid-rewrite leaves a truncated list, and cmpp then aborts the WHOLE
+# code-model build -- for every model, not just the one being removed.
+
+def _atomic_leftovers(directory):
+    return [n for n in os.listdir(directory) if n.startswith(".eSim_atomic_")]
+
+
+def test_strip_leaves_no_temp_file(tmp_path):
+    mp = str(tmp_path / "modpath.lst")
+    _write_modpath(mp, ["and2", "mux"])
+    assert mt._strip_modpath_line(mp, "and2") is True
+    assert _atomic_leftovers(str(tmp_path)) == []
+
+
+def test_strip_failure_leaves_list_intact(tmp_path, monkeypatch):
+    mp = str(tmp_path / "modpath.lst")
+    _write_modpath(mp, ["and2", "mux"])
+    before = open(mp).read()
+
+    def boom(src, dst):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(ksym.os, "replace", boom)
+    with pytest.raises(OSError):
+        mt._strip_modpath_line(mp, "and2")
+
+    assert open(mp).read() == before
+    assert _atomic_leftovers(str(tmp_path)) == []
+
+
+def test_prune_failure_leaves_list_intact(tmp_path, monkeypatch):
+    base = str(tmp_path)
+    mp = os.path.join(base, "modpath.lst")
+    os.makedirs(os.path.join(base, "keeper"))
+    open(os.path.join(base, "keeper", "ifspec.ifs"), "w").close()
+    _write_modpath(mp, ["keeper", "ghost"])
+    before = open(mp).read()
+
+    def boom(src, dst):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(ksym.os, "replace", boom)
+    with pytest.raises(OSError):
+        mt._prune_modpath(mp, base)
+
+    assert open(mp).read() == before     # ghost still listed, nothing lost
+    assert _atomic_leftovers(base) == []
 
 
 # ── drift guard: eSim canonical == NGHDL vendored copy ──────────────────────

@@ -48,6 +48,44 @@ def _safe_model_subdir(base, name):
     return target
 
 
+def _atomic_write_text(path, data):
+    """Replace ``path`` with ``data`` atomically (temp file + os.replace).
+
+    Delegates to kicad_symlib._atomic_write so there is ONE implementation of
+    this. kicad_symlib is stdlib-only, so importing it does not break this
+    module's "no Qt/config/hdlparse" contract, and the dual import handles both
+    layouts exactly like _nghdl_sym_path below: packaged (maker.*) and the flat
+    vendored NGHDL tarball.
+
+    modpath.lst is tiny but load-bearing: a crash / full disk part-way through
+    a rewrite leaves a truncated list, and cmpp then aborts the WHOLE
+    code-model build with an error that points nowhere near here."""
+    try:
+        from .kicad_symlib import _atomic_write
+    except ImportError:                 # flat vendored layout (NGHDL package)
+        from kicad_symlib import _atomic_write
+    _atomic_write(path, data)
+
+
+def _ensure_modpath(path):
+    """Make sure the modpath.lst at ``path`` exists, together with its parent
+    directory, creating an empty list when it does not. Returns ``path``.
+
+    The digital-model root is built lazily -- on a fresh tree it appears only
+    once the remove dialog has listed models, or once a build has run -- so
+    every reader and appender has to be able to conjure it. Without this, the
+    first-ever convert on a fresh install died on a bare FileNotFoundError that
+    surfaced as a generic "Error in Ngspice code model generation"."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    # 'a' creates the file when absent and is a no-op when it already exists --
+    # unlike 'w', which would truncate a list another process just wrote.
+    with open(path, 'a'):
+        pass
+    return path
+
+
 def _strip_modpath_line(path, name):
     """Remove every line equal to ``name`` from the modpath.lst at ``path``
     (idempotent). Returns True if a line was dropped. Safe when the file is
@@ -63,8 +101,7 @@ def _strip_modpath_line(path, name):
     kept = [ln for ln in lines if ln.strip() != name]
     if len(kept) == len(lines):
         return False
-    with open(path, 'w') as f:
-        f.writelines(kept)
+    _atomic_write_text(path, ''.join(kept))
     return True
 
 
@@ -116,9 +153,7 @@ def _prune_modpath(path, base, marker="ifspec.ifs"):
         else:
             dropped.append(name)            # ghost: build dir / marker gone
     if dropped:
-        with open(path, 'w') as f:
-            for name in kept:
-                f.write(name + "\n")
+        _atomic_write_text(path, ''.join(name + "\n" for name in kept))
     return dropped
 
 

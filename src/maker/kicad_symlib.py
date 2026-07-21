@@ -92,20 +92,21 @@ def _read_parts(path):
     return _extract_parts(content)
 
 
-def _write_lib(path, parts):
-    '''Serialize {name: block} back into a valid, balanced kicad_sym file.
-       Written atomically (temp file in the same dir + os.replace) so a crash,
-       full disk, or kill -9 mid-write can never leave the shared library
-       truncated or empty -- the failure mode this module exists to fix.'''
-    out = [_LIB_HEADER, '']
-    for block in parts.values():
-        out.append(block)
-        out.append('')
-    out.append(')')
-    data = '\n'.join(out) + '\n'
+def _atomic_write(path, data):
+    '''Replace the contents of ``path`` with ``data`` atomically: write a temp
+       file in the SAME directory, flush + fsync it, then os.replace (atomic on
+       POSIX and Windows). A crash, full disk or kill -9 mid-write therefore
+       leaves the previous file intact instead of a truncated one.
+
+       eSim rewrites several small-but-load-bearing text files in place, each
+       read by a DIFFERENT tool that then fails far from here when the file is
+       half-written: the .kicad_sym libraries (KiCad drops the whole library),
+       KiCad's sym-lib-table (every KiCad launch errors), modpath.lst (cmpp
+       aborts the entire code-model build) and ngspice's spinit (no code model
+       loads at all). They all go through this one helper.'''
     directory = os.path.dirname(path) or '.'
     fd, tmp = tempfile.mkstemp(
-        dir=directory, prefix='.eSim_symlib_', suffix='.tmp')
+        dir=directory, prefix='.eSim_atomic_', suffix='.tmp')
     try:
         with os.fdopen(fd, 'w') as f:
             f.write(data)
@@ -118,6 +119,19 @@ def _write_lib(path, parts):
         except OSError:
             pass
         raise
+
+
+def _write_lib(path, parts):
+    '''Serialize {name: block} back into a valid, balanced kicad_sym file.
+       Written atomically (see _atomic_write) so a crash, full disk, or kill -9
+       mid-write can never leave the shared library truncated or empty -- the
+       failure mode this module exists to fix.'''
+    out = [_LIB_HEADER, '']
+    for block in parts.values():
+        out.append(block)
+        out.append('')
+    out.append(')')
+    _atomic_write(path, '\n'.join(out) + '\n')
 
 
 # =========================================================================
@@ -215,8 +229,7 @@ def ensure_lib_registered(libname, lib_path, descr=""):
                     not os.path.isdir(os.path.join(base, ver)):
                 continue
             try:
-                with open(table, 'w') as fh:
-                    fh.write('(sym_lib_table\n  (version 7)\n)\n')
+                _atomic_write(table, '(sym_lib_table\n  (version 7)\n)\n')
             except OSError:
                 continue
         try:
@@ -233,7 +246,8 @@ def ensure_lib_registered(libname, lib_path, descr=""):
                 if idx == -1:
                     continue
                 new_content = content[:idx] + lib_line + content[idx:]
-            with open(table, 'w') as fh:
-                fh.write(new_content)
+            # Atomic: a crash mid-rewrite of the table leaves the user with a
+            # truncated sym-lib-table, and KiCad then errors on EVERY launch.
+            _atomic_write(table, new_content)
         except OSError:
             pass

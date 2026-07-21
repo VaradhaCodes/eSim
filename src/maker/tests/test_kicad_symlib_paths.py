@@ -26,6 +26,9 @@ def _redirect_home(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(home))
     # _kicad_config_dir() reads %APPDATA% on Windows; redirect it into the same
     # sandbox so ensure_lib_registered can never reach the real KiCad profile.
+    # Done per test (monkeypatch restores it) and deliberately NOT in a shared
+    # conftest: a global APPDATA redirect also moves the per-user site-packages
+    # that subprocess-based tests import PyQt6 from.
     monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
     monkeypatch.setattr(os.path, "expanduser",
                         lambda p: p.replace("~", str(home), 1))
@@ -100,11 +103,11 @@ _HEADER = ("(sym_lib_table\n"
            "  (version 7)\n")
 
 
-def _make_table(tmp_path, monkeypatch, body):
-    """Build a <ver>/sym-lib-table under the redirected KiCad config dir.
+def _kicad_verdir(tmp_path, monkeypatch):
+    """Create the KiCad ``<ver>`` config dir under the redirected HOME.
 
     The version dir is derived from ``ksym._kicad_config_dir()`` — NOT a
-    hardcoded ``~/.config/kicad`` — so the table lands exactly where
+    hardcoded ``~/.config/kicad`` — so it lands exactly where
     ``ensure_lib_registered`` will look on both platforms (``%APPDATA%\\kicad``
     on Windows, ``~/.config/kicad`` on POSIX). Hardcoding the POSIX path was the
     R2-5 bug: the test wrote here while the code read the real %APPDATA%, so the
@@ -113,6 +116,12 @@ def _make_table(tmp_path, monkeypatch, body):
     _redirect_home(tmp_path, monkeypatch)
     verdir = os.path.join(ksym._kicad_config_dir(), "9.0")
     os.makedirs(verdir)
+    return verdir
+
+
+def _make_table(tmp_path, monkeypatch, body):
+    """Build a sym-lib-table in that version dir with the given body."""
+    verdir = _kicad_verdir(tmp_path, monkeypatch)
     table = os.path.join(verdir, "sym-lib-table")
     with open(table, "w") as f:
         f.write(_HEADER + body + ")\n")
@@ -163,6 +172,45 @@ def test_register_no_config_dir_is_noop(tmp_path, monkeypatch):
     _redirect_home(tmp_path, monkeypatch)     # no ~/.config/kicad created
     # must not raise.
     ksym.ensure_lib_registered("eSim_Ngveri", "/x")
+
+
+def test_register_rewrite_is_atomic_and_leaves_no_temp(tmp_path, monkeypatch):
+    # A crash part-way through the sym-lib-table rewrite used to truncate the
+    # user's library table, after which EVERY KiCad launch errors. The rewrite
+    # now goes through _atomic_write, so a failure must leave the old table
+    # byte-for-byte intact and drop no scratch file in the version dir.
+    table = _make_table(
+        tmp_path, monkeypatch,
+        '  (lib (name "eSim_Ngveri")(type "KiCad")'
+        '(uri "${KICAD6_SYMBOL_DIR}/eSim_Ngveri.kicad_sym")'
+        '(options "")(descr ""))\n')
+    before = open(table).read()
+    verdir = os.path.dirname(table)
+
+    def boom(src, dst):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(ksym.os, "replace", boom)
+    # ensure_lib_registered is best-effort: it swallows OSError by contract.
+    ksym.ensure_lib_registered("eSim_Ngveri", "/home/u/.esim/x.kicad_sym")
+
+    assert open(table).read() == before
+    assert [n for n in os.listdir(verdir)
+            if n.startswith(".eSim_atomic_")] == []
+
+
+def test_register_seeds_missing_table_without_temp(tmp_path, monkeypatch):
+    # KiCad does not write a per-user sym-lib-table until libraries are managed
+    # once; eSim seeds one. That seed is atomic too, so a half-written
+    # "(sym_lib_table" can never be left behind.
+    verdir = _kicad_verdir(tmp_path, monkeypatch)
+    ksym.ensure_lib_registered("eSim_Ngveri", "/home/u/.esim/x.kicad_sym")
+    content = open(os.path.join(verdir, "sym-lib-table")).read()
+    assert content.startswith("(sym_lib_table")
+    assert '(name "eSim_Ngveri")' in content
+    assert content.rstrip().endswith(")")
+    assert [n for n in os.listdir(verdir)
+            if n.startswith(".eSim_atomic_")] == []
 
 
 def test_register_does_not_match_similar_prefix(tmp_path, monkeypatch):

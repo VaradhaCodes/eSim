@@ -101,16 +101,25 @@ class CosimLog:
                         QTextEdit off-thread.
     '''
 
+    # GUI line colors. None means "emit no color at all" so the line inherits
+    # the QTextEdit palette -- which is what the active theme sets. A
+    # hardcoded #000000 renders black-on-black and is INVISIBLE on the dark
+    # theme; ModelGeneration.termtext/termtitle already took exactly this fix,
+    # but CosimLog paints the whole d_cosim build story into the same terminal
+    # and kept the light-theme values. Only lines whose color carries MEANING
+    # keep one, and those reuse the theme-tested values shared with the rest of
+    # the maker UI. A phase header is already distinguished by size+weight, so
+    # it needs no color either.
     _COLOR = {
-        'info': '#000000',
+        'info': None,               # body text -> palette
         'ok': '#00AA00',
         'warn': '#E07B00',
         'error': '#FF0000',
-        'phase': '#0000FF',
-        'detail': '#666666',
+        'phase': None,              # marked by size/weight, not color
+        'detail': '#666666',        # deliberately dim on both themes
         'fix': '#B30086',
-        'stdout': '#333333',
-        'stderr': '#B00000',
+        'stdout': None,             # verbatim tool output -> palette
+        'stderr': '#FF0000',        # same red as ModelGeneration._emit_error
     }
 
     def __init__(self, termedit=None, name=_ROOT_NAME, sink=None):
@@ -132,18 +141,25 @@ class CosimLog:
         if self._sink is not None:
             self._sink(html)
 
+    @staticmethod
+    def _color_css(color):
+        '''"color:<c>;" for a semantic color, "" for None -- an omitted color
+           inherits the widget palette, i.e. follows the active theme.'''
+        return ('color:%s;' % color) if color else ''
+
     def _span(self, msg, color, size=12, weight=500):
         self._gui(
-            '<span style="font-size:%dpt; font-weight:%d; color:%s;">%s</span>'
-            % (size, weight, color, escape(msg)))
+            '<span style="font-size:%dpt; font-weight:%d;%s">%s</span>'
+            % (size, weight, self._color_css(color), escape(msg)))
 
     # -- public API ---------------------------------------------------------
     def phase(self, title):
         '''Bold blue section header marking a new step of the flow.'''
         self.logger.info('=== %s ===', title)
         self._gui(
-            '<span style="font-size:14pt; font-weight:800; color:%s;">'
-            '<br>&#9654;&nbsp;%s</span>' % (self._COLOR['phase'], escape(title)))
+            '<span style="font-size:14pt; font-weight:800;%s">'
+            '<br>&#9654;&nbsp;%s</span>'
+            % (self._color_css(self._COLOR['phase']), escape(title)))
 
     def info(self, msg):
         '''Normal progress line (INFO).'''
@@ -188,5 +204,5 @@ class CosimLog:
         else:
             self.logger.info('[iverilog stdout]\n%s', text)
         self._gui(
-            '<pre style="margin:2px 0; font-size:11pt; color:%s;">%s</pre>'
-            % (self._COLOR[stream], escape(text)))
+            '<pre style="margin:2px 0; font-size:11pt;%s">%s</pre>'
+            % (self._color_css(self._COLOR[stream]), escape(text)))

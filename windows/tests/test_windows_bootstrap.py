@@ -149,6 +149,32 @@ def test_fix_spinit_absent_tree_is_noop(home, root):
     assert wb.fix_spinit(str(root)) == 0
 
 
+def test_fix_spinit_rewrite_is_atomic(home, root, monkeypatch):
+    """spinit is how ngspice locates EVERY .cm code model, so a rewrite that
+    dies part-way leaves a truncated file and then every simulation fails with
+    "codemodel not found" -- nowhere near this code. The rewrite goes through
+    kicad_symlib._atomic_write (temp file + os.replace), so a failure must
+    leave the previous spinit byte-for-byte intact and drop no scratch file."""
+    inst = root / "tools" / "nghdl" / "install_dir"
+    scripts = inst / "share" / "ngspice" / "scripts"
+    scripts.mkdir(parents=True)
+    (inst / "lib" / "ngspice").mkdir(parents=True)
+    original = ("* Standard ngspice init file\n"
+                "codemodel C:/buildbot/stage/lib/ngspice/analog.cm\n")
+    (scripts / "spinit").write_text(original)
+
+    def boom(src, dst):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        wb.fix_spinit(str(root))
+
+    assert (scripts / "spinit").read_text() == original
+    assert [n for n in os.listdir(str(scripts))
+            if n.startswith(".eSim_atomic_")] == []
+
+
 def test_register_appends_and_repoints(home, root, kicad_config_root):
     # A KiCad user table with one stale eSim entry.
     kdir = kicad_config_root / "9.0"

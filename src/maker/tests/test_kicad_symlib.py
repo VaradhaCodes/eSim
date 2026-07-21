@@ -27,6 +27,11 @@ def _block(name, body='(pin_names (offset 0)) (property "Ref" "U")'):
     return f'(symbol "{name}" {body})'
 
 
+def _temp_leftovers(directory):
+    """Atomic-write scratch files that survived -- must always be empty."""
+    return [n for n in os.listdir(directory) if n.startswith(".eSim_atomic_")]
+
+
 def _names(path):
     return sorted(_read_parts(path))
 
@@ -191,8 +196,62 @@ def test_write_failure_leaves_original_intact_and_no_temp(tmp_path, monkeypatch)
         _write_lib(sym, {"good": _block("good"), "new": _block("new")})
 
     assert open(sym).read() == before      # original untouched
-    leftovers = [n for n in os.listdir(tmp_path) if n.startswith(".eSim_symlib_")]
-    assert leftovers == []                 # temp cleaned up
+    assert _temp_leftovers(tmp_path) == []  # temp cleaned up
+
+
+# ── _atomic_write: the shared temp-file + os.replace core ───────────────────
+# _write_lib's atomicity was extracted so the OTHER small-but-load-bearing
+# files eSim rewrites in place (sym-lib-table, modpath.lst, spinit) get it too:
+# each is read by a different tool that fails far from the writer when the file
+# is half-written.
+
+def test_atomic_write_creates_file(tmp_path):
+    target = str(tmp_path / "spinit")
+    ksym._atomic_write(target, "codemodel /a/b.cm\n")
+    assert open(target).read() == "codemodel /a/b.cm\n"
+    assert _temp_leftovers(tmp_path) == []
+
+
+def test_atomic_write_replaces_whole_content(tmp_path):
+    target = str(tmp_path / "modpath.lst")
+    ksym._atomic_write(target, "aaaaaaaaaaaa\nbbbbbbbbbbbb\n")
+    ksym._atomic_write(target, "c\n")       # shorter: no tail may survive
+    assert open(target).read() == "c\n"
+    assert _temp_leftovers(tmp_path) == []
+
+
+def test_atomic_write_failure_leaves_original_and_no_temp(
+        tmp_path, monkeypatch):
+    target = str(tmp_path / "sym-lib-table")
+    ksym._atomic_write(target, "(sym_lib_table\n)\n")
+
+    def boom(src, dst):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(ksym.os, "replace", boom)
+    with pytest.raises(OSError):
+        ksym._atomic_write(target, "TRUNCATED")
+
+    # The whole point: the previous file survives a failed rewrite intact.
+    assert open(target).read() == "(sym_lib_table\n)\n"
+    assert _temp_leftovers(tmp_path) == []
+
+
+def test_atomic_write_temp_lands_in_same_dir(tmp_path, monkeypatch):
+    # os.replace is only atomic within one filesystem, so the temp file must be
+    # created beside the target -- never in /tmp.
+    target = str(tmp_path / "sub" / "modpath.lst")
+    os.makedirs(os.path.dirname(target))
+    seen = {}
+    real_mkstemp = ksym.tempfile.mkstemp
+
+    def spy(*a, **kw):
+        seen["dir"] = kw.get("dir")
+        return real_mkstemp(*a, **kw)
+
+    monkeypatch.setattr(ksym.tempfile, "mkstemp", spy)
+    ksym._atomic_write(target, "x\n")
+    assert seen["dir"] == os.path.dirname(target)
 
 
 # ── drift guard: eSim canonical == NGHDL vendored copy ──────────────────────

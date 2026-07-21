@@ -699,8 +699,12 @@ class ModelGeneration:
             )
             null_allowed = 'Null_Allowed:\tno\n'
 
-            # Insert detail in the list
-            in_port_table.append(
+            # Insert detail in the list. This is the OUTPUT loop, so it must
+            # feed out_port_table: it used to append to in_port_table and the
+            # "for item in out_port_table" writer below was dead. The file came
+            # out right purely because one list preserved the order -- any edit
+            # touching only out_port_table silently did nothing.
+            out_port_table.append(
                 port_table + port_name + description +
                 direction + default_type + allowed_type +
                 vector + vector_bounds + null_allowed

@@ -42,6 +42,8 @@ from . import createkicad
 from . import CosimConfig
 from .hdl import icarus
 from .CosimLogger import CosimLog
+from .model_teardown import (
+    _ensure_modpath, _append_modpath_line, _prune_modpath)
 import hdlparse.verilog_parser as vlog
 
 
@@ -343,12 +345,31 @@ class ModelGeneration(QtWidgets.QWidget):
         Text += "</span>"
         self.termedit.append(Text)
 
+        # Refuse an unusable model name BEFORE creating dirs / copying source.
+        # The stem becomes a C function, a make target and a path component;
+        # a dotted (fir.v1), hyphenated or spaced name otherwise detonates deep
+        # inside cmpp/make with a message that points nowhere near the cause.
+        if not self._stem_is_valid(self.model_stem):
+            Dialogs.critical(
+                None, "Error Message",
+                "<b>Error: '" + self.fname + "' is not a usable model name. "
+                "Use only letters, digits and underscore and do not start with "
+                "a digit (the name becomes a C function, an HDL entity and a "
+                "make target). Rename the file and try again.</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            self.obj_Appconfig.print_error(
+                "NgVeri stopped: invalid model name '" + self.fname + "'")
+            return "Error"
+
         with open(self.file, 'r') as read_verilog:
             verilog_data = read_verilog.readlines()
         modname = os.path.splitext(self.fname)[0]
         self.modelpath = self.digital_home + "/" + modname + "/"
-        if not os.path.isdir(self.modelpath):
-            os.mkdir(self.modelpath)
+        # makedirs, not mkdir: on a fresh tree the PARENT (<DigitalModelLibrary>
+        # /Ngveri) does not exist yet -- it is created lazily by the remove
+        # dialog -- so a first-ever convert used to die here on FileNotFoundError
+        # and surface as a generic "Error in Ngspice code model generation".
+        os.makedirs(self.modelpath, exist_ok=True)
 
         # os.path.splitext keeps the true extension even for dotted/no-dot
         # names (the old .split('.')[1] IndexError'd on "counter" and read
@@ -939,9 +960,9 @@ and set the load for input ports */
         '''
 
         name_table = 'NAME_TABLE:\n\
-        C_Function_Name: cm_' + self.fname.split('.')[0] + '\n\
-        Spice_Model_Name: ' + self.fname.split('.')[0] + '\n\
-        Description: "Model generated from ghdl code ' + self.fname + '" \n'
+        C_Function_Name: cm_' + self.model_stem + '\n\
+        Spice_Model_Name: ' + self.model_stem + '\n\
+        Description: "Model generated from Verilog code ' + self.fname + '" \n'
 
         # Input and Output Port Table
         in_port_table = []
@@ -986,8 +1007,12 @@ and set the load for input ports */
             )
             null_allowed = 'Null_Allowed:\tno\n'
 
-            # Insert detail in the list
-            in_port_table.append(
+            # Insert detail in the list. This is the OUTPUT loop, so it must
+            # feed out_port_table: it used to append to in_port_table and the
+            # "for item in out_port_table" writer below was dead. The file came
+            # out right purely because one list preserved the order -- any edit
+            # touching only out_port_table silently did nothing.
+            out_port_table.append(
                 port_table + port_name + description +
                 direction + default_type + allowed_type +
                 vector + vector_bounds + null_allowed
@@ -1237,15 +1262,18 @@ and set the load for input ports */
             This function creates modpathlst in Ngspice folder.
         '''
         print("Editing modpath.lst file")
-        with open(self.digital_home + '/modpath.lst', 'r') as mod:
-            text = mod.read()
-        # Exact-line membership: a plain "in text" substring test wrongly
-        # treats "divider" as already present because "divider_8bit" contains
-        # it, which silently drops the shorter model from Ngveri.cm.
-        modname = self.fname.split('.')[0]
-        with open(self.digital_home + '/modpath.lst', 'a+') as mod:
-            if modname not in text.split():
-                mod.write(modname + "\n")
+        # Create-if-missing before reading: the list (and its directory) is
+        # built lazily, so on a fresh tree a convert that runs before the remove
+        # dialog was ever opened used to hit FileNotFoundError here.
+        path = _ensure_modpath(self.digital_home + '/modpath.lst')
+        # The shared appender does exact-LINE membership -- a plain "in text"
+        # substring test wrongly treats "divider" as already present because
+        # "divider_8bit" contains it, silently dropping the shorter model from
+        # Ngveri.cm -- and guarantees the entry starts on its own line, so a
+        # file whose last line lacks a trailing newline cannot be glued into
+        # "oldmodelnewmodel" (one ghost entry like that makes cmpp abort the
+        # ENTIRE build).
+        _append_modpath_line(path, self.model_stem)
         # Self-heal: a stale entry whose build dir was deleted (e.g. the model
         # was later removed via the d_cosim path, which nuked the shared
         # <model>/ dir but not this list) makes cmpp abort the ENTIRE Ngveri.cm
@@ -1262,36 +1290,17 @@ and set the load for input ports */
             This is the guard that keeps a single orphaned model -- the usual
             fallout of switching a model between the d_cosim and legacy NgVeri
             flows -- from breaking the build for all the others.
+
+            The scan/rewrite itself lives in the stdlib-only shared helper, so
+            it is atomic (a truncated list makes cmpp abort every later build)
+            and byte-identical to the NGHDL-side teardown.
         '''
-        path = self.digital_home + '/modpath.lst'
-        try:
-            with open(path) as f:
-                entries = [ln.strip() for ln in f]
-        except OSError:
-            return []
-
-        kept, dropped, seen = [], [], set()
-        for name in entries:
-            if not name:
-                continue
-            if name in seen:
-                dropped.append(name)        # duplicate line
-                continue
-            ifs = os.path.join(self.digital_home, name, 'ifspec.ifs')
-            if os.path.isfile(ifs):
-                kept.append(name)
-                seen.add(name)
-            else:
-                dropped.append(name)        # ghost: dir/ifspec.ifs gone
-
-        if dropped:
-            with open(path, 'w') as f:
-                for name in kept:
-                    f.write(name + "\n")
-            for name in dropped:
-                self.clog.warn(
-                    'Pruned stale model "' + name + '" from modpath.lst '
-                    '(its build dir / ifspec.ifs is missing).')
+        dropped = _prune_modpath(
+            self.digital_home + '/modpath.lst', self.digital_home)
+        for name in dropped:
+            self.clog.warn(
+                'Pruned stale model "' + name + '" from modpath.lst '
+                '(its build dir / ifspec.ifs is missing).')
         return dropped
 
     def run_verilator(self):

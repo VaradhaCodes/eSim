@@ -162,6 +162,27 @@ def write_nghdl_config(esim_root):
     return path
 
 
+def _atomic_write(path, data):
+    """Replace ``path`` with ``data`` atomically (temp file + os.replace).
+
+    Reuses kicad_symlib._atomic_write (stdlib-only, vendored in the source tree
+    beside this script) so there is one implementation of this. When the source
+    tree is not importable -- this script is also runnable standalone -- fall
+    back to a plain rewrite: degraded, never fatal."""
+    sys.path.insert(0, os.path.join(esim_root_default(), 'src', 'maker'))
+    try:
+        from kicad_symlib import _atomic_write as _aw  # noqa: E402
+    except ImportError:
+        _aw = None
+    finally:
+        sys.path.pop(0)
+    if _aw is not None:
+        _aw(path, data)
+        return
+    with open(path, 'w') as fh:
+        fh.write(data)
+
+
 def fix_spinit(esim_root):
     """Self-heal the bundled ngspice's spinit for THIS install location.
 
@@ -191,8 +212,10 @@ def fix_spinit(esim_root):
                 line = new
             out_lines.append(line)
     if changed:
-        with open(spinit, 'w') as fh:
-            fh.writelines(out_lines)
+        # Atomic: spinit is how ngspice finds EVERY .cm code model. A crash
+        # part-way through this rewrite leaves a truncated file and then every
+        # simulation fails with "codemodel not found", nowhere near the cause.
+        _atomic_write(spinit, ''.join(out_lines))
     return changed
 
 
