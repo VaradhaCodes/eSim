@@ -5,7 +5,6 @@ import shutil
 from PyQt6.QtWidgets import QMessageBox
 from configuration import Dialogs
 from configuration import paths
-from frontEnd import ProjectExplorer
 
 class PspiceConverter:
     def __init__(self, parent):
