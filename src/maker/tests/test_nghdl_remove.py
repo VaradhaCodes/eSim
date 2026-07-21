@@ -63,6 +63,47 @@ def test_strip_absent_file_is_noop(tmp_path):
     assert mt._strip_modpath_line(str(tmp_path / "nope.lst"), "mux") is False
 
 
+# ── _append_modpath_line ────────────────────────────────────────────────────
+
+def test_append_adds_new_name(tmp_path):
+    mp = str(tmp_path / "modpath.lst")
+    _write_modpath(mp, ["and2", "mux"])
+    assert mt._append_modpath_line(mp, "xor2") is True
+    assert _read_modpath(mp) == ["and2", "mux", "xor2"]
+
+
+def test_append_is_idempotent(tmp_path):
+    mp = str(tmp_path / "modpath.lst")
+    _write_modpath(mp, ["mux"])
+    assert mt._append_modpath_line(mp, "mux") is False   # already listed
+    assert _read_modpath(mp) == ["mux"]
+
+
+def test_append_repairs_missing_trailing_newline(tmp_path):
+    # A hand-edited list whose last line lacks a trailing newline used to
+    # produce "oldnamenewname" -- one ghost entry makes cmpp abort the WHOLE
+    # ghdl.cm build, for every model.
+    mp = str(tmp_path / "modpath.lst")
+    with open(mp, "w") as f:
+        f.write("oldname")
+    assert mt._append_modpath_line(mp, "newname") is True
+    assert _read_modpath(mp) == ["oldname", "newname"]
+
+
+def test_append_blank_name_is_noop(tmp_path):
+    mp = str(tmp_path / "modpath.lst")
+    _write_modpath(mp, ["mux"])
+    assert mt._append_modpath_line(mp, "   ") is False
+    assert _read_modpath(mp) == ["mux"]
+
+
+def test_append_creates_nothing_when_file_absent_but_writes(tmp_path):
+    # Absent file reads as empty, then the append creates it.
+    mp = str(tmp_path / "modpath.lst")
+    assert mt._append_modpath_line(mp, "solo") is True
+    assert _read_modpath(mp) == ["solo"]
+
+
 # ── _prune_modpath ──────────────────────────────────────────────────────────
 
 def _make_model_dir(base, name, with_marker=True):

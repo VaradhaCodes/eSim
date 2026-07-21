@@ -68,6 +68,31 @@ def _strip_modpath_line(path, name):
     return True
 
 
+def _append_modpath_line(path, name):
+    """Append ``name`` to the modpath.lst at ``path`` unless it is already
+    listed (idempotent). Returns True only when a line was written; ``name``
+    blank -> no change.
+
+    Guarantees the new entry starts on its own line. A hand-edited file whose
+    last line lacks a trailing newline would otherwise be glued to the new name
+    ("oldnamenewname") -- a single ghost entry like that makes cmpp abort the
+    WHOLE ghdl.cm build, the exact failure _prune_modpath exists to clean up."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    try:
+        with open(path) as f:
+            content = f.read()
+    except OSError:
+        content = ""
+    if name in (ln.strip() for ln in content.splitlines()):
+        return False
+    prefix = "" if (not content or content.endswith("\n")) else "\n"
+    with open(path, 'a') as f:
+        f.write(prefix + name + "\n")
+    return True
+
+
 def _prune_modpath(path, base, marker="ifspec.ifs"):
     """Rewrite the modpath.lst at ``path`` keeping only entries whose build dir
     ``<base>/<name>/<marker>`` still exists, de-duplicated. Returns the dropped

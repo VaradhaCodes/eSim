@@ -3,6 +3,7 @@
 # This file create the GUI to install code model in the Ngspice.
 
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -443,7 +444,8 @@ class Mainwindow(QtWidgets.QWidget):
         print("Create Model Directory Called")
         self.digital_home = self.parser.get('NGHDL', 'DIGITAL_MODEL')
         self.digital_home = os.path.join(self.digital_home, "ghdl")
-        self.modelname = os.path.basename(str(self.filename)).split('.')[0]
+        self.modelname = os.path.splitext(
+            os.path.basename(str(self.filename)))[0]
         print("Model to be created :", self.modelname)
         # An empty model name (no file chosen / odd filename) would make
         # model_path == the ghdl icm ROOT below -- and the overwrite branch
@@ -452,6 +454,21 @@ class Mainwindow(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(
                 self, "Error",
                 "No VHDL file selected - cannot derive a model name.")
+            return False
+        # Reject a name that is not a bare identifier BEFORE creating anything:
+        # the stem is spliced into a VHDL entity, a C cfunc (cm_<name>) and a
+        # make target, so a dotted (adder.v1), hyphenated or spaced filename
+        # would otherwise fail deep inside ghdl/cmpp with a message pointing
+        # nowhere near the cause. Mirrors ModelGeneration._stem_is_valid on the
+        # maker side.
+        if re.fullmatch(r'[A-Za-z_]\w*', self.modelname) is None:
+            QtWidgets.QMessageBox.critical(
+                self, "Error",
+                "'" + os.path.basename(str(self.filename)) + "' is not a "
+                "usable model name. Use only letters, digits and underscore, "
+                "and do not start with a digit (the name becomes a VHDL "
+                "entity, a C function and a make target). Rename the file "
+                "and try again.")
             return False
         # Work with an absolute path so we never have to chdir (chdir would
         # change eSim's process-global CWD).
@@ -494,21 +511,16 @@ class Mainwindow(QtWidgets.QWidget):
     def addingModelInModpath(self):
         print("Adding Model " + self.modelname +
               " in Modpath file " + self.digital_home)
-        # Adding name of model in the modpath file
-        # Check if the string is already in the file
-        with open(self.digital_home + "/modpath.lst", 'r+') as f:
-            flag = 0
-            for line in f:
-                if line.strip() == self.modelname:
-                    print("Found model "+self.modelname+" in the modpath.lst")
-                    flag = 1
-                    break
-
-            if flag == 0:
-                print("Adding model name "+self.modelname+" into modpath.lst")
-                f.write(self.modelname + "\n")
-            else:
-                print("Model name is already into modpath.lst")
+        # Append via the vendored teardown helper: it skips the write when the
+        # name is already listed AND guarantees the new entry starts on its own
+        # line. The old in-place 'r+' write glued the name onto a final line
+        # that lacked a trailing newline ("oldnamenewname"), a ghost entry that
+        # makes cmpp abort the whole ghdl.cm build.
+        path = os.path.join(self.digital_home, "modpath.lst")
+        if model_teardown._append_modpath_line(path, self.modelname):
+            print("Adding model name " + self.modelname + " into modpath.lst")
+        else:
+            print("Model name is already into modpath.lst")
 
     def createModelFiles(self):
         print("Create Model Files Called")
@@ -583,10 +595,15 @@ class Mainwindow(QtWidgets.QWidget):
                 subprocess.call([bash, '-c', 'chmod a+x sock_pkg_create.sh'],
                                 creationflags=no_window)
             else:
-                subprocess.call("bash " + path + "/DUTghdl/compile.sh",
-                                shell=True)
-                subprocess.call("chmod a+x start_server.sh", shell=True)
-                subprocess.call("chmod a+x sock_pkg_create.sh", shell=True)
+                # cwd is DUTghdl (chdir'd just above), so relative script
+                # names resolve here. Arg-list form, like the nt branch: a
+                # spaced or metacharacter-bearing install path can neither
+                # split the command into extra arguments nor be shell-
+                # interpreted -- the old shell=True string concatenation did
+                # both and was an injection surface for a hostile model path.
+                subprocess.call(['bash', 'compile.sh'])
+                subprocess.call(['chmod', 'a+x', 'start_server.sh'])
+                subprocess.call(['chmod', 'a+x', 'sock_pkg_create.sh'])
 
             os.remove("compile.sh")
             # os.remove("ghdlserver.c")
@@ -599,13 +616,19 @@ class Mainwindow(QtWidgets.QWidget):
         proc = self.sender()
         if not isinstance(proc, QtCore.QProcess):
             return
+        # errors='replace': mingw make/gcc can emit cp1252 bytes and a raw
+        # UnicodeDecodeError in this slot would kill the whole output stream.
         self.termedit.append(
-            str(proc.readAllStandardOutput().data(), encoding='utf-8')
+            str(proc.readAllStandardOutput().data(),
+                encoding='utf-8', errors='replace')
         )
         stderror = proc.readAllStandardError()
+        # Kept only as a secondary hint; the real build verdict is the process
+        # exit code, checked in _build_step_failed (see runMakeInstall).
         if stderror.toUpper().contains(QtCore.QByteArray(b"ERROR")):
             self.errorFlag = True
-        self.termedit.append(str(stderror.data(), encoding='utf-8'))
+        self.termedit.append(
+            str(stderror.data(), encoding='utf-8', errors='replace'))
 
     def _apply_build_env(self, process):
         """On Windows, prepend the MSYS2 mingw64/usr dirs to the QProcess
@@ -624,6 +647,32 @@ class Mainwindow(QtWidgets.QWidget):
         env.insert('PATH',
                    extra + (os.pathsep + existing if existing else ''))
         process.setProcessEnvironment(env)
+
+    def _build_step_failed(self, exitCode, exitStatus, label):
+        '''Gate the async make chain on the process's real verdict instead of a
+        stderr "ERROR" substring sniff. QProcess.finished delivers
+        (exitCode, exitStatus); when make exits non-zero or is killed
+        (CrashExit) the chain MUST stop -- otherwise `make install` and the
+        KiCad symbol are built over a ghdl.cm that never rebuilt, and the model
+        fails later at simulation time with nothing pointing back to the failed
+        make. Mirrors ModelGeneration._run's exit-code verdict.
+
+        Returns True when the step failed (caller must return immediately);
+        on failure it flags the error, re-enables the controls and does NOT
+        chain to the next step.'''
+        crashed = exitStatus == QtCore.QProcess.ExitStatus.CrashExit
+        if exitCode == 0 and not crashed:
+            return False
+        self.errorFlag = True
+        reason = "was killed" if crashed else "exit code " + str(exitCode)
+        self.termedit.append('<b style="color:red">' + label +
+                             ' failed (' + reason + '). Build stopped.</b>')
+        self.uploadbtn.setEnabled(True)
+        self.exitbtn.setEnabled(True)
+        if getattr(self, "_rebuild_only", False):
+            self._rebuild_only = False
+            self.removemodelbtn.setEnabled(True)
+        return True
 
     def runMake(self, rebuild_only=False):
         print("run Make Called")
@@ -664,7 +713,10 @@ class Mainwindow(QtWidgets.QWidget):
             self.uploadbtn.setEnabled(True)
             self.exitbtn.setEnabled(True)
 
-    def runMakeInstall(self):
+    def runMakeInstall(self, exitCode=0, exitStatus=None):
+        # Fired by QProcess.finished after `make`. Stop here if make failed.
+        if self._build_step_failed(exitCode, exitStatus, "make"):
+            return
         print("run Make Install Called")
         try:
             if os.name == 'nt':
@@ -704,7 +756,11 @@ class Mainwindow(QtWidgets.QWidget):
             self.uploadbtn.setEnabled(True)
             self.exitbtn.setEnabled(True)
 
-    def createSchematicLib(self):
+    def createSchematicLib(self, exitCode=0, exitStatus=None):
+        # Fired by QProcess.finished after `make install`. Stop here (no symbol)
+        # if the install step failed.
+        if self._build_step_failed(exitCode, exitStatus, "make install"):
+            return
         try:
             self._createSchematicLib()
         except Exception as e:
