@@ -90,20 +90,20 @@ def test_m5_missing_source_is_a_dialog():
 
 
 def test_m5_copytree_failure_is_a_dialog():
-    """Parser succeeds but the workspace copy fails -> warning, output kept."""
+    """Parser succeeds but the workspace copy fails -> warning, output kept.
+
+    Batch 10's L6 moved the workspace copy off the GUI thread into the async
+    ``_on_convert_done`` slot (BackgroundJob), so ``convert()`` now returns
+    before the copy runs. Drive ``_on_convert_done`` directly with a rc=0
+    result -- that is where the M5 copytree guard lives in the merged code."""
     from converter import pspiceToKicad
 
     src = tempfile.mkdtemp(prefix="b6_m5src_")
-    sch = os.path.join(src, "demo.sch")
-    with open(sch, "w") as f:
-        f.write("* not empty\n")
     ws = tempfile.mkdtemp(prefix="b6_m5ws_")
 
-    orig_run = pspiceToKicad.subprocess.run
     orig_copy = pspiceToKicad.shutil.copytree
     orig_mkbox = Dialogs.make_message_box
     box = FakeBox()
-    pspiceToKicad.subprocess.run = lambda *a, **k: None          # "parser ok"
 
     def _boom(*a, **k):
         raise OSError("workspace locked by a sync client")
@@ -112,9 +112,9 @@ def test_m5_copytree_failure_is_a_dialog():
     conv = pspiceToKicad.PspiceConverter(parent=None)
     conv.get_workspace_directory = lambda: ws
     try:
-        conv.convert(sch)                       # pre-fix: OSError escapes
+        # rc=0 -> success path; copytree (_boom) fires inside the M5 guard.
+        conv._on_convert_done(src, "demo", (0, "", ""))
     finally:
-        pspiceToKicad.subprocess.run = orig_run
         pspiceToKicad.shutil.copytree = orig_copy
         Dialogs.make_message_box = orig_mkbox
 
