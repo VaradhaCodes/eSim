@@ -488,25 +488,22 @@ class ModelGeneration(QtWidgets.QWidget):
             data = readfile.readlines()
         self.input_list = []
         self.output_list = []
+        # connection_info.txt lines are exactly "name direction bits" (the
+        # writer emits hdlparse's p.mode: input / output / inout). Classify on
+        # the direction FIELD, not a substring search of the whole line: the
+        # old re.findall("INPUT"/"OUTPUT", line) matched the port NAME too, so
+        # a port like "output_valid input 1" was counted as both an input and
+        # an output. Skipping any line with < 3 fields also removes the old
+        # crash where a leading blank line left in_items/out_items unbound.
         for line in data:
-            if re.match(r'^\s*$', line):
-                pass
-            else:
-                in_items = re.findall(
-                    "INPUT", line, re.MULTILINE | re.IGNORECASE
-                )
-                inout_items = re.findall(
-                    "INOUT", line, re.MULTILINE | re.IGNORECASE
-                )
-                out_items = re.findall(
-                    "OUTPUT", line, re.MULTILINE | re.IGNORECASE
-                )
-            if in_items:
-                self.input_list.append(line.split())
-            if inout_items:
-                self.input_list.append(line.split())
-            if out_items:
-                self.output_list.append(line.split())
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            direction = parts[1].lower()
+            if direction in ("input", "inout"):
+                self.input_list.append(parts)
+            elif direction == "output":
+                self.output_list.append(parts)
 
         self.input_port = []
         self.output_port = []

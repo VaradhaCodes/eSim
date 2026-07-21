@@ -28,7 +28,6 @@
 # ==============================================================================
 
 from . import Appconfig
-import re
 import os
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
@@ -411,28 +410,21 @@ class PortInfo:
                 "Cannot read connection_info.txt for '" +
                 str(self.modelname) + "': " + str(e)) from e
 
+        # Classify on the direction FIELD, not a substring search of the whole
+        # line (see ModelGeneration.getPortInfo): a port whose name contains a
+        # direction keyword — e.g. "output_valid" — was otherwise counted in
+        # both lists, corrupting the KiCad symbol pin count. A line with < 3
+        # fields (blank or malformed) is skipped, which also fixes the old
+        # UnboundLocalError on a leading blank line.
         for line in data:
-            # Skip blank lines outright. Previously a blank FIRST line fell into
-            # the pass branch leaving in_items/out_items unbound, then the reads
-            # below hit UnboundLocalError.
-            if re.match(r'^\s*$', line):
+            parts = line.split()
+            if len(parts) < 3:
                 continue
-            in_items = re.findall(
-                "INPUT", line, re.MULTILINE | re.IGNORECASE
-            )
-            inout_items = re.findall(
-                "INOUT", line, re.MULTILINE | re.IGNORECASE
-            )
-
-            out_items = re.findall(
-                "OUTPUT", line, re.MULTILINE | re.IGNORECASE
-            )
-            if in_items:
-                input_list.append(line.split())
-            if inout_items:
-                input_list.append(line.split())
-            if out_items:
-                output_list.append(line.split())
+            direction = parts[1].lower()
+            if direction in ("input", "inout"):
+                input_list.append(parts)
+            elif direction == "output":
+                output_list.append(parts)
 
         for in_list in input_list:
             self.bit_list.append(in_list[2])

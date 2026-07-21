@@ -124,21 +124,20 @@ class ModelGeneration:
         # Extracting input and output port list from data
         print("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
         for line in data:
-            print(line)
-            if re.match(r'^\s*$', line):
-                pass
-            else:
-                in_items = re.findall(
-                    "IN", line, re.MULTILINE | re.IGNORECASE
-                )
-                out_items = re.findall(
-                    "OUT", line, re.MULTILINE | re.IGNORECASE
-                )
-
-                if in_items:
-                    input_list.append(line.split())
-                if out_items:
-                    output_list.append(line.split())
+            # connection_info.txt lines are "name direction bits" with the VHDL
+            # direction in / out / inout. Classify on the direction FIELD: the
+            # old re.findall("IN"/"OUT", line) matched the port NAME too, so a
+            # port such as "sout out 1" or "win out 1" (name contains "in"/"out")
+            # landed in both lists, and an "inout" matched both. Skip lines with
+            # < 3 fields (blank/malformed).
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            direction = parts[1].lower()
+            if direction in ("in", "inout"):
+                input_list.append(parts)
+            elif direction == "out":
+                output_list.append(parts)
 
         print("Input List :", input_list)
         print("Output list :", output_list)

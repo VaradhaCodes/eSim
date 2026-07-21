@@ -1,5 +1,4 @@
 from Appconfig import Appconfig
-import re
 import os
 import xml.etree.cElementTree as ET
 from PyQt6 import QtWidgets
@@ -443,19 +442,20 @@ class PortInfo:
         read_file.close()
 
         for line in data:
-            if re.match(r'^\s*$', line):
-                pass
-            else:
-                in_items = re.findall(
-                    "IN", line, re.MULTILINE | re.IGNORECASE
-                )
-                out_items = re.findall(
-                    "OUT", line, re.MULTILINE | re.IGNORECASE
-                )
-            if in_items:
-                input_list.append(line.split())
-            if out_items:
-                output_list.append(line.split())
+            # Classify on the direction FIELD, not a substring of the whole
+            # line (see model_generation.readPortInfo): a port whose name
+            # contains "in"/"out" — e.g. "sout" — was otherwise double-counted,
+            # inflating the KiCad symbol pin count. Skip < 3-field lines
+            # (blank/malformed); this also fixes the old unbound-name crash on
+            # a leading blank line.
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            direction = parts[1].lower()
+            if direction in ("in", "inout"):
+                input_list.append(parts)
+            elif direction == "out":
+                output_list.append(parts)
 
         for in_list in input_list:
             self.bit_list.append(in_list[2])
