@@ -1,0 +1,344 @@
+prevvalues base: C:\Users\itsva\AppData\Local\Temp\esim_fuzz_home_haqobk2y\.esim\prevvalues
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+c1  net-out 0 1u
+v1  net-in 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1  net-in 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Previous Values XML is Empty
+DC Previous Values XML is empty
+Transient Previous Values XML is Empty
+Source Previous Values XML is Empty
+SourceList line:  [2, 'v1  net-in 0 dc', 'dc', 'Add parameters for DC source v1', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+Device Model Previous XML is Empty
+Subcircuit Previous values XML is Empty
+Microcontroller Previous Values XML is Empty
+=========================================================
+Netlist After Adding Source details : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+Netlist After Adding Ngspice Model : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+Netlist After Adding Microcontroller Model : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+No library added in the schematic
+=========================================================
+Netlist After Adding Device Model Library : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+No Subcircuit Added in the schematic
+=========================================================
+Netlist After Adding subcircuits : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+======================================================
+FILEOPEN CONVERT ANALYS C:\Users\itsva\AppData\Local\Temp\fuzzproj_aipvupns\analysis
+=========================================================
+Analysis OutPut  None
+=========================================================
+STORE SCHEMATIC INFO
+['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+=============================================================
+Creating Final netlist
+[PASS] A. baseline RC + dc source, no prevvalues, full convert :: convert ok, 1 dialogs [('information', 'Information', 'The KiCad to Ngspice conversion completed successfully!')]
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+c1  net-out 0 1u
+v1  net-in 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1  net-in 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Analysis XML Parse Error
+DC Analysis XML Parse Error
+Transient Analysis XML Parse Error
+SourceList line:  [2, 'v1  net-in 0 dc', 'dc', 'Add parameters for DC source v1', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+[RAISE] B. prevvalues XML exists but has NO <source> child -> callConvert
+        UnboundLocalError: cannot access local variable 'attr_source' where it is not associated with a value
+        File "C:\Users\itsva\eSim-dev-src\src\kicadtoNgspice\KicadtoNgspice.py", line 613, in callConvert
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+c1  net-out 0 1u
+v1  net-in 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1  net-in 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Analysis XML Parse Error
+DC Analysis XML Parse Error
+Transient Analysis XML Parse Error
+SourceList line:  [2, 'v1  net-in 0 dc', 'dc', 'Add parameters for DC source v1', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+[RAISE] C. source-type drift: prev XML says v1=pulse(7 fields), live v1=dc
+        IndexError: list index out of range
+        File "C:\Users\itsva\eSim-dev-src\src\kicadtoNgspice\KicadtoNgspice.py", line 619, in callConvert
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* sky130 sheet
+sc1  net-in net-out sky130_fd_pr__nfet_01v8
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['sc1  net-in net-out sky130_fd_pr__nfet_01v8']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Analysis XML Parse Error
+DC Analysis XML Parse Error
+Transient Analysis XML Parse Error
+No source is present in your circuit
+[RAISE] D. sky130 netlist + empty <scmode1/> prevvalues node -> tab build
+        IndexError: child index out of range
+        File "C:\Users\itsva\eSim-dev-src\src\kicadtoNgspice\DeviceModel.py", line 119, in eSim_sky130
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+c1  net-out 0 1u
+v1  net-in 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1  net-in 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Previous Values XML is Empty
+DC Previous Values XML is empty
+Transient Previous Values XML is Empty
+Source Previous Values XML is Empty
+SourceList line:  [2, 'v1  net-in 0 dc', 'dc', 'Add parameters for DC source v1', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+Device Model Previous XML is Empty
+Subcircuit Previous values XML is Empty
+Microcontroller Previous Values XML is Empty
+=========================================================
+Netlist After Adding Source details : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+Netlist After Adding Ngspice Model : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+Netlist After Adding Microcontroller Model : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+No library added in the schematic
+=========================================================
+Netlist After Adding Device Model Library : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+No Subcircuit Added in the schematic
+=========================================================
+Netlist After Adding subcircuits : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+======================================================
+FILEOPEN CONVERT ANALYS C:\Users\itsva\AppData\Local\Temp\fuzzproj_wwtewn_d\analysis
+=========================================================
+Analysis OutPut  None
+=========================================================
+STORE SCHEMATIC INFO
+['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+=============================================================
+Creating Final netlist
+[PASS] E. malformed (truncated) prevvalues XML -> construction+convert :: survived, dialogs=[('information', 'Information', 'The KiCad to Ngspice conversion completed successfully!')]
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+c1  net-out 0 1u
+v1  net-in 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1  net-in 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Previous Values XML is Empty
+DC Previous Values XML is empty
+Transient Previous Values XML is Empty
+Source Previous Values XML is Empty
+SourceList line:  [2, 'v1  net-in 0 dc', 'dc', 'Add parameters for DC source v1', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+Device Model Previous XML is Empty
+Subcircuit Previous values XML is Empty
+Microcontroller Previous Values XML is Empty
+[RAISE] F. createSubFile on .cir.out whose .control lost .endc (M2)
+        StopIteration
+        File "C:\Users\itsva\eSim-dev-src\src\kicadtoNgspice\KicadtoNgspice.py", line 1241, in createSubFile
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+v1  net-in 0 sine
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'v1  net-in 0 sine']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Analysis XML Parse Error
+DC Analysis XML Parse Error
+Transient Analysis XML Parse Error
+SourceList line:  [1, 'v1  net-in 0 sine', 'sine', 'Add parameters for sine source v1', '  Enter offset value (Volts/Amps): ', '  Enter amplitude (Volts/Amps): ', '  Enter frequency (Hz): ', '  Enter delay time (seconds): ', '  Enter damping factor (1/seconds): ']
+=========================================================
+Netlist After Adding Source details : ['r1  net-in net-out 1k', 'v1  net-in 0 sine(0 0 0 0 0)']
+=========================================================
+Netlist After Adding Ngspice Model : ['r1  net-in net-out 1k', 'v1  net-in 0 sine(0 0 0 0 0)']
+=========================================================
+Netlist After Adding Microcontroller Model : ['r1  net-in net-out 1k', 'v1  net-in 0 sine(0 0 0 0 0)']
+No library added in the schematic
+=========================================================
+Netlist After Adding Device Model Library : ['r1  net-in net-out 1k', 'v1  net-in 0 sine(0 0 0 0 0)']
+No Subcircuit Added in the schematic
+=========================================================
+Netlist After Adding subcircuits : ['r1  net-in net-out 1k', 'v1  net-in 0 sine(0 0 0 0 0)']
+======================================================
+FILEOPEN CONVERT ANALYS C:\Users\itsva\AppData\Local\Temp\fuzzproj_e4v33nr9\analysis
+=========================================================
+Analysis OutPut  None
+=========================================================
+STORE SCHEMATIC INFO
+['r1  net-in net-out 1k', 'v1  net-in 0 sine(0 0 0 0 0)']
+=========================================================
+=============================================================
+Creating Final netlist
+[PASS] G. prevvalues with <source> but ZERO grandchildren for live sine :: survived, dialogs=[('information', 'Information', 'The KiCad to Ngspice conversion completed successfully!')]
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet
+r1 a b 1k
+v9 a 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1 a b 1k', 'v9 a 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Analysis XML Parse Error
+DC Analysis XML Parse Error
+Transient Analysis XML Parse Error
+SourceList line:  [1, 'v9 a 0 dc', 'dc', 'Add parameters for DC source v9', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+=========================================================
+Netlist After Adding Source details : ['r1 a b 1k', 'v9 a 0  dc 0']
+=========================================================
+Netlist After Adding Ngspice Model : ['r1 a b 1k', 'v9 a 0  dc 0']
+=========================================================
+Netlist After Adding Microcontroller Model : ['r1 a b 1k', 'v9 a 0  dc 0']
+No library added in the schematic
+=========================================================
+Netlist After Adding Device Model Library : ['r1 a b 1k', 'v9 a 0  dc 0']
+No Subcircuit Added in the schematic
+=========================================================
+Netlist After Adding subcircuits : ['r1 a b 1k', 'v9 a 0  dc 0']
+======================================================
+FILEOPEN CONVERT ANALYS C:\Users\itsva\AppData\Local\Temp\fuzzproj_bwbzgnd0\analysis
+=========================================================
+Analysis OutPut  None
+=========================================================
+STORE SCHEMATIC INFO
+['r1 a b 1k', 'v9 a 0  dc 0']
+=========================================================
+=============================================================
+Creating Final netlist
+[PASS] H. prevvalues valid <source>, but live netlist source RENAMED v9 :: survived, dialogs=[('information', 'Information', 'The KiCad to Ngspice conversion completed successfully!')]
+==================================
+Kicad to Ngspice netlist converter
+==================================
+[PASS] I. empty .cir file :: survived, valid=False dialogs=[('errormsg', 'Empty netlist', 'The netlist file is empty. Open Kicad to Ngspice again to regenerate it from the schematic before converting.')]
+==================================
+Kicad to Ngspice netlist converter
+==================================
+* Sheet Name: /root
+r1  net-in net-out 1k
+c1  net-out 0 1u
+v1  net-in 0 dc
+.end
+=============================================================
+convertICIntoBasicBlocks called, from Processing
+=============================================================
+SCHEMATICINFO ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1  net-in 0 dc']
+OUTPUTOPTION []
+MODELLIST []
+UNKOWNMODELLIST []
+MULTIPLEMODELLIST []
+PLOTTEST []
+=============================================================
+AC Previous Values XML is Empty
+DC Previous Values XML is empty
+Transient Previous Values XML is Empty
+Source Previous Values XML is Empty
+SourceList line:  [2, 'v1  net-in 0 dc', 'dc', 'Add parameters for DC source v1', '  Enter value (Volts/Amps): ', '  Enter zero frequency: ']
+Device Model Previous XML is Empty
+Subcircuit Previous values XML is Empty
+Microcontroller Previous Values XML is Empty
+=========================================================
+Netlist After Adding Source details : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+Netlist After Adding Ngspice Model : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+Netlist After Adding Microcontroller Model : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+No library added in the schematic
+=========================================================
+Netlist After Adding Device Model Library : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+No Subcircuit Added in the schematic
+=========================================================
+Netlist After Adding subcircuits : ['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+======================================================
+FILEOPEN CONVERT ANALYS C:\Users\itsva\AppData\Local\Temp\fuzzproj_wdolzrwd\analysis
+=========================================================
+Analysis OutPut  None
+=========================================================
+STORE SCHEMATIC INFO
+['r1  net-in net-out 1k', 'c1  net-out 0 1u', 'v1 net-in 0  dc 0']
+=========================================================
+=============================================================
+Creating Final netlist
+[PASS] J. .cir deleted between window open and Convert click :: survived, dialogs=[('information', 'Information', 'The KiCad to Ngspice conversion completed successfully!')]
+
+4/10 scenarios raised

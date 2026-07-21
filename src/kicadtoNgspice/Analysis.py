@@ -598,8 +598,11 @@ class Analysis(QtWidgets.QWidget):
 
         self.check = QtWidgets.QCheckBox('Operating Point Analysis', self)
         try:
+            # .text is a property (the element's text), not a method — the
+            # old .text() call raised TypeError on every run, so op_check was
+            # always seeded '0' and Operating Point never restored (R3-9).
             self.track_obj.op_check.append(
-                str(root[1][4].text()))
+                str(root[1][4].text or '0'))
         except Exception:
             self.track_obj.op_check.append('0')
 
@@ -645,7 +648,10 @@ class Analysis(QtWidgets.QWidget):
                 if index >= 0:
                     self.stop_combo2.setCurrentIndex(index)
 
-                if root[1][4].text == 1:
+                # root[1][4].text is the stored "1"/"0" string; comparing it
+                # to the int 1 was never true, so the checkbox never restored
+                # (R3-9).
+                if root[1][4].text == '1':
                     self.check.setChecked(True)
                 else:
                     self.check.setChecked(False)

@@ -757,17 +757,33 @@ class DockArea(QtWidgets.QMainWindow):
                 # Already deleted on the Qt side; nothing to do.
                 pass
 
-    def kicadToNgspiceEditor(self, clarg1, clarg2=None):
+    def kicadToNgspiceEditor(self, clarg1, clarg2=None,
+                             projDir=None, projName=None):
         """
         This function is creating Editor UI for Kicad to Ngspice conversion.
+
+        ``projDir``/``projName`` carry the project CAPTURED when a background
+        netlist export began (see Kicad.openKicadToNgspice). Synchronous callers
+        (subcircuit convert) pass neither and fall back to the live project.
         """
 
         from kicadtoNgspice.KicadtoNgspice import MainWindow
         # Keep at most one converter live; see _closeExistingConverters.
         self._closeExistingConverters()
 
-        projDir = self.obj_appconfig.current_project["ProjectName"]
-        projName = os.path.basename(projDir)
+        # Fall back to the live project only for callers that captured nothing.
+        if projDir is None:
+            projDir = self.obj_appconfig.current_project["ProjectName"]
+        # The captured project was closed during the export: don't crash on
+        # os.path.basename(None) -- tell the user the conversion was abandoned.
+        if projDir is None:
+            Dialogs.information(
+                self, "Project Closed",
+                'The project was closed before its netlist conversion could '
+                'open. Re-open the project and convert again.')
+            return
+        if projName is None:
+            projName = os.path.basename(projDir)
         dockName = f'Netlist-{projName}-'
 
         self.kicadToNgspiceWidget = QtWidgets.QWidget()
@@ -790,9 +806,10 @@ class DockArea(QtWidgets.QMainWindow):
         self._docks[dockName + str(self._count)].raise_()
         self._docks[dockName + str(self._count)].activateWindow()
 
-        temp = self.obj_appconfig.current_project['ProjectName']
-        if temp:
-            self.obj_appconfig.dock_dict.setdefault(temp, []).append(
+        # Register under the CAPTURED project so Close Project reaps this dock
+        # even if the live project changed during the background export.
+        if projDir:
+            self.obj_appconfig.dock_dict.setdefault(projDir, []).append(
                 self._docks[dockName + str(self._count)]
             )
         self._count = self._count + 1
@@ -960,6 +977,16 @@ class DockArea(QtWidgets.QMainWindow):
         self._docks[dockName + str(self._count)].setFocus()
         self._docks[dockName + str(self._count)].raise_()
 
+        # Register with the project so Close Project reaps the Model Creation
+        # dock like every sibling opener. Without this the dock (its Flow
+        # Navigator + DesignBus watchdog thread) survived Close Project bound to
+        # a closed project, and each open/close cycle leaked an OS observer
+        # thread (H4 / R3-2). Teardown of the watch runs off FlowNavigator's
+        # destroyed signal (dock destruction skips closeEvent).
+        if projDir:
+            self.obj_appconfig.dock_dict.setdefault(projDir, []).append(
+                self._docks[dockName + str(self._count)]
+            )
         self._count = self._count + 1
 
     def _show_waveform_dock(self, plot, source_dock, flow):

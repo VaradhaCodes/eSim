@@ -15,6 +15,43 @@ from maker.CosimLogger import CosimLog
 logger = logging.getLogger(__name__)
 
 
+def _make_abandon_reporter(state, sim_end_signal, process, obj_appconfig):
+    """Build the slot that reports a run the widget can no longer report itself.
+
+    The Simulation dock can be torn down while ngspice is still running -- one
+    click on the tab's X. Qt then destroys the widget and its child QProcess
+    without ever delivering ``finished``, so nothing emits the completion
+    signal and Simulate / Convert / Close Project / Workspace stay greyed out
+    until the app is restarted, which reads as a frozen eSim.
+
+    The returned slot is wired to ``destroyed``. It closes over plain Python
+    objects *only* -- never the widget: by the time ``destroyed`` fires the C++
+    side is already gone, and any Qt call on it would raise RuntimeError from
+    inside a destructor.
+    """
+    def abandon(*_args):
+        if state['finished']:
+            return
+        state['finished'] = True
+        # Prune the shared registries by identity: list.remove() compares with
+        # ==, which reaches into the deleted C++ object.
+        proj = obj_appconfig.current_project.get('ProjectName')
+        registries = [obj_appconfig.process_obj]
+        handles = obj_appconfig.proc_dict.get(proj) if proj else None
+        if handles is not None:
+            registries.append(handles)
+        for registry in registries:
+            for index, handle in enumerate(registry):
+                if handle is process:
+                    del registry[index]
+                    break
+        try:
+            sim_end_signal.emit(QtCore.QProcess.ExitStatus.CrashExit, -1)
+        except RuntimeError:
+            pass
+    return abandon
+
+
 class NgspiceWidget(QtWidgets.QWidget):
     """Runs an NGSpice simulation and displays output in a terminal widget."""
 
@@ -73,6 +110,16 @@ class NgspiceWidget(QtWidgets.QWidget):
         self.terminal_ui = TerminalUi.TerminalUi(
             self.process, self.ngspice_args, self.ngspice_bin)
 
+        # One-shot completion bookkeeping, shared with the abandon reporter so
+        # a run is reported exactly once no matter which path ends it: a clean
+        # exit, a crash that fires BOTH finished and errorOccurred, or the dock
+        # being destroyed mid-run. Reset per run in _on_process_started, since
+        # redo-simulation reuses this same widget and QProcess.
+        self._run_state = {'finished': False}
+        self._abandon_run = _make_abandon_reporter(
+            self._run_state, sim_end_signal, self.process, self.obj_appconfig)
+        self.destroyed.connect(self._abandon_run)
+
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.addWidget(self.terminal_ui)
 
@@ -126,12 +173,26 @@ class NgspiceWidget(QtWidgets.QWidget):
         )
 
     def _register_process(self, process: QtCore.QProcess) -> None:
-        self.obj_appconfig.process_obj.append(process)
+        """Register the running simulation in the shared registries.
+
+        Idempotent at both call sites on purpose. Windows delivers ``started``
+        synchronously from inside QProcess.start() (CreateProcess succeeds
+        before start() returns) while Linux queues it, so _on_process_started
+        and _start_process register in the opposite order on the two platforms.
+        Without the membership checks, Windows appended the same handle twice
+        and the single unregister in finish_simulation removed one -- leaking a
+        dead QProcess into process_obj and proc_dict on *every* simulation.
+        Do not "fix" that by reordering the calls: only idempotence is
+        ordering-proof.
+        """
+        if process not in self.obj_appconfig.process_obj:
+            self.obj_appconfig.process_obj.append(process)
         current_project_name = self.obj_appconfig.current_project['ProjectName']
-        if current_project_name in self.obj_appconfig.proc_dict:
+        handles = self.obj_appconfig.proc_dict.get(current_project_name)
+        if handles is not None and process not in handles:
             # Store the QProcess handle (not its pid): Close Project terminates
             # through the handle, never a bare recycled pid.
-            self.obj_appconfig.proc_dict[current_project_name].append(process)
+            handles.append(process)
 
     def _unregister_process(self) -> None:
         """Drop the finished main-simulation process from the shared registries.
@@ -167,8 +228,10 @@ class NgspiceWidget(QtWidgets.QWidget):
         self._main_pid = self.process.processId()
         self._queue_console(
             "[eSim] ngspice running (PID %s)\n" % self._main_pid)
-        if self.process not in self.obj_appconfig.process_obj:
-            self._register_process(self.process)
+        # A redo starts a fresh run on a widget whose previous run already
+        # reported: re-arm the one-shot so this one can report too.
+        self._run_state['finished'] = False
+        self._register_process(self.process)
 
     def _start_process(self) -> None:
         # NGHDL ghdl models spawn mintty/bash from inside ngspice on Windows.
@@ -376,6 +439,26 @@ class NgspiceWidget(QtWidgets.QWidget):
         # Skip finished signal if cancellation triggered both finished and error signals
         if not has_error_occurred and self.terminal_ui.simulationCancelled:
             return
+
+        # A hard ngspice crash fires BOTH errorOccurred(Crashed) and
+        # finished(...), so this method is entered twice for one run: two
+        # stacked failure dialogs, a double _unregister_process, and
+        # sim_end_signal (hence plotSimulationData) emitted twice. One-shot it.
+        # The abandon reporter shares this same flag, so a mid-run dock close
+        # followed by a late finished() cannot double-report either.
+        if self._run_state['finished']:
+            return
+        self._run_state['finished'] = True
+
+        # Drop both process signals now that this run is finalized, so the twin
+        # signal a crash emits (errorOccurred + finished, in either order)
+        # cannot re-enter this method at all. The early-return above already
+        # makes re-entry harmless; this also keeps it from happening.
+        for signal in (self.process.finished, self.process.errorOccurred):
+            try:
+                signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
 
         # Resolve exit code and status before any UI work so finally block has them
         if exit_code is None:

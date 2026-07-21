@@ -156,9 +156,16 @@ class WorkerThread(QtCore.QThread):
 
     def __del__(self):
         """
-        __del__ is a called whenever garbage collection is initialised
-        Here, it waits (self.wait()) for the thread to finish executing
-        before garbage collecting it
+        __del__ is called whenever garbage collection is initialised.
+        Here it waits (bounded) for the thread to finish executing before
+        garbage collecting it.
+
+        The wait is capped at 2000 ms: an unbounded ``self.wait()`` during
+        interpreter shutdown (when a still-running child holds the thread
+        alive) could block process exit indefinitely. The retention list
+        (``worker_threads``) already keeps a live worker off the GC path, so
+        in practice this __del__ only fires on an already-finished thread and
+        returns at once; the cap is purely a shutdown-stall backstop.
 
         @params
 
@@ -166,7 +173,7 @@ class WorkerThread(QtCore.QThread):
             None
         """
         try:
-            self.wait()
+            self.wait(2000)
         except BaseException:
             pass
 
@@ -223,9 +230,24 @@ class WorkerThread(QtCore.QThread):
         # CREATE_NO_WINDOW: console children (python scripts, CLI tools) must
         # not flash a blank console; GUI children (eeschema, OMEdit) are
         # unaffected by the flag. 0 on POSIX.
-        proc = subprocess.Popen(
-            shlex.split(command),
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        argv = shlex.split(command)
+        try:
+            proc = subprocess.Popen(
+                argv,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except OSError as err:
+            # An absent external tool (KiCad's eeschema, OMEdit, OMOptim not on
+            # PATH) raises FileNotFoundError right here -- on the *worker*
+            # thread. Letting it escape run() dumps it into sys.excepthook off
+            # the GUI thread, which is the one place a dialog must never be
+            # born. Report through errorOccurred, whose slot is delivered
+            # queued to the GUI thread.
+            tool = argv[0] if argv else command
+            self.errorOccurred.emit(
+                'Could not launch "%s".\n\n%s\n\nCheck that the tool is '
+                'installed and on your PATH, then try again.'
+                % (tool, err))
+            return
 
         if 'nghdl' in command:
             return

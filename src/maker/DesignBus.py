@@ -26,8 +26,20 @@
 import hashlib
 import os
 
-import watchdog.events
-import watchdog.observers
+try:
+    import watchdog.events
+    import watchdog.observers
+    _HAS_WATCHDOG = True
+except ImportError:
+    # watchdog is an OPTIONAL dependency. Without it the whole in-app design
+    # flow still works: Author -> Verify -> Convert navigation, explicit Save,
+    # and the lazy materialize before Convert never need it -- only the passive
+    # external-edit watch does. Importing maker.makerchip (-> DesignBus) must
+    # never brick Model Creation just because watchdog is missing or fails to
+    # load (M8), mirroring the graceful QScintilla fallback in
+    # codeEditor.EditorWindow.
+    watchdog = None
+    _HAS_WATCHDOG = False
 from PyQt6 import QtCore
 from PyQt6.QtCore import pyqtSignal
 
@@ -36,30 +48,36 @@ def _hash_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
-class _DiskWatchHandler(watchdog.events.PatternMatchingEventHandler):
-    """Reports modifications of one watched file back to its DesignBus.
+if _HAS_WATCHDOG:
+    class _DiskWatchHandler(watchdog.events.PatternMatchingEventHandler):
+        """Reports modifications of one watched file back to its DesignBus.
 
-    Scoped to the file's *directory* (not the file) because many editors save
-    atomically -- write a temp file, then rename it over the target -- which a
-    file-level watch misses. The pattern keeps only events for our file.
-    """
+        Scoped to the file's *directory* (not the file) because many editors
+        save atomically -- write a temp file, then rename it over the target --
+        which a file-level watch misses. The pattern keeps only events for our
+        file.
+        """
 
-    def __init__(self, bus, filepath):
-        super().__init__(
-            patterns=[filepath],
-            ignore_directories=True,
-            case_sensitive=True)
-        self._bus = bus
+        def __init__(self, bus, filepath):
+            super().__init__(
+                patterns=[filepath],
+                ignore_directories=True,
+                case_sensitive=True)
+            self._bus = bus
 
-    def on_modified(self, event):
-        self._bus._on_disk_event()
+        def on_modified(self, event):
+            self._bus._on_disk_event()
 
-    def on_created(self, event):
-        self._bus._on_disk_event()
+        def on_created(self, event):
+            self._bus._on_disk_event()
 
-    def on_moved(self, event):
-        # Atomic-save rename landing on our file.
-        self._bus._on_disk_event()
+        def on_moved(self, event):
+            # Atomic-save rename landing on our file.
+            self._bus._on_disk_event()
+else:
+    # No base class to subclass when watchdog is absent; _start_watch bails
+    # out before this is ever referenced.
+    _DiskWatchHandler = None
 
 
 class DesignBus(QtCore.QObject):
@@ -185,6 +203,8 @@ class DesignBus(QtCore.QObject):
     #  External-edit watch (echo-proof, one observer per bus)
     # ------------------------------------------------------------------ #
     def _start_watch(self):
+        if not _HAS_WATCHDOG:
+            return          # watchdog absent: external-edit watch disabled
         if not self._path:
             return
         if self._observer is not None and self._watch_file == self._path:

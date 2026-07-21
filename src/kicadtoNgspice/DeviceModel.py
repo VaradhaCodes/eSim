@@ -116,11 +116,17 @@ class DeviceModel(QtWidgets.QWidget):
 
         for child in self.root:
             if child.tag == "scmode1":
-                if child[0].text \
-                   and os.path.exists(child[0].text):
+                # An empty <scmode1/> prevvalues node (no children) used to
+                # IndexError at child[0] (R3-8 / R3-4-D). Treat a missing or
+                # non-existent stored path as "use the default library path".
+                try:
+                    stored_path = child[0].text
+                except (IndexError, AttributeError):
+                    stored_path = None
+                if stored_path and os.path.exists(stored_path):
                     self.entry_var[self.count] \
-                        .setText(child[0].text)
-                    path_name = child[0].text
+                        .setText(stored_path)
+                    path_name = stored_path
                 else:
                     if os.name == 'nt':
                         path_name = paths.library_path(
@@ -156,10 +162,18 @@ class DeviceModel(QtWidgets.QWidget):
         path_name = ''
         for child in self.root:
             if child.tag == "scmode1":
-                if child[1].text:
+                # child[1] is the stored corner, child[0] its library path.
+                # A scmode1 node with fewer children used to IndexError
+                # here (R3-8). Fall back to a blank corner field.
+                try:
+                    stored_corner = child[1].text
+                    stored_path = child[0].text
+                except (IndexError, AttributeError):
+                    stored_corner = stored_path = None
+                if stored_corner:
                     self.entry_var[self.count] \
-                        .setText(child[1].text)
-                    path_name = child[0].text
+                        .setText(stored_corner)
+                    path_name = stored_path
                 else:
                     self.entry_var[self.count].setText("")
 
@@ -183,6 +197,10 @@ class DeviceModel(QtWidgets.QWidget):
             print("=========================================")
             print(eachline)
             words = eachline.split()
+            # A blank schematicInfo line makes eachline[0] IndexError in the
+            # designator test below; skip it (R3-8).
+            if not eachline.strip():
+                continue
             # supporteddesignator = ['sc', 'u', 'x', 'v', 'i', 'a']
             if eachline[0:2] != 'sc' and eachline[0] != 'u' \
                     and eachline[0] != 'x' and eachline[0] != '*'\
@@ -881,12 +899,12 @@ class DeviceModel(QtWidgets.QWidget):
 
         kicadFile = self.clarg1
         (projpath, filename) = os.path.split(kicadFile)
-        analysisfile = open(os.path.join(projpath, filename))
-        # analysisfile = open(os.path.join(projpath, 'analysis'))
-        content = analysisfile.read()
+        # Read the netlist and close the handle immediately rather than leaking
+        # it until GC; the output file is opened at the end under a `with` too
+        # (audit R3-13).
+        with open(os.path.join(projpath, filename)) as analysisfile:
+            content = analysisfile.read()
         contentlines = content.split("\n")
-        parsedfile = open(os.path.join(projpath, filename+'.parsed.v'), 'w')
-        parsedfile.write("")
         # print("module "+filename)
         i = 1
         inputlist = []
@@ -977,9 +995,11 @@ Converter developed at FOSSEE, IIT Bombay\n")
 
         print('\n**************Generated Verilog File: ' +
               filename + '.parsed.v***************\n')
-        for j in parsedcontent:
-            print(j)
-            parsedfile.write(j+"\n")
+        parsed_path = os.path.join(projpath, filename + '.parsed.v')
+        with open(parsed_path, 'w') as parsedfile:
+            for j in parsedcontent:
+                print(j)
+                parsedfile.write(j + "\n")
         print(
             '\n*************************************\
 ************************************\n')

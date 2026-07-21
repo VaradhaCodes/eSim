@@ -71,15 +71,28 @@ class UploadSub(QtWidgets.QWidget):
 
         if reply == "VALID":
             print("Validated: Creating subcircuit directory")
-            os.makedirs(subcircuit_path)
             subcircuit = os.path.join(subcircuit_path, upload)
+            # The SubcircuitLibrary lives in the install tree, which is
+            # read-only on a Program Files / system install — the makedirs and
+            # copy used to raise PermissionError onto the crash net. Surface a
+            # clear dialog instead.
+            try:
+                os.makedirs(subcircuit_path)
 
-            print("===================")
-            print("Current path of subcircuit file is " + editfile)
-            print("Selected file is " + upload)
-            print("Final path of file is " + subcircuit)
-            print("===================")
-            shutil.copy(editfile, subcircuit)
+                print("===================")
+                print("Current path of subcircuit file is " + editfile)
+                print("Selected file is " + upload)
+                print("Final path of file is " + subcircuit)
+                print("===================")
+                shutil.copy(editfile, subcircuit)
+            except OSError as e:
+                Dialogs.critical(
+                    self, "Error Message",
+                    "Could not add the subcircuit to the eSim library. The "
+                    "library folder may be read-only (e.g. a Program Files "
+                    "install).\n\n" + str(e))
+                print("Could not write subcircuit: " + str(e))
+                return
 
         elif reply == "CHECKEXIST":
             print("Project name already exists.")

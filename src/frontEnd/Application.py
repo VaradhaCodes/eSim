@@ -1410,6 +1410,13 @@ class MainView(QtWidgets.QWidget):
         self.obj_appconfig.noteArea['Note'].append('Project Selected : None')
         self.obj_appconfig.noteArea['Note'].append('\n')
 
+        # The console sink is now a live QTextEdit (and the status bar a live
+        # QStatusBar). Both may only be touched from the GUI thread, so stand up
+        # the GUI-thread reporter that print_info/warning/error marshal through
+        # -- we are on the GUI thread here (Application is built after
+        # QApplication in main()). See Appconfig.attach_gui_reporter (M9).
+        self.obj_appconfig.attach_gui_reporter()
+
         # Enhanced CSS with proper scrollbar styling
         self.noteArea.setObjectName("mainNoteConsole")
 
@@ -1510,15 +1517,57 @@ def _install_excepthook():
         if site in seen_sites:
             return
         seen_sites.add(site)
+
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        summary = (
+            'An internal error occurred; the app will keep running, '
+            'but the last action may be incomplete.\n\n'
+            + ''.join(traceback.format_exception_only(etype, value)).strip()
+            + ('\n\nDetails: %s' % log_path if log_path else ''))
+
+        def show():
+            try:
+                Dialogs.critical(None, 'eSim - Unexpected error', summary)
+            except Exception:
+                pass
+
+        # Always POST the dialog, never show it inline -- for two reasons:
+        #
+        #  1. Thread (B1): sys.excepthook runs on whichever thread raised, and a
+        #     raise inside a WorkerThread (a missing eeschema/OMEdit binary is
+        #     the easy one) lands here off the GUI thread. Creating or showing a
+        #     QWidget from a non-GUI thread is undefined behaviour in Qt and can
+        #     kill the process natively -- the crash net itself becoming the
+        #     crash.
+        #  2. Re-entrancy (M12): even ON the GUI thread, Dialogs.critical runs a
+        #     nested modal loop (exec()). If the exception escaped a paint /
+        #     close / teardown handler, exec()ing there re-enters the event loop
+        #     -- and can re-enter the very handler that just raised. The
+        #     seen_sites dedupe stops an infinite dialog storm but not that
+        #     first re-entrancy.
+        #
+        # Appconfig.post_to_gui emits the reporter's QueuedConnection 'deferred'
+        # signal: from a worker thread it marshals to the GUI thread; on the GUI
+        # thread it still defers to the next event-loop turn, so the current
+        # (paint/close) stack fully unwinds before the modal box opens. NOTE:
+        # PyQt6's QTimer.singleShot has NO (msec, context, slot) overload, so
+        # the old singleShot(0, app, show) silently raised TypeError and the
+        # worker-thread dialog never appeared -- the reporter is the only API
+        # that crosses threads correctly.
+        #
+        # The log write above already happened, so a failure is never silent
+        # even if no event loop is left to service the queued call (e.g. the
+        # raise came from app teardown -- exactly when a modal box is unwanted).
         try:
-            if QtWidgets.QApplication.instance() is not None:
-                Dialogs.critical(
-                    None, 'eSim - Unexpected error',
-                    'An internal error occurred; the app will keep running, '
-                    'but the last action may be incomplete.\n\n'
-                    + ''.join(traceback.format_exception_only(etype, value)).strip()
-                    + ('\n\nDetails: %s' % log_path if log_path else '')
-                )
+            if not Appconfig.post_to_gui(show):
+                # No GUI reporter yet (a crash during early startup, before
+                # Application built it) -- there is no other thread's loop to
+                # marshal to, so defer on THIS thread's loop. Fires only if this
+                # is the GUI thread (the sole event loop that early); a
+                # pre-reporter worker crash is already in error.log above.
+                QtCore.QTimer.singleShot(0, show)
         except Exception:
             pass
 
@@ -1750,52 +1799,65 @@ def main(args):
     # after the slow part was already done. Both are gone: the splash appears
     # instantly and closes the moment the workspace/main window shows.
     splash_pix = QtGui.QPixmap(paths.image_path('splash_screen_esim.png'))
-    splash_pix = splash_pix.scaledToWidth(
-        int(splash_pix.width() * 0.8),
-        QtCore.Qt.TransformationMode.SmoothTransformation)
+    if splash_pix.isNull():
+        # Missing/unreadable splash_screen_esim.png yields a null (0x0) pixmap.
+        # Feeding it through the scale/rounded-mask/QPainter chain below only
+        # spams "QPainter::begin: Paint device returned engine == 0" warnings
+        # and produces an invisible splash. Skip the splash entirely and let
+        # startup continue -- the window build below runs the same either way.
+        # Every downstream consumer already guards `splash is not None`
+        # (Workspace._finish_workspace_change, the workspace-picker branch).
+        print("Splash image missing; starting without splash screen.")
+        splash = None
+    else:
+        splash_pix = splash_pix.scaledToWidth(
+            int(splash_pix.width() * 0.8),
+            QtCore.Qt.TransformationMode.SmoothTransformation)
 
-    # Proportional rounded mask cuts the heavy black splash corners.
-    radius = int(min(splash_pix.width(), splash_pix.height()) * 0.10)
-    rounded_splash = QtGui.QPixmap(splash_pix.size())
-    rounded_splash.fill(QtCore.Qt.GlobalColor.transparent)
-    painter = QtGui.QPainter(rounded_splash)
-    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-    path_obj = QtGui.QPainterPath()
-    path_obj.addRoundedRect(
-        0, 0, splash_pix.width(), splash_pix.height(), radius, radius)
-    painter.setClipPath(path_obj)
-    painter.drawPixmap(0, 0, splash_pix)
-    painter.end()
+        # Proportional rounded mask cuts the heavy black splash corners.
+        radius = int(min(splash_pix.width(), splash_pix.height()) * 0.10)
+        rounded_splash = QtGui.QPixmap(splash_pix.size())
+        rounded_splash.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(rounded_splash)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        path_obj = QtGui.QPainterPath()
+        path_obj.addRoundedRect(
+            0, 0, splash_pix.width(), splash_pix.height(), radius, radius)
+        painter.setClipPath(path_obj)
+        painter.drawPixmap(0, 0, splash_pix)
+        painter.end()
 
-    class FadingSplash(QtWidgets.QSplashScreen):
-        def __init__(self, pixmap):
-            transparent_base = QtGui.QPixmap(pixmap.size())
-            transparent_base.fill(QtCore.Qt.GlobalColor.transparent)
-            super().__init__(
-                transparent_base, QtCore.Qt.WindowType.WindowStaysOnTopHint)
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-            self.base_pixmap = pixmap
-            self.opacity = 1.0
+        class FadingSplash(QtWidgets.QSplashScreen):
+            def __init__(self, pixmap):
+                transparent_base = QtGui.QPixmap(pixmap.size())
+                transparent_base.fill(QtCore.Qt.GlobalColor.transparent)
+                super().__init__(
+                    transparent_base,
+                    QtCore.Qt.WindowType.WindowStaysOnTopHint)
+                self.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+                self.base_pixmap = pixmap
+                self.opacity = 1.0
 
-        def setOpacity(self, opacity):
-            self.opacity = opacity
-            self.repaint()
+            def setOpacity(self, opacity):
+                self.opacity = opacity
+                self.repaint()
 
-        def paintEvent(self, event):
-            painter = QtGui.QPainter(self)
-            painter.setOpacity(self.opacity)
-            painter.drawPixmap(0, 0, self.base_pixmap)
-            painter.end()
+            def paintEvent(self, event):
+                painter = QtGui.QPainter(self)
+                painter.setOpacity(self.opacity)
+                painter.drawPixmap(0, 0, self.base_pixmap)
+                painter.end()
 
-    splash = FadingSplash(rounded_splash)
-    splash.setDisabled(True)
-    # Busy cursor over the splash: tells the user "loading, don't worry"
-    # during the long blocking phases below.
-    splash.setCursor(QtCore.Qt.CursorShape.BusyCursor)
-    splash.show()
-    # Force one paint now so the splash is actually on screen before we block
-    # the event loop building the main window.
-    app.processEvents()
+        splash = FadingSplash(rounded_splash)
+        splash.setDisabled(True)
+        # Busy cursor over the splash: tells the user "loading, don't worry"
+        # during the long blocking phases below.
+        splash.setCursor(QtCore.Qt.CursorShape.BusyCursor)
+        splash.show()
+        # Force one paint now so the splash is actually on screen before we
+        # block the event loop building the main window.
+        app.processEvents()
 
     # The slow part -- window construction + last-project restore -- now runs
     # with the splash already visible.
@@ -1839,7 +1901,8 @@ def main(args):
         # input -- otherwise the dialog opens underneath it, can't be raised
         # past it, and the app looks hung. The splash's only job (covering
         # the slow window build) is already done at this point.
-        splash.close()
+        if splash is not None:
+            splash.close()
         appView.splash = None
         appView.obj_workspace.show()
         appView.obj_workspace.raise_()

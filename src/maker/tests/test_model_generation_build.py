@@ -173,8 +173,15 @@ def ngveri(qapp, tmp_path, monkeypatch):
     return NgVeri.NgVeri(0)
 
 
-def test_pipeline_all_steps_pass(ngveri, monkeypatch):
-    monkeypatch.setattr(os, "name", "posix")
+def test_pipeline_all_steps_pass(ngveri):
+    # NB: do NOT monkeypatch os.name here. _legacy_build_pipeline is platform-
+    # agnostic (make install on every platform), so the patch was vestigial —
+    # and setting os.name='posix' on Windows makes pathlib.Path() build
+    # PosixPath objects, which crashes pytest's own terminal reporter
+    # (Path("C:\\...").relative_to -> ValueError -> INTERNALERROR, aborting the
+    # whole session) in the window after the test body but before monkeypatch
+    # teardown restores it. Order/layout-dependent (only bites when rootdir !=
+    # invocation dir takes pytest's bestrelpath branch).
     stub = _StubModel({})
     assert ngveri._legacy_build_pipeline(stub) is True
     assert stub.ran == ["run_verilator", "make_verilator", "copy_verilator",

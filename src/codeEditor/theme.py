@@ -9,7 +9,15 @@ instead of the near-black defaults.
 
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PyQt6.QtWidgets import QApplication
-from PyQt6.Qsci import QsciScintilla
+
+try:
+    from PyQt6.Qsci import QsciScintilla
+except ImportError:               # QScintilla not installed / failed to load
+    # Optional dependency -- see lexers.py. Only apply() touches the class,
+    # and apply() is only ever handed a real QsciScintilla editor, which
+    # cannot exist without the module. editor_font() and the palettes stay
+    # usable for the plain-text fallback editor.
+    QsciScintilla = None
 
 
 # ── palettes ─────────────────────────────────────────────────────────

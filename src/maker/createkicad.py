@@ -150,15 +150,24 @@ class AutoSchematic:
         '''
             creating the XML files at `library/modelParamXML/Ngveri`
         '''
-        cwd = os.getcwd()
         xmlDestination = os.path.join(self.xml_loc, 'Ngveri')
         self.splitText = ""
+        # Empty port list would IndexError on portInfo[-1]; a model with no
+        # parsed ports is malformed, so bail cleanly (the NgVeri caller logs it)
+        # rather than crash mid-build.
+        if not self.portInfo:
+            raise ValueError(
+                "No ports parsed for '" + str(self.modelname) +
+                "' — check connection_info.txt")
         for bit in self.portInfo[:-1]:
             self.splitText += bit + "-V:"
         self.splitText += self.portInfo[-1] + "-V"
 
-        print("changing directory to ", xmlDestination)
-        os.chdir(xmlDestination)
+        # Absolute-path write, no os.chdir. modelParamXML lives in the install
+        # tree; on a read-only install the write raises, but without chdir it
+        # can no longer strand the process CWD inside the library folder (which
+        # silently corrupted every later relative-path operation this session).
+        os.makedirs(xmlDestination, exist_ok=True)
 
         root = ET.Element("model")
         ET.SubElement(root, "name").text = self.modelname
@@ -178,9 +187,7 @@ class AutoSchematic:
             "Enter Instance ID (Between 0-99)")
 
         tree = ET.ElementTree(root)
-        tree.write(str(self.modelname) + '.xml')
-        print("Leaving the directory ", xmlDestination)
-        os.chdir(cwd)
+        tree.write(os.path.join(xmlDestination, str(self.modelname) + '.xml'))
 
     def findBlockSize(self):
         '''
@@ -395,25 +402,31 @@ class PortInfo:
         '''
         input_list = []
         output_list = []
-        read_file = open(self.modelpath + 'connection_info.txt', 'r')
-        data = read_file.readlines()
-        # print(data)
-        read_file.close()
+        info_path = self.modelpath + 'connection_info.txt'
+        try:
+            with open(info_path, 'r') as read_file:
+                data = read_file.readlines()
+        except OSError as e:
+            raise ValueError(
+                "Cannot read connection_info.txt for '" +
+                str(self.modelname) + "': " + str(e)) from e
 
         for line in data:
+            # Skip blank lines outright. Previously a blank FIRST line fell into
+            # the pass branch leaving in_items/out_items unbound, then the reads
+            # below hit UnboundLocalError.
             if re.match(r'^\s*$', line):
-                pass
-            else:
-                in_items = re.findall(
-                    "INPUT", line, re.MULTILINE | re.IGNORECASE
-                )
-                inout_items = re.findall(
-                    "INOUT", line, re.MULTILINE | re.IGNORECASE
-                )
+                continue
+            in_items = re.findall(
+                "INPUT", line, re.MULTILINE | re.IGNORECASE
+            )
+            inout_items = re.findall(
+                "INOUT", line, re.MULTILINE | re.IGNORECASE
+            )
 
-                out_items = re.findall(
-                    "OUTPUT", line, re.MULTILINE | re.IGNORECASE
-                )
+            out_items = re.findall(
+                "OUTPUT", line, re.MULTILINE | re.IGNORECASE
+            )
             if in_items:
                 input_list.append(line.split())
             if inout_items:

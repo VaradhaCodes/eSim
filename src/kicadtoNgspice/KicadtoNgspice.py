@@ -542,7 +542,8 @@ class MainWindow(QtWidgets.QWidget):
         # print("OBJ_ANALYSIS.CHECK -----", self.obj_track.op_check[-1])
         ET.SubElement(
             attr_dc, "field5", name="Operating Point"
-        ).text = str(self.obj_track.op_check[-1])
+        ).text = str(self.obj_track.op_check[-1]
+                     if self.obj_track.op_check else '0')
         ET.SubElement(
             attr_dc, "field6", name="Start Combo"
         ).text = self.obj_analysis.dc_parameter[0]
@@ -595,12 +596,18 @@ class MainWindow(QtWidgets.QWidget):
         ).text = self.obj_analysis.tran_parameter[2]
         # print("TRAN PARAMETER 2-----",self.obj_analysis.tran_parameter[2])
 
-        if check == 0:
-            attr_source = ET.SubElement(attr_parent, "source")
+        # attr_source must always be bound before the serialization loop
+        # below. A prevvalues cache that has no <source> node (corrupt or
+        # from an older schematic revision) used to leave it unassigned ->
+        # UnboundLocalError at "for child in attr_source" (M1 / R3-4-B).
+        attr_source = None
         if check == 1:
             for child in attr_parent:
                 if child.tag == "source":
                     attr_source = child
+                    break
+        if attr_source is None:
+            attr_source = ET.SubElement(attr_parent, "source")
 
         count = 0
         grand_child_count = 0
@@ -614,6 +621,12 @@ class MainWindow(QtWidgets.QWidget):
                 if child.tag == wordv and child.text == words[len(words) - 1]:
                     tmp_check = 1
                     for grand_child in child:
+                        # Source-type drift (remembered XML carries more
+                        # source fields than the live tab now has) used to
+                        # index past entry_var_keys -> IndexError (M1 /
+                        # R3-4-C). Stop restoring once the live fields run out.
+                        if grand_child_count >= len(entry_var_keys):
+                            break
                         grand_child.text = \
                             str(self.obj_source.entry_var
                                 [entry_var_keys[grand_child_count]].text())
@@ -784,7 +797,8 @@ class MainWindow(QtWidgets.QWidget):
             for child in attr_model:
                 if child.text == line[2] and child.tag == line[3]:
                     for grand_child in child:
-                        if i <= end:
+                        if i <= end and i < len(
+                                self.obj_model.obj_trac.model_entry_var):
                             grand_child.text = \
                                 str(self.obj_model.obj_trac.model_entry_var[
                                         i].text())
@@ -800,6 +814,12 @@ class MainWindow(QtWidgets.QWidget):
                         i <= end and not isinstance(value, str)
                     ):
                         for item in value:
+                            # Guard the parallel index walk: a model whose
+                            # tracked range outruns model_entry_var used to
+                            # IndexError here (M1). Stop at the live end.
+                            if i >= len(
+                                    self.obj_model.obj_trac.model_entry_var):
+                                break
                             ET.SubElement(
                                 attr_ui, "field" + str(i + 1), name=item
                             ).text = str(
@@ -807,7 +827,7 @@ class MainWindow(QtWidgets.QWidget):
                             )
                             i = i + 1
 
-                    else:
+                    elif i < len(self.obj_model.obj_trac.model_entry_var):
                         ET.SubElement(
                             attr_ui, "field" + str(i + 1), name=value
                         ).text = str(
@@ -888,7 +908,9 @@ class MainWindow(QtWidgets.QWidget):
             for child in attr_microcontroller:
                 if child.text == line[2] and child.tag == line[3]:
                     for grand_child in child:
-                        if i <= end:
+                        if i <= end and i < len(
+                                self.obj_microcontroller
+                                .obj_trac.microcontroller_var):
                             grand_child.text = \
                                 str(
                                     self.obj_microcontroller.
@@ -906,6 +928,10 @@ class MainWindow(QtWidgets.QWidget):
                             i <= end and not isinstance(value, str)
                     ):
                         for item in value:
+                            if i >= len(
+                                    self.obj_microcontroller
+                                    .obj_trac.microcontroller_var):
+                                break
                             ET.SubElement(
                                 attr_ui, "field" + str(i + 1), name=item
                             ).text = str(
@@ -913,7 +939,9 @@ class MainWindow(QtWidgets.QWidget):
                                 obj_trac.microcontroller_var[i].text()
                             )
                             i = i + 1
-                    else:
+                    elif i < len(
+                            self.obj_microcontroller
+                            .obj_trac.microcontroller_var):
                         ET.SubElement(
                             attr_ui, "field" + str(i + 1), name=value
                         ).text = str(
@@ -1237,12 +1265,14 @@ class MainWindow(QtWidgets.QWidget):
             ):
                 continue
             elif words[0] == ".control":
-                while words[0] != ".endc":
-                    eachline = next(netlist)
-                    eachline = eachline.strip()
-                    if len(eachline) < 1:
-                        continue
-                    words = eachline.split()
+                # Skip through the .control block. If .endc is missing
+                # (hand-edited .cir.out), the shared iterator simply
+                # exhausts and the outer for-loop ends — no StopIteration
+                # escapes as it did with next() (M2 / R3-4-F).
+                for ctrl_line in netlist:
+                    ctrl_words = ctrl_line.strip().split()
+                    if ctrl_words and ctrl_words[0] == ".endc":
+                        break
             else:
                 newNetlist.append(eachline)
 

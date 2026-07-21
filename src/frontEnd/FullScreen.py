@@ -17,7 +17,7 @@
 #
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # =========================================================================
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets, sip
 
 
 class FullScreenToggle(QtWidgets.QToolButton):
@@ -89,11 +89,25 @@ class FullScreenToggle(QtWidgets.QToolButton):
         def _on_close(event):
             if self._win is not None:
                 self._win = None
-                if self._dock is not None and self._content is not None:
+                dock, content = self._dock, self._content
+                # The host dock can be destroyed WHILE its panel is fullscreen
+                # (Close Project / closing the now-empty tab). The content is
+                # safe -- it was reparented into the fullscreen window, not the
+                # dock -- but the QDockWidget wrapper is gone, so setWidget/show/
+                # raise_ on it would RuntimeError inside this closeEvent.
+                dock_alive = dock is not None and not sip.isdeleted(dock)
+                if dock_alive and content is not None:
                     # Back into the dock -- it kept its tab slot all along.
-                    self._dock.setWidget(self._content)
-                    self._dock.show()
-                    self._dock.raise_()
+                    dock.setWidget(content)
+                    dock.show()
+                    dock.raise_()
+                elif content is not None and not sip.isdeleted(content):
+                    # Dock is gone: drop the orphaned panel rather than leaving
+                    # it floating parentless for the rest of the session.
+                    content.setParent(None)
+                    content.deleteLater()
+                self._dock = None
+                self._content = None
                 self._set_state(full=False)
             event.accept()
         return _on_close

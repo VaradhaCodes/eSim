@@ -25,6 +25,12 @@ class Model(QtWidgets.QWidget):
         # Processing for getting previous values
         kicadFile = clarg1
         check = 1
+        # Pre-bind the restore node so ``root`` is always defined even when the
+        # prev-values XML is missing or has no <model> child; the restore loops
+        # below then simply skip. Previously ``root`` was only bound inside the
+        # try, so a bare access outside the swallowing try/except would raise
+        # UnboundLocalError (the latent crash shape flagged in audit R3-13).
+        root = None
         try:
             f = open(
                 previous_values_path(kicadFile),
@@ -90,7 +96,7 @@ class Model(QtWidgets.QWidget):
 
                         # load any previous XML value
                         try:
-                            for child in root:
+                            for child in root if root is not None else []:
                                 if child.text == line[2] and child.tag == line[3]:
                                     le.setText(child[i].text)
                                     i += 1
@@ -116,7 +122,7 @@ class Model(QtWidgets.QWidget):
                     le.setText("")
 
                     try:
-                        for child in root:
+                        for child in root if root is not None else []:
                             if child.text == line[2] and child.tag == line[3]:
                                 le.setText(child[i].text)
                                 i += 1
@@ -163,22 +169,3 @@ class Model(QtWidgets.QWidget):
                     check = 1
             if check == 0:
                 self.obj_trac.modelTrack.append(lst)
-
-
-    def add_hex_btn(self, modelgrid, modelbox):
-        self.addbtn = QtWidgets.QPushButton("Add Hex File")
-        self.addbtn.setObjectName("%d" % self.nextcount)
-        self.addbtn.clicked.connect(self.addHex)
-        modelgrid.addWidget(self.addbtn, self.nextrow, 2)
-        modelbox.setLayout(modelgrid)
-
-        # CSS
-        modelbox.setStyleSheet(
-            " \
-        QGroupBox { border: 1px solid gray; border-radius:\
-        9px; margin-top: 0.5em; } \
-        QGroupBox::title { subcontrol-origin: margin; left:\
-        10px; padding: 0 3px 0 3px; } \
-        "
-        )
-        self.grid.addWidget(modelbox)

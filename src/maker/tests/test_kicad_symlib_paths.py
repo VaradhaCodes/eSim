@@ -9,7 +9,10 @@ user's own ~/.esim/kicad_symbols. These tests pin:
   (c) ensure_lib_registered appends / rewrites-stale / leaves-correct.
 
 HOME (and os.path.expanduser) is redirected to tmp_path throughout, so the real
-~/.esim is never touched.
+~/.esim is never touched. %APPDATA% is redirected too, because the KiCad config
+dir lives there on Windows and is NOT covered by expanduser (audit R2-5): before
+this, ensure_lib_registered wrote bogus entries into the developer's real
+%APPDATA%\\kicad\\sym-lib-table on every Windows run.
 """
 import os
 
@@ -21,6 +24,9 @@ def _redirect_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    # _kicad_config_dir() reads %APPDATA% on Windows; redirect it into the same
+    # sandbox so ensure_lib_registered can never reach the real KiCad profile.
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
     monkeypatch.setattr(os.path, "expanduser",
                         lambda p: p.replace("~", str(home), 1))
     return home
@@ -95,9 +101,17 @@ _HEADER = ("(sym_lib_table\n"
 
 
 def _make_table(tmp_path, monkeypatch, body):
-    """Build a ~/.config/kicad/<ver>/sym-lib-table under a redirected HOME."""
-    home = _redirect_home(tmp_path, monkeypatch)
-    verdir = os.path.join(str(home), ".config", "kicad", "9.0")
+    """Build a <ver>/sym-lib-table under the redirected KiCad config dir.
+
+    The version dir is derived from ``ksym._kicad_config_dir()`` — NOT a
+    hardcoded ``~/.config/kicad`` — so the table lands exactly where
+    ``ensure_lib_registered`` will look on both platforms (``%APPDATA%\\kicad``
+    on Windows, ``~/.config/kicad`` on POSIX). Hardcoding the POSIX path was the
+    R2-5 bug: the test wrote here while the code read the real %APPDATA%, so the
+    append/rewrite assertions failed on Windows and the real profile got junked.
+    """
+    _redirect_home(tmp_path, monkeypatch)
+    verdir = os.path.join(ksym._kicad_config_dir(), "9.0")
     os.makedirs(verdir)
     table = os.path.join(verdir, "sym-lib-table")
     with open(table, "w") as f:
