@@ -33,6 +33,7 @@ from configuration import Dialogs
 from configuration import paths
 from configuration.Appconfig import Appconfig
 import os
+import re
 import shutil
 from os.path import expanduser
 from .DesignBus import DesignBus
@@ -234,8 +235,10 @@ class Maker(QtWidgets.QWidget):
                         self.verilogfile.split('.')[:-1]) + ".tlv"
                     file = os.path.basename('.'.join(
                         self.verilogfile.split('.')[:-1]))
-                    code = code.replace(" wire ", " ")
-                    code = code.replace(" reg ", " ")
+                    # Word-boundary strip of the standalone wire/reg keywords;
+                    # the old spaced-substring replace still mangled tokens at
+                    # line-start or tab-adjacent (out_reg, wire_sel).
+                    code = re.sub(r'\b(wire|reg)\b', ' ', code)
                     vlog_ex = vlog.VerilogExtractor()
                     vlog_mods = vlog_ex.extract_objects_from_source(code)
 

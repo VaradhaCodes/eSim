@@ -395,9 +395,13 @@ class ModelGeneration(QtWidgets.QWidget):
         with open(self.modelpath + self.fname, 'rt') as fh:
             code = fh.read()
 
-        code = code.replace("wire", " ")
-        code = code.replace("reg", " ")
-                
+        # Strip the standalone "wire"/"reg" keywords hdlparse chokes on. A
+        # bare substring replace punched holes in any identifier CONTAINING
+        # them (out_reg, wire_sel, addr_reg); a word-boundary regex only
+        # touches the standalone tokens -- same fix already used for "top".
+        code = re.sub(r'\b(wire|reg)\b', ' ', code)
+
+
         header_re = re.compile(r'module\s+\w+\s*\((.*?)\)\s*;', re.S)
         def _split_ports(match):
             # hdlparse only recognises a port declaration at the start of a
