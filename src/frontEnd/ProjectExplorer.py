@@ -113,6 +113,17 @@ class ProjectExplorer(QtWidgets.QWidget):
         except Exception:
             pass
         self.fs_watcher.directoryChanged.connect(self.handleDirectoryChanged)
+        # Coalesce QFileSystemWatcher storms. A cloud-sync client (OneDrive /
+        # Dropbox) rewriting a watched project folder can fire directoryChanged
+        # dozens of times in a burst; refreshing the branch on every event
+        # rebuilds its children on the GUI thread each time, which janks the
+        # whole tree. Collect the changed paths and refresh them once, a short
+        # delay after the burst goes quiet -- restarting the single-shot timer
+        # on each event debounces the storm into a single rebuild.
+        self._pending_dir_changes = set()
+        self._dir_refresh_timer = QtCore.QTimer(self)
+        self._dir_refresh_timer.setSingleShot(True)
+        self._dir_refresh_timer.timeout.connect(self._flushDirectoryChanges)
         # NOT refreshing on expand: rebuilding a branch's children mid-expand
         # destroys QTreeWidget's drop-down animation (jittery/broken). The
         # fs_watcher above already keeps the tree fresh on directory changes.
@@ -177,11 +188,23 @@ class ProjectExplorer(QtWidgets.QWidget):
             node.setExpanded(True)
 
     def handleDirectoryChanged(self, path):
-        for i in range(self.treewidget.topLevelItemCount()):
-            item = self.treewidget.topLevelItem(i)
-            if item.text(1) == path and item.isExpanded():
-                index = self.treewidget.indexFromItem(item)
-                self.refreshProject(indexItem=index)
+        # Debounced: a lone event and a cloud-sync burst both collapse to a
+        # single refresh once the timer fires (see __init__). Restarting the
+        # timer on every event pushes the flush to ~300 ms after the last one.
+        self._pending_dir_changes.add(path)
+        self._dir_refresh_timer.start(300)
+
+    def _flushDirectoryChanges(self):
+        # Snapshot and clear first: refreshProject below can re-enter the
+        # watcher and queue a fresh event, which must land in the next batch.
+        paths = self._pending_dir_changes
+        self._pending_dir_changes = set()
+        for path in paths:
+            for i in range(self.treewidget.topLevelItemCount()):
+                item = self.treewidget.topLevelItem(i)
+                if item.text(1) == path and item.isExpanded():
+                    index = self.treewidget.indexFromItem(item)
+                    self.refreshProject(indexItem=index)
 
     def refreshInstant(self):
         for i in range(self.treewidget.topLevelItemCount()):

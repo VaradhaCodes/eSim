@@ -1799,52 +1799,65 @@ def main(args):
     # after the slow part was already done. Both are gone: the splash appears
     # instantly and closes the moment the workspace/main window shows.
     splash_pix = QtGui.QPixmap(paths.image_path('splash_screen_esim.png'))
-    splash_pix = splash_pix.scaledToWidth(
-        int(splash_pix.width() * 0.8),
-        QtCore.Qt.TransformationMode.SmoothTransformation)
+    if splash_pix.isNull():
+        # Missing/unreadable splash_screen_esim.png yields a null (0x0) pixmap.
+        # Feeding it through the scale/rounded-mask/QPainter chain below only
+        # spams "QPainter::begin: Paint device returned engine == 0" warnings
+        # and produces an invisible splash. Skip the splash entirely and let
+        # startup continue -- the window build below runs the same either way.
+        # Every downstream consumer already guards `splash is not None`
+        # (Workspace._finish_workspace_change, the workspace-picker branch).
+        print("Splash image missing; starting without splash screen.")
+        splash = None
+    else:
+        splash_pix = splash_pix.scaledToWidth(
+            int(splash_pix.width() * 0.8),
+            QtCore.Qt.TransformationMode.SmoothTransformation)
 
-    # Proportional rounded mask cuts the heavy black splash corners.
-    radius = int(min(splash_pix.width(), splash_pix.height()) * 0.10)
-    rounded_splash = QtGui.QPixmap(splash_pix.size())
-    rounded_splash.fill(QtCore.Qt.GlobalColor.transparent)
-    painter = QtGui.QPainter(rounded_splash)
-    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-    path_obj = QtGui.QPainterPath()
-    path_obj.addRoundedRect(
-        0, 0, splash_pix.width(), splash_pix.height(), radius, radius)
-    painter.setClipPath(path_obj)
-    painter.drawPixmap(0, 0, splash_pix)
-    painter.end()
+        # Proportional rounded mask cuts the heavy black splash corners.
+        radius = int(min(splash_pix.width(), splash_pix.height()) * 0.10)
+        rounded_splash = QtGui.QPixmap(splash_pix.size())
+        rounded_splash.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(rounded_splash)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        path_obj = QtGui.QPainterPath()
+        path_obj.addRoundedRect(
+            0, 0, splash_pix.width(), splash_pix.height(), radius, radius)
+        painter.setClipPath(path_obj)
+        painter.drawPixmap(0, 0, splash_pix)
+        painter.end()
 
-    class FadingSplash(QtWidgets.QSplashScreen):
-        def __init__(self, pixmap):
-            transparent_base = QtGui.QPixmap(pixmap.size())
-            transparent_base.fill(QtCore.Qt.GlobalColor.transparent)
-            super().__init__(
-                transparent_base, QtCore.Qt.WindowType.WindowStaysOnTopHint)
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-            self.base_pixmap = pixmap
-            self.opacity = 1.0
+        class FadingSplash(QtWidgets.QSplashScreen):
+            def __init__(self, pixmap):
+                transparent_base = QtGui.QPixmap(pixmap.size())
+                transparent_base.fill(QtCore.Qt.GlobalColor.transparent)
+                super().__init__(
+                    transparent_base,
+                    QtCore.Qt.WindowType.WindowStaysOnTopHint)
+                self.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+                self.base_pixmap = pixmap
+                self.opacity = 1.0
 
-        def setOpacity(self, opacity):
-            self.opacity = opacity
-            self.repaint()
+            def setOpacity(self, opacity):
+                self.opacity = opacity
+                self.repaint()
 
-        def paintEvent(self, event):
-            painter = QtGui.QPainter(self)
-            painter.setOpacity(self.opacity)
-            painter.drawPixmap(0, 0, self.base_pixmap)
-            painter.end()
+            def paintEvent(self, event):
+                painter = QtGui.QPainter(self)
+                painter.setOpacity(self.opacity)
+                painter.drawPixmap(0, 0, self.base_pixmap)
+                painter.end()
 
-    splash = FadingSplash(rounded_splash)
-    splash.setDisabled(True)
-    # Busy cursor over the splash: tells the user "loading, don't worry"
-    # during the long blocking phases below.
-    splash.setCursor(QtCore.Qt.CursorShape.BusyCursor)
-    splash.show()
-    # Force one paint now so the splash is actually on screen before we block
-    # the event loop building the main window.
-    app.processEvents()
+        splash = FadingSplash(rounded_splash)
+        splash.setDisabled(True)
+        # Busy cursor over the splash: tells the user "loading, don't worry"
+        # during the long blocking phases below.
+        splash.setCursor(QtCore.Qt.CursorShape.BusyCursor)
+        splash.show()
+        # Force one paint now so the splash is actually on screen before we
+        # block the event loop building the main window.
+        app.processEvents()
 
     # The slow part -- window construction + last-project restore -- now runs
     # with the splash already visible.
@@ -1888,7 +1901,8 @@ def main(args):
         # input -- otherwise the dialog opens underneath it, can't be raised
         # past it, and the app looks hung. The splash's only job (covering
         # the slow window build) is already done at this point.
-        splash.close()
+        if splash is not None:
+            splash.close()
         appView.splash = None
         appView.obj_workspace.show()
         appView.obj_workspace.raise_()
