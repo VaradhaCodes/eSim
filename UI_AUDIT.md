@@ -799,6 +799,158 @@ Welcome tile.
 
 ---
 
+### S5 — 2026-07-22 · 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, C3 — **P3 is closed**
+
+Verifier: `audit_harness/verify_ui_s5.py` (28/28 offscreen). S1/S2/S3/S4 re-run
+on this tree: 11/11, 16/16, 22/22, 43/43. `smoke_no_qsci` and
+`smoke_no_watchdog`: PASS. Ruff `F,E9,B,E501,W291,W293` diffed against HEAD for
+all 8 touched source files: **zero new findings, 6 pre-existing cleared** (all
+of them E501s inside deleted code); the new verifier is clean on the same set.
+
+Full suite **579 passed / 9 failed / 18 skipped**. The 9 failures are the
+documented Windows env set, unchanged (`test_toolchain_check` ×6,
+`test_cosim_config` vvp, `test_nghdl_embed` ×2). The counts moved from the
+581/9/22 baseline by exactly 6, and every one is accounted for: `test_widget_
+event_loops` discovers widget classes by introspection, so the six deleted
+classes stop being parametrised — `GradientLabel` and `AuroraHeroFrame` were
+no-arg constructible (−2 passed) and `DockTitleBar`/`DockDropOverlay`/
+`FloatingDockHost`/`RailDragGrip` took constructor arguments and were being
+skipped (−4 skipped). No test lost coverage of anything that still exists.
+
+**Deletion sessions verify vacuously unless you close the loop.** Every
+absence the audit asked for is trivially assertable, and trivially wrong the
+next time someone adds a rule. So three of this session's checks are sweeps
+over the whole tree rather than greps for the names §3.1's table happens to
+list: every `#name` and `[prop="value"]` selector in either sheet must have a
+setter in some `.py`/`.ui`; every image file must be referenced **and** every
+referenced image must exist; every public name in `widgets.py` and every
+`*_icon` factory must have a consumer. A future dead rule now fails on the day
+it is written.
+
+That paid for itself immediately: the selector sweep found a **40th finding the
+audit's table missed** — `QLabel#verilogNoWaveform` (dark `:1253`, light
+`:1262`), an objectName rule with zero setters, in both sheets. §1.6 had even
+looked straight at it ("italic exists in both, fine") without asking whether
+anything wore it. Deleted with the rest, symmetrically.
+
+**3.1 — nine dead selector groups out of both sheets, plus that one.** Removed
+in mirrored ranges, so S2's empty-structural-diff guard stays absolute and is
+re-asserted here on the trimmed sheets. Both sheets still re-parse through Qt
+with no "Could not parse stylesheet". The one judgement call the audit left
+open — `QLabel[cssClass="error"/"warning"/"success"]`, "delete OR adopt in
+§1.3/§2.8, decide once" — is **delete**, because the decision was already made
+by the shipped work: §1.3's status dot has to *re-tint* on a theme toggle,
+which is why S3 gave it `tokens` + a replay hook rather than a static class,
+and §2.8 went to `messageKind`. Nothing was ever going to set them.
+
+What deliberately survived the cut, since the deletion ran straight through
+that region: `QFrame#dockCard` (live — `DockArea.apply_fullscreen_feature`
+sets it, and the verifier asserts both halves), `QDockWidget::title` and the
+0×0 close/float hiding block S1 collapsed, and `QWidget#verilogFindBar`.
+`dock_close_*` stay live via `QTabBar::close-button`.
+
+**3.2 — `widgets.py` is all-live for the first time.** Seven names gone
+(`GradientLabel`, `AuroraHeroFrame`, `RailDragGrip`, `DockTitleBar`,
+`DockDropOverlay`, `FloatingDockHost`, `_is_wayland`), ~580 lines, leaving
+`mono_family` / `accent_color` / `HoverSurfaceMixin` — each with a real
+consumer, each still exercised by rendering rather than by grep. The module
+docstring now states the rule the file is finally keeping.
+
+**The dock-drag code went; its findings did not.** The audit offered "move the
+file to docs/ or a git tag if deleting feels risky given the engineering notes
+in its docstrings" — but a file in `docs/` is not where the next person to
+attempt drag-out docking will be standing. They will be in
+`DockArea.apply_fullscreen_feature`, which is where the four findings now live,
+with a pointer to `git log -- src/frontEnd/widgets.py` for the implementation:
+reparent-then-move races the compositor's async window-map on Wayland (so
+undock must be DnD, which never reparents mid-gesture); `startSystemMove()` is
+the only top-level move Wayland honours; `setFloating` inside a mouse/drag
+handler re-enters Qt's drag state machine and freezes the window; and Wayland
+delivers no events during a compositor move, so hover-to-redock is undetectable
+there and double-click is the only universal gesture. The verifier fails if
+that write-up is removed.
+
+**3.3 — three dead installers and every `dockPopButton` branch.**
+`install_popup_motion` / `install_effect_refresh` / `install_menu_depth` are
+gone, and the property is now absent from executable code tree-wide (it was
+read in `rest_alpha` and in four `if not is_dock:` guards wrapping every branch
+of `TactileButtonFilter.eventFilter`; nothing has set it since the dock
+prototype).
+
+**One deviation from the finding's letter, and the reason.** The audit said
+"keep the class, delete only `install_effect_refresh`" — but with the installer
+gone, `EffectShowRefreshFilter.eventFilter` cannot fire from anywhere (the only
+consumer, `test_app_motion_filter`, exercises `AppWideMotionFilter`), so
+keeping it would have left exactly the dead weight this section exists to
+remove. The **class** is kept, as instructed, because it is the home of
+`_revalidate` and of the only written explanation of why a re-shown widget's
+shadow cache goes stale; its uninstallable `eventFilter` is not. The docstring
+now says plainly that this is a helper, not a filter.
+
+Removing four guards from a hot event path is a behaviour change, so it is
+verified as one, not read: a `dockPopButton` button now rests at the same alpha
+as any other (the property is inert), `noMotion` — the live opt-out — still
+returns 0, and an Enter event still builds the drop shadow and starts the glow
+animation.
+
+**3.4 — four icon factories and their SVG constants.** `backup_icon`,
+`close_proj_icon`, `copy_icon`, `close_icon`. `_theme_icon_color`'s `"danger"`
+role stays: `trash_icon` still uses it. Every surviving factory is asserted to
+rasterise to a real pixmap, which is how a deleted constant that some other
+factory shared would surface — as an empty icon rather than an ImportError.
+
+**3.5 — 16 orphaned assets, not the 6 the audit counted.** `text_find_*`,
+`text_save_*`, `text_save_as_*`, `text_wrap_*` are 8 files, not 6 (each name
+ships a dark **and** a light variant); `dock_pop_*` is 4; and `dock_fullscreen_*`
+is 4 more, orphaned by S1's own §1.5 collapse and noted there. Twelve SVGs
+remain in `images/`, and all twelve are referenced — asserted in both
+directions now, which is what stops this from silently re-accumulating.
+
+**3.6 — the three hygiene items.** The commented-out SoC toolbutton (with its
+own commented stylesheet, and a `connect` to a `showSoCRelease` that does not
+exist) is gone. `PreferencesDialog`'s `import json as _json` + `json_load` /
+`json_dump` wrappers — which sat *below* the class that called them — are a
+plain top-level `import json` and direct calls. `reject()`'s second write was
+the finding's real point and it is now `paths.write_json_atomic`: it is the
+Cancel path, i.e. it runs precisely while the user is closing things down, and
+a bare `open(w)` there leaves a truncated preferences.json. The verifier walks
+the module's AST and fails on *any* `open(..., "w")`, not just that one.
+`theme_utils`' comment stopped naming SpiceEditor; it names the handlers that
+actually re-style on `PaletteChange` today, and the verifier checks each named
+class exists and really has a `changeEvent`, so the comment cannot rot again.
+
+**C3 — kept and documented, per the audit's recommendation.** The custom-accent
+machinery is reachable only from a hand-edited or older-build preferences.json,
+because `_collect_prefs` pins all three keys to sentinels. `tokens.py`'s
+docstring now says so, `theme_utils.ACCENT_TOKENS` carries a pointer to it, and
+— the part that makes it stay true — a check asserts the **docstring and the
+code agree**: it parses `_collect_prefs` and fails if the three keys stop being
+pinned, so re-enabling accent picking breaks the test that guards the note
+rather than quietly making the note a lie. A third check builds a sheet with a
+custom accent and requires it to still reach both the hex literals and the
+`rgba()` glows, since "kept" has to mean "works".
+
+**A pre-existing test-isolation bug, surfaced but not caused.**
+`configuration/tests/test_dialogs.py`'s two `_resolve_parent` tests assume
+exactly one visible `QMainWindow` exists, which nothing in the suite
+guarantees; they fail if a leaked window is still alive when they run. Deleting
+six widget classes removes six `_exercise()` cycles (each of which drains the
+`deleteLater` queue), which changes whether the leak has been collected by
+then. **This reproduces on a pristine HEAD** by merely deselecting those six
+params — no source change at all — and it does *not* fire in the full suite in
+either tree. It wants its own finding: the fixture should assert or enforce a
+clean top-level set, rather than depending on how many widgets ran before it.
+
+**Not done in S5, still open:** §C1's `theme_utils`/`recolor` half, §C4 (which
+the audit explicitly wants done opportunistically, never as a sweep), §C6's
+bundling question (blocked on commit `110228cc`), and the remainder of §C7
+(deliberately out of scope per the finding). Also still open, both created by
+earlier sessions rather than by the audit: the latent MainView/`apply_theme`
+access violation S4 made reproducible, and the missing focus ring on a
+keyboard-focused Welcome tile from S2. **P1, P2 and P3 are now fully closed.**
+
+---
+
 ## Verification checklist for the fixing session
 
 1. `pytest src/frontEnd/tests src/ngspiceSimulation/tests/test_plot_window_theme.py -q` green.

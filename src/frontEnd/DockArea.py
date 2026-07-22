@@ -276,7 +276,33 @@ class DockArea(QtWidgets.QMainWindow):
         reparents the dock's direct child) carries the whole card in and out of
         fullscreen and the look survives the round-trip. The card is a plain
         QFrame with no graphics effect, so QWebEngineView tools (Makerchip)
-        keep rendering."""
+        keep rendering.
+
+        Superseded design — read this before re-attempting drag-out docking.
+        An earlier custom dock chrome (``widgets.DockTitleBar`` /
+        ``DockDropOverlay`` / ``FloatingDockHost``, deleted in the UI audit's
+        P3 pass; ``git log -- src/frontEnd/widgets.py`` has the code) tried to
+        let a tool be dragged out of the dock area into a free window. Four
+        findings from it are worth keeping, because they cost real debugging:
+
+        1. Reparenting a docked widget into a new top-level and *then* moving
+           it races the compositor's async window-map on Wayland. A QDrag never
+           reparents mid-gesture, so undock has to be drag-and-drop, not
+           float-then-move.
+        2. ``QWindow.startSystemMove()`` is the ONLY way to move a top-level on
+           Wayland (and is the native move loop everywhere else). Programmatic
+           ``move()`` is silently ignored there.
+        3. ``setFloating`` must never be called inside a mouse/drag/drop
+           handler — that runs in the drag's nested event loop, re-enters Qt's
+           drag state machine and freezes the window. Always
+           ``QTimer.singleShot(0, ...)`` out of the handler first.
+        4. Wayland delivers no events during a compositor move and forbids
+           ``QCursor.pos()``, so "hover the window back over the dock area to
+           redock" is undetectable there; double-click is the only redock
+           gesture that works on every platform.
+
+        The shipping design sidesteps all four: docks stay tabified, the card
+        above is the only chrome, and fullscreen is a per-panel toggle."""
         if not dock_widget.objectName():
             dock_widget.setObjectName(dock_widget.windowTitle() or "dock")
 

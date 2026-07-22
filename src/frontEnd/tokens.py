@@ -5,6 +5,14 @@ painters import THEME/accent helpers from here; ``theme_utils`` uses the
 accent values to propagate a custom accent through the whole stylesheet
 (including the rgba() glows that the old token-replace step missed).
 
+That custom-accent path is currently unreachable from the UI: Preferences
+deliberately pins ``accent_color``/``secondary_accent_color``/
+``internal_bg_color`` to their sentinels (``PreferencesDialog._collect_prefs``),
+so ``DEFAULT_ACCENT_RGB`` and ``theme_utils``' ``*_TOKENS`` recolour machinery
+only ever fire for a hand-edited preferences.json or one written by an older
+build. It is kept, and covered by ``test_theme_qss_cache``, so those files
+still load — do not read it as evidence that the app ships accent theming.
+
 The .qss sheets are the visually-tuned truth: every value below is the one
 the sheets (and the QPalette blocks in ``theme_utils.apply_theme``) actually
 paint, so a painter reading a token lands on the same pixel as a rule reading

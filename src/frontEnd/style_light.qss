@@ -442,32 +442,6 @@ QPushButton[cssClass="icon"]:disabled {
     background: transparent;
 }
 
-/* ── Labeled Icon button ─────────────────────────────────────────── */
-QPushButton[cssClass="labeledIcon"] {
-    background: transparent;
-    color: #405168;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    min-height: 30px;
-    max-height: 32px;
-    padding: 0 12px;
-}
-
-QPushButton[cssClass="labeledIcon"]:hover {
-    background: rgba(0,119,168,0.06);
-    color: #0077A8;
-    border-color: rgba(0,119,168,0.20);
-}
-
-QPushButton[cssClass="labeledIcon"]:pressed {
-    background: rgba(0,119,168,0.10);
-}
-
-QPushButton[cssClass="labeledIcon"]:disabled {
-    color: #9AAABE;
-    background: transparent;
-}
-
 /* ── Tab Widget ──────────────────────────────────────────────────── */
 QTabWidget::pane {
     border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -636,79 +610,18 @@ QDockWidget > QWidget {
     background-color: #F3F7FC;
 }
 
-QWidget#dockToolChrome {
-    background: transparent;
-    border: none;
-}
-
-/* Drag-to-dock placeholder: fully painted by QPainter, must stay see-through. */
-QWidget#dockDropOverlay {
-    background: transparent;
-}
-
 /* ── Floating dock card ──────────────────────────────────────────── */
-/* Transparent host: its margins are the gap that reveals the workspace,
-   and it paints the faint shadow (see widgets.FloatingDockHost). */
-QWidget#dockFloatHost,
-QDockWidget > QWidget#dockFloatHost {
-    background: transparent;
-}
-
-/* The rounded surface the tool content floats on. */
+/* The one surviving piece of the dock-card design: the rounded surface the
+   tool content floats on. DockArea.apply_fullscreen_feature mounts it inside a
+   plain holder whose margins reveal the darker dock base around it — the
+   holder is unnamed, so it takes the `QDockWidget > QWidget` rule above.
+   The custom title bar / drop overlay / float host / pop button that used to
+   be styled here were the widgets.py dock-drag prototype, which never shipped
+   (see the note in DockArea.apply_fullscreen_feature). */
 QFrame#dockCard {
     background: #FFFFFF;
     border: none;
     border-radius: 16px;
-}
-
-QLabel#dockCardTitle {
-    color: #5A6E89;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.8px;
-    text-transform: uppercase;
-    background: transparent;
-}
-
-/* Custom dock title bar (WM-driven drag handle), blended into the workspace. */
-QWidget#dockTitleBar {
-    background: #EEF3FA;
-    border: none;
-}
-
-/* ── Dock Pop Button ─────────────────────────────────────────────── */
-QPushButton[dockPopButton="true"] {
-    background: rgba(255,255,255,0.86);
-    color: #0077A8;
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.16), stop:1 rgba(109,93,246,0.10));
-    min-height: 25px;
-    max-height: 25px;
-    padding: 0 11px;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.28px;
-    border-radius: 9px;
-    qproperty-iconSize: 14px 14px;
-}
-
-QPushButton[dockPopButton="true"]:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.06), stop:1 rgba(109,93,246,0.03));
-    color: #142033;
-    border-color: rgba(0,119,168,0.44);
-}
-
-QPushButton[dockPopButton="true"][isCloseBtn="true"]:hover {
-    background-color: rgba(225,29,72,0.08);
-    color: #E11D48;
-}
-
-QPushButton[dockPopButton="true"][isPoppedOut="true"] {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(109,93,246,0.10), stop:1 rgba(0,119,168,0.06));
-    border-color: rgba(109,93,246,0.46);
-    color: #6D5DF6;
 }
 
 /* ── Tree / List / Table Views ───────────────────────────────────── */
@@ -1175,17 +1088,6 @@ QLabel[cssClass="caps"] {
     letter-spacing: 0.6px;
 }
 
-QLabel[cssClass="error"]   { color: #E11D48; }
-QLabel[cssClass="warning"] { color: #D97706; }
-QLabel[cssClass="success"] { color: #059669; }
-
-QLabel[cssClass="gradientTitle"] {
-    font-size: 26px;
-    font-weight: 800;
-    color: #142033;
-    letter-spacing: -0.4px;
-}
-
 /* ── Welcome Page ────────────────────────────────────────────────── */
 QLabel[cssClass="welcomeTitle"] {
     font-weight: 700;
@@ -1231,72 +1133,6 @@ QFrame#welcomeCard {
     background-color: #FFFFFF;
     border: none;
     border-radius: 16px;
-}
-
-/* ── Spice Editor ────────────────────────────────────────────────── */
-QWidget#editorFindBar {
-    background: rgba(255,255,255,0.94);
-    border-bottom: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(0,119,168,0.14), stop:1 rgba(109,93,246,0.08));
-    border-radius: 10px;
-    margin: 2px 4px;
-}
-
-QWidget#editorFindBar QPushButton {
-    color: #142033;
-}
-
-QWidget#editorFindBar QLineEdit {
-    background: #FFFFFF;
-    color: #142033;
-    border: 1px solid rgba(0,119,168,0.14);
-    border-radius: 8px;
-    padding: 5px 9px;
-}
-
-QWidget#editorFindBar QLineEdit:focus {
-    border-color: #0077A8;
-}
-
-QToolBar#spiceEditorToolbar {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(255,255,255,0.98), stop:1 rgba(248,251,255,0.96));
-    border-bottom: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(0,119,168,0.14), stop:1 rgba(109,93,246,0.08));
-    padding: 6px 8px;
-    spacing: 6px;
-}
-
-QToolBar#spiceEditorToolbar QToolButton {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 5px 8px;
-    color: #405168;
-    margin: 0 1px;
-}
-
-QToolBar#spiceEditorToolbar QToolButton:hover {
-    background: rgba(0,119,168,0.08);
-    border-color: rgba(0,119,168,0.26);
-    color: #0077A8;
-}
-
-QToolBar#spiceEditorToolbar QToolButton:pressed {
-    background: rgba(0,119,168,0.14);
-    border-color: #0077A8;
-    color: #005E86;
-}
-
-QToolBar#spiceEditorToolbar QToolButton:disabled {
-    color: #9AAABE;
-}
-
-QStatusBar#spiceEditorStatus {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #FFFFFF, stop:1 #F8FBFF);
-    border-top: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(0,119,168,0.10), stop:1 rgba(109,93,246,0.06));
 }
 
 /* ── Console / Note ──────────────────────────────────────────────── */
@@ -1423,12 +1259,6 @@ QTextEdit#verilogConsoleError {
     selection-color: #FFFFFF;
 }
 
-QLabel#verilogNoWaveform {
-    color: #9AAABE;
-    font-size: 13px;
-    font-style: italic;
-}
-
 QWidget#hierarchyRow {
     background: transparent;
     border: none;
@@ -1538,22 +1368,6 @@ QPushButton#verifierConsoleCopy:pressed {
     background: rgba(0,119,168,0.18);
 }
 
-QPlainTextEdit#verilogCodeEditor {
-    background-color: #FBFDFF;
-    color: #142033;
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.10), stop:1 rgba(109,93,246,0.06));
-    border-radius: 15px;
-    padding: 12px 14px;
-    selection-background-color: #0077A8;
-    selection-color: #FFFFFF;
-    font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
-}
-
-QPlainTextEdit#verilogCodeEditor:focus {
-    border-color: #0077A8;
-}
-
 QWidget#verilogFindBar {
     background: rgba(255,255,255,0.94);
     border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -1619,59 +1433,6 @@ QPushButton[cssClass="segmentBtn"]:checked {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 #00A4DC, stop:1 #0077A8);
     color: #FFFFFF;
-    border-color: #0077A8;
-}
-
-QTabWidget#preferencesTabs::pane {
-    background: #FFFFFF;
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.14), stop:1 rgba(109,93,246,0.08));
-    border-radius: 16px;
-    padding: 12px;
-}
-
-QTabWidget#preferencesTabs QTabBar::tab {
-    border-radius: 10px 10px 0 0;
-    padding: 10px 22px;
-}
-
-QLabel#preferencesPreviewStrip,
-QLabel[cssClass="previewStrip"] {
-    border-radius: 12px;
-    font-weight: 700;
-    letter-spacing: 0.2px;
-}
-
-QPushButton[cssClass="swatch"] {
-    border-radius: 16px;
-    border: 2px solid transparent;
-    background: transparent;
-}
-
-QPushButton[cssClass="swatch"]:hover {
-    border: 2px solid #0077A8;
-}
-
-QPushButton[cssClass="swatch"][selected="true"] {
-    border: 3px solid #0077A8;
-}
-
-QFrame#themePreview {
-    border-radius: 14px;
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.12), stop:1 rgba(109,93,246,0.06));
-    background: transparent;
-    min-height: 82px;
-}
-
-QPushButton[cssClass="colorPick"] {
-    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(0,119,168,0.16), stop:1 rgba(109,93,246,0.08));
-    border-radius: 8px;
-    min-height: 28px;
-}
-
-QPushButton[cssClass="colorPick"]:hover {
     border-color: #0077A8;
 }
 

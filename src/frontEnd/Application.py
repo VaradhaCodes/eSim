@@ -301,23 +301,6 @@ class Application(QtWidgets.QMainWindow):
         self.topToolbar.addAction(self.devdocs)
         self.topToolbar.addAction(self.preferences_action)
 
-        # ## This part is meant for SoC Generation which is currently  ##
-        # ## under development and will be will be required in future. ##
-        # self.soc = QtWidgets.QToolButton(self)
-        # self.soc.setText('Generate SoC')
-        # self.soc.setToolTip(
-        #     '<b>SPICE to Verilog Conversion</b><br>' + \
-        #     '<br>The feature is under development.' + \
-        #     '<br>It will be released soon.' + \
-        #     '<br><br>Thank you for your patience!!!'
-        # )
-        # self.soc.setStyleSheet(" \
-        # QWidget { border-radius: 15px; border: 1px \
-        #     solid gray; padding: 10px; margin-left: 20px; } \
-        # ")
-        # self.soc.clicked.connect(self.showSoCRelease)
-        # self.topToolbar.addWidget(self.soc)
-
         # Expanding spacer pushes the view controls (zoom, theme toggle) and
         # the FOSSEE logo to the right edge — the 'view controls live right'
         # convention.

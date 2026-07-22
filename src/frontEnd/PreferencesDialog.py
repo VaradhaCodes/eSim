@@ -1,3 +1,4 @@
+import json
 import os
 from PyQt6 import QtWidgets, QtGui, QtCore
 
@@ -342,7 +343,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             path = paths.esim_config_path("preferences.json")
             try:
                 with open(path, "r") as f:
-                    current = json_load(f)
+                    current = json.load(f)
             except Exception:
                 current = {}
             keys = ("theme_mode", "accent_color", "secondary_accent_color",
@@ -360,10 +361,13 @@ class PreferencesDialog(QtWidgets.QDialog):
                     self._orig_prefs.get("internal_bg_color", "system"),
                 )
                 with open(path, "r") as f:
-                    existing = json_load(f)
+                    existing = json.load(f)
                 existing.update(self._orig_prefs)
-                with open(path, "w") as f:
-                    json_dump(existing, f)
+                # Same atomic writer _apply_preferences uses: a bare
+                # open(w)+dump leaves preferences.json truncated if the process
+                # dies mid-write, and this path runs on Cancel — i.e. exactly
+                # when the user is closing things down.
+                paths.write_json_atomic(path, existing)
                 app = QtWidgets.QApplication.instance()
                 fn = getattr(app, "apply_theme", None)
                 if callable(fn):
@@ -443,7 +447,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             existing = {}
             if os.path.exists(path):
                 with open(path, "r") as f:
-                    existing = json_load(f)
+                    existing = json.load(f)
             existing.update(prefs)
             paths.write_json_atomic(path, existing)
         except Exception:
@@ -475,14 +479,3 @@ class PreferencesDialog(QtWidgets.QDialog):
     def _save_and_close(self):
         self._apply_preferences()
         self.accept()
-
-
-import json as _json
-
-
-def json_load(fp):
-    return _json.load(fp)
-
-
-def json_dump(data, fp):
-    return _json.dump(data, fp, indent=2)

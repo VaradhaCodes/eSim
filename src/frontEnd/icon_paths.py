@@ -94,34 +94,6 @@ def dock_back_icon(size: int = 14) -> QtGui.QIcon:
     return _svg_icon(_DOCK_BACK_SVG, size)
 
 
-_COPY_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <rect x="9" y="9" width="11" height="11" rx="2" ry="2"/>
-  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-</svg>
-""".strip()
-
-
-def copy_icon(size: int = 14) -> QtGui.QIcon:
-    return _svg_icon(_COPY_SVG, size)
-
-
-_CLOSE_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <line x1="6" y1="6" x2="18" y2="18"/>
-  <line x1="18" y1="6" x2="6" y2="18"/>
-</svg>
-""".strip()
-
-
-def close_icon(size: int = 14) -> QtGui.QIcon:
-    return _svg_icon(_CLOSE_SVG, size, role="danger")
-
-
 _WORKSPACE_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
      fill="none" stroke="currentColor" stroke-width="2"
@@ -137,21 +109,6 @@ def workspace_icon(size: int = 16) -> QtGui.QIcon:
     return _svg_icon(_WORKSPACE_SVG, size)
 
 
-_BACKUP_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-  <polyline points="17 21 17 13 7 13 7 21"/>
-  <polyline points="7 3 7 8 15 8"/>
-</svg>
-""".strip()
-
-
-def backup_icon(size: int = 16) -> QtGui.QIcon:
-    return _svg_icon(_BACKUP_SVG, size)
-
-
 _TIMELINE_SVG = """
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
      fill="none" stroke="currentColor" stroke-width="2"
@@ -164,20 +121,6 @@ _TIMELINE_SVG = """
 
 def timeline_icon(size: int = 16) -> QtGui.QIcon:
     return _svg_icon(_TIMELINE_SVG, size)
-
-
-_CLOSE_PROJ_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-     fill="none" stroke="currentColor" stroke-width="2"
-     stroke-linecap="round" stroke-linejoin="round">
-  <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
-  <line x1="9" x2="15" y1="13" y2="13"/>
-</svg>
-""".strip()
-
-
-def close_proj_icon(size: int = 16) -> QtGui.QIcon:
-    return _svg_icon(_CLOSE_PROJ_SVG, size)
 
 
 _HELP_SVG = """

@@ -5,6 +5,11 @@ import ctypes
 from PyQt6 import QtGui, QtCore, QtWidgets
 from configuration import paths
 
+# Literals a custom accent / surface colour replaces on its way through
+# build_qss. Reachable only from a preferences.json that predates (or is
+# hand-edited past) the current Preferences dialog, which pins all three keys
+# to their sentinels — see the note in tokens.py. Kept so those files still
+# load; not a feature the UI exposes.
 ACCENT_TOKENS = {
     "dark": ["#53D7FF", "#8BEAFF", "#18A8D8", "#0E7490", "#7CE3FF", "#1CB8E8", "#3B82F6", "#165982", "#1E88E5"],
     "light": ["#0077A8", "#00A4DC", "#005E86"],
@@ -462,10 +467,11 @@ def apply_theme(app):
     # a repaint. Toggling each effect off/on marks its source dirty.
     #
     # Run it now AND again on the next event-loop tick: per-widget changeEvent
-    # handlers (SpiceEditor / ProjectExplorer) re-apply their own stylesheets in
-    # response to the QEvent.PaletteChange that this setPalette posts, which can
-    # land *after* the synchronous pass and re-stale their effect — the deferred
-    # pass mops that up.
+    # handlers (codeEditor's CodeEditor/EditorWindow, FullScreenToggle,
+    # FlowNavigator, VerilogVerifier, plotWindow) re-apply their own stylesheets
+    # — or re-raster their icons — in response to the QEvent.PaletteChange that
+    # this setPalette posts, which can land *after* the synchronous pass and
+    # re-stale their effect; the deferred pass mops that up.
     _refresh_graphics_effects(app)
     QtCore.QTimer.singleShot(0, lambda: _refresh_graphics_effects(app))
 

@@ -209,7 +209,7 @@ def rest_alpha(widget):
     """Resting glow alpha for a button: the one accent call-to-action per view
     keeps its halo lit; every other button rests at 0 and carries no effect at
     all until the cursor reaches it."""
-    if widget.property("noMotion") or widget.property("dockPopButton"):
+    if widget.property("noMotion"):
         return 0
     if widget.property("cssClass") in _PERSISTENT_GLOW_CLASSES:
         return _GLOW_REST_ALPHA
@@ -280,23 +280,18 @@ class TactileButtonFilter(QtCore.QObject):
         if obj.property("noMotion"):
             return False
 
-        is_dock = bool(obj.property("dockPopButton"))
         et = event.type()
 
         if et == QtCore.QEvent.Type.Enter:
             obj.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-            if not is_dock:
-                self._animate_glow(obj, 22, 5, _GLOW_HOVER_ALPHA)
+            self._animate_glow(obj, 22, 5, _GLOW_HOVER_ALPHA)
         elif et == QtCore.QEvent.Type.Leave:
-            if not is_dock:
-                self._animate_glow(obj, 18, 4, rest_alpha(obj))
+            self._animate_glow(obj, 18, 4, rest_alpha(obj))
         elif et == QtCore.QEvent.Type.MouseButtonPress and event.button() == QtCore.Qt.MouseButton.LeftButton:
-            if not is_dock:
-                self._animate_glow(obj, 14, 1, _GLOW_PRESS_ALPHA)
+            self._animate_glow(obj, 14, 1, _GLOW_PRESS_ALPHA)
         elif et == QtCore.QEvent.Type.MouseButtonRelease:
-            if not is_dock:
-                target = _GLOW_HOVER_ALPHA if obj.underMouse() else rest_alpha(obj)
-                self._animate_glow(obj, 18, 4, target)
+            target = _GLOW_HOVER_ALPHA if obj.underMouse() else rest_alpha(obj)
+            self._animate_glow(obj, 18, 4, target)
         return False
 
     def _animate_glow(self, obj, blur, y, alpha):
@@ -427,10 +422,9 @@ def install_button_motion(root):
         w.installEventFilter(filt)
         # Only the accent call-to-action gets a halo up front; the rest stay
         # effect-free until hovered (the filter builds one on Enter and frees it
-        # on Leave). noMotion / dockPopButton buttons opt out entirely — small
-        # chrome controls (e.g. the verifier's move arrows) use it so the neon
-        # halo never bleeds over their neighbours. rest_alpha() encodes all of
-        # that.
+        # on Leave). noMotion buttons opt out entirely — small chrome controls
+        # (e.g. the verifier's move arrows) set it so the neon halo never bleeds
+        # over their neighbours. rest_alpha() encodes all of that.
         alpha = rest_alpha(w)
         if alpha > 0:
             eff = _ensure_glow(w)
@@ -573,33 +567,21 @@ class PopupMotionFilter(QtCore.QObject):
         return False
 
 
-def install_popup_motion(app):
-    filt = PopupMotionFilter(app)
-    app._esim_popup_motion_filter = filt
-    app.installEventFilter(filt)
-
-
 class EffectShowRefreshFilter(QtCore.QObject):
-    """Re-validate a widget's drop-shadow cache whenever it is shown.
+    """Why a shown widget's drop-shadow has to be re-validated, and how.
 
     A QGraphicsDropShadowEffect caches a render of its source. When a widget
     is hidden then shown again (QStackedWidget page switch, tab change) — most
     visibly while a window is maximized/fullscreen, where the expose/repaint
     path differs — that cache can stay stale and the widget paints blank until
     a hover marks it dirty. Toggling the effect off/on on Show forces a clean
-    repaint. Installed application-wide so every effect-bearing widget is
-    covered without per-site wiring.
-    """
+    repaint.
 
-    def eventFilter(self, obj, event):
-        if event.type() == QtCore.QEvent.Type.Show and isinstance(obj, QtWidgets.QWidget):
-            eff = obj.graphicsEffect()
-            if isinstance(eff, QtWidgets.QGraphicsDropShadowEffect) and eff.isEnabled():
-                # Defer the toggle to the next tick: a Show can be delivered
-                # mid-paint, and toggling the effect synchronously would force
-                # a reentrant repaint ("paint device that is being painted").
-                QtCore.QTimer.singleShot(0, lambda e=eff: self._revalidate(e))
-        return False
+    This is no longer a filter in its own right: ``AppWideMotionFilter`` merged
+    the Show branch inline so each of the process's events crosses the
+    C++->Python boundary once instead of twice, and calls ``_revalidate`` from
+    there. The class stays as that helper's home and this explanation's.
+    """
 
     @staticmethod
     def _revalidate(eff):
@@ -610,12 +592,6 @@ class EffectShowRefreshFilter(QtCore.QObject):
         except RuntimeError:
             # underlying effect/widget was deleted before the tick fired
             pass
-
-
-def install_effect_refresh(app):
-    filt = EffectShowRefreshFilter(app)
-    app._esim_effect_refresh_filter = filt
-    app.installEventFilter(filt)
 
 
 class AppWideMotionFilter(PopupMotionFilter):
@@ -647,8 +623,9 @@ class AppWideMotionFilter(PopupMotionFilter):
 
 
 def install_app_motion(app):
-    """Install the single merged app-wide motion filter (replaces the old
-    install_popup_motion + install_effect_refresh pair)."""
+    """Install the single merged app-wide motion filter (it replaced, and has
+    now outlived, the old install_popup_motion + install_effect_refresh
+    pair)."""
     filt = AppWideMotionFilter(app)
     app._esim_app_motion_filter = filt
     app.installEventFilter(filt)
@@ -683,9 +660,3 @@ def apply_toolbar_depth(window):
         if not tb:
             continue
         elevation.elevate(tb, "e3", offset=offset)
-
-
-def install_menu_depth(root):
-    """Pre-install depth shadows on menu bars for consistent 3D presence."""
-    for menu in root.findChildren(QtWidgets.QMenu):
-        elevation.elevate(menu, "e4")
