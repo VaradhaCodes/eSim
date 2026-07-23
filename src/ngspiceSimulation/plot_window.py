@@ -989,6 +989,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         x_target = event.xdata
 
         near = self._find_nearest_cursor(event)
+        self._debug_log_click(event, near)   # no-op unless ESIM_CURSOR_DEBUG is set
         if event.button == 1:
             if near is not None:
                 self._drag_cursor_idx = near
@@ -1002,6 +1003,40 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         elif event.button == 3:  # right-click (non-stacked): cursor 2
             self._drag_cursor_idx = None
             self.set_cursor(1, x_target)
+
+    def _debug_log_click(self, event, near) -> None:
+        """TEMPORARY: dump cursor hit-test terms when ESIM_CURSOR_DEBUG is set.
+
+        Diagnosing a report of clicks grabbing an existing cursor instead of
+        placing one. Writes to the path in ESIM_CURSOR_DEBUG; unset (the
+        normal case) it returns before touching anything. Delete once the
+        false-hit cause is identified.
+        """
+        path = os.environ.get('ESIM_CURSOR_DEBUG')
+        if not path:
+            return
+        try:
+            xlim = self.axes.get_xlim()
+            width_px = self.axes.get_window_extent().width
+            span = xlim[1] - xlim[0]
+            threshold = 8 * span / width_px if width_px else float('nan')
+            click_px = (abs(event.xdata - self.cursor_positions[near])
+                        * width_px / span
+                        if (near is not None and span
+                            and event.xdata is not None) else None)
+            with open(path, 'a', encoding='utf-8') as fh:
+                fh.write(
+                    f"btn={event.button} mode={self._current_view_mode} "
+                    f"nav={self.nav_toolbar.mode!r} panes={len(self.panes)} "
+                    f"inaxes={event.inaxes in self.panes} xdata={event.xdata!r} "
+                    f"xlim={xlim} width_px={width_px:.1f} "
+                    f"fig_px={tuple(self.fig.get_size_inches() * self.fig.dpi)} "
+                    f"canvas={self.canvas.width()}x{self.canvas.height()} "
+                    f"dpr={getattr(self.canvas, 'device_pixel_ratio', '?')} "
+                    f"threshold={threshold:.6g} positions={self.cursor_positions} "
+                    f"near={near} click_dist_px={click_px}\n")
+        except Exception as exc:              # diagnostics must never break the UI
+            logger.debug("cursor debug log failed: %s", exc)
 
     def on_canvas_release(self, event) -> None:
         # If a cursor was being dragged, recompute the full per-signal
