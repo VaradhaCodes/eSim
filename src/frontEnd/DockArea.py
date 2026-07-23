@@ -79,6 +79,11 @@ class DockArea(QtWidgets.QMainWindow):
         self._docks = {}
         self._count = 1
 
+        # Dock-area tab bars whose close-X is wired to us, keyed by C++
+        # pointer. Holding the wrapper keeps the connection alive; see
+        # enable_tab_close_buttons for why that matters.
+        self._armed_tab_bars = {}
+
         # Single-instance registry: (tool kind, project key) -> live dock.
         # Every tool opener consults this first, so clicking a launcher button
         # N times raises the one existing tab instead of stacking N heavy
@@ -132,13 +137,7 @@ class DockArea(QtWidgets.QMainWindow):
             # dock by *exact* windowTitle. An elided ("Simulation-RLC-2...")
             # tab would break that identity and could close the wrong dock.
             tb.setElideMode(QtCore.Qt.TextElideMode.ElideNone)
-            try:
-                tb.tabCloseRequested.disconnect()
-            except Exception:
-                pass
-            tb.tabCloseRequested.connect(
-                lambda index, tab_bar=tb:
-                self.handle_tab_close(index, tab_bar))
+            self._arm_tab_bar(tb)
             # Welcome is the permanent home tab -- strip its close button so it
             # can never be closed from the tab strip.
             for i in range(tb.count()):
@@ -147,6 +146,53 @@ class DockArea(QtWidgets.QMainWindow):
                         i,
                         QtWidgets.QTabBar.ButtonPosition.RightSide,
                         None)
+
+    def _arm_tab_bar(self, tab_bar):
+        """Wire one dock tab bar's close-X to us, exactly once, and keep it.
+
+        The slot is a BOUND METHOD and the bar is remembered on this DockArea.
+        Both halves matter, and neither is cosmetic:
+
+        The old wiring was ``tb.tabCloseRequested.connect(lambda index,
+        tab_bar=tb: self.handle_tab_close(index, tab_bar))``. Nothing outside
+        PyQt's connection proxy ever referenced that lambda, and the lambda
+        referenced the tab bar's Python wrapper, which in turn owned the
+        proxy -- an unreachable reference cycle. Python's cyclic collector
+        reaped it a second or two after the tab opened (the plot window's
+        matplotlib import is enough to trigger a pass), and from then on
+        clicking the X did *nothing at all* for the rest of the session: Qt
+        still listed the connection -- ``receivers(tabCloseRequested)`` kept
+        counting it -- but the Python callable behind it was gone, so the
+        emit reached nobody. Nothing was logged, because nothing raised.
+
+        A bound method is owned by this DockArea (alive for the whole session)
+        and needs no captured tab bar: the emitting bar comes from
+        ``sender()``. Keeping the wrapper in ``_armed_tab_bars`` additionally
+        stops PyQt from handing out a fresh wrapper later, so the connection
+        can never be re-created behind our back.
+        """
+        # Qt deletes surplus dock tab bars; drop those entries first so a
+        # recycled address cannot make a live bar look already-armed.
+        for key in [k for k, v in self._armed_tab_bars.items()
+                    if sip.isdeleted(v)]:
+            del self._armed_tab_bars[key]
+
+        key = sip.unwrapinstance(tab_bar)
+        if key in self._armed_tab_bars:
+            return
+        self._armed_tab_bars[key] = tab_bar
+        tab_bar.tabCloseRequested.connect(self._on_tab_close_requested)
+
+    def _on_tab_close_requested(self, index):
+        """Close-X clicked on a dock tab strip.
+
+        Carries no captured state -- the tab bar that emitted comes from
+        ``sender()`` -- so this slot can safely be a plain bound method (see
+        _arm_tab_bar)."""
+        tab_bar = self.sender()
+        if not isinstance(tab_bar, QtWidgets.QTabBar):
+            return
+        self.handle_tab_close(index, tab_bar)
 
     def _live_tool_dock(self, kind, projKey=None):
         """Return the still-alive single-instance dock for (kind, projKey).
@@ -241,6 +287,11 @@ class DockArea(QtWidgets.QMainWindow):
             if title == tab_text:
                 self._destroy_dock(child)
                 return
+
+        # No dock carries that title. Nothing to close, but say so rather than
+        # leaving a dead-looking X with no trace anywhere.
+        self.obj_appconfig.print_warning(
+            'Close: no open panel named "%s".' % tab_text)
 
     def get_main_view_reference(self):
         """Get reference to the MainView widget."""
