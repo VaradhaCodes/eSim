@@ -385,13 +385,16 @@ class Application(QtWidgets.QMainWindow):
         self.topToolbar.addSeparator()
 
         # FOSSEE logo kept top-right of the action bar (eSim brand).
+        # The *source* pixmap is kept unscaled: _apply_view_control_metrics()
+        # re-derives the displayed height on every zoom change, and re-scaling
+        # an already-scaled copy would compound the resampling loss. The
+        # padding lives in the QSS (QLabel#brandLogo) rather than an inline
+        # stylesheet, because build_qss() only rewrites px metrics inside the
+        # .qss file -- px values in an inline sheet are invisible to the zoom
+        # scaler and would stay frozen at their 100% size.
         self.logo = QtWidgets.QLabel()
-        self.logopic = QtGui.QPixmap(paths.image_path('fosseeLogo.png'))
-        self.logopic = self.logopic.scaled(
-            QSize(150, 150), QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation)
-        self.logo.setPixmap(self.logopic)
-        self.logo.setStyleSheet("padding:0 15px 0 6px;")
+        self.logo.setObjectName("brandLogo")
+        self._logo_src = QtGui.QPixmap(paths.image_path('fosseeLogo.png'))
         self.topToolbar.addWidget(self.logo)
 
         # Left Tool bar Action Widget
@@ -777,6 +780,25 @@ class Application(QtWidgets.QMainWindow):
             self.theme_toggle_btn.setFixedSize(btn_box, btn_box)
             self.theme_toggle_btn.setIconSize(
                 QtCore.QSize(top_icon, top_icon))
+        # The brand logo used to be frozen at a hard-coded scaled(150, 150)
+        # box, which made it the top toolbar's *height floor*: at 50% zoom the
+        # buttons only needed a ~34px bar, but the 55px-tall logo held it at
+        # ~63px and left a band of dead space above and below the shrunken
+        # icons. The same constant inverted at 300%, where the untouched 55px
+        # logo sat beside 130px buttons. Sizing it off btn_box puts it on the
+        # same "exactly one top-toolbar icon button tall" rule the zoom pill
+        # and the theme toggle follow, so the bar shrinks and grows as one.
+        src = getattr(self, '_logo_src', None)
+        if hasattr(self, 'logo') and src is not None and not src.isNull():
+            # Rasterise at the device pixel ratio so the logo stays sharp on
+            # the fractionally-scaled displays PassThrough rounding gives us
+            # (a 175% Windows display reports 1.75, not 2).
+            dpr = self.logo.devicePixelRatioF()
+            pix = src.scaledToHeight(
+                max(1, int(round(max(12, int(btn_box)) * dpr))),
+                QtCore.Qt.TransformationMode.SmoothTransformation)
+            pix.setDevicePixelRatio(dpr)
+            self.logo.setPixmap(pix)
 
     def _refresh_toolbar_icons(self):
         """Re-render the inline-SVG icons: they bake in the theme's foreground

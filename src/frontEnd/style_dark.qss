@@ -190,8 +190,18 @@ QWidget#zoomPill QToolButton[cssClass="toolbarZoom"]:pressed {
 
 QLabel#zoomLabel {
     color: #D3DEEF;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
+    background: transparent;
+}
+
+/* Brand logo. Its pixmap height comes from _apply_view_control_metrics() so it
+   is exactly one toolbar icon button tall at every zoom; only the padding
+   lives here, where build_qss() can scale it along with every other metric.
+   It was previously an inline setStyleSheet(), which the zoom scaler cannot
+   reach. */
+QLabel#brandLogo {
+    padding: 0 15px 0 6px;
     background: transparent;
 }
 

@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Application.py does a bare ``import pathmagic``, so its own directory has to
 # be importable -- the launcher gets this for free by chdir'ing into frontEnd.
@@ -44,6 +44,16 @@ class _Stub:
         self.zoom_layout = QtWidgets.QHBoxLayout(self.zoom_container)
         self.zoom_label = QtWidgets.QLabel()
         self.theme_toggle_btn = QtWidgets.QToolButton()
+        # Same aspect ratio as the real fosseeLogo.png (632x233).
+        self.logo = QtWidgets.QLabel()
+        self._logo_src = QtGui.QPixmap(632, 233)
+        self._logo_src.fill(QtGui.QColor("red"))
+
+
+def _logo_height(stub):
+    """Displayed (device-independent) height of the rendered logo."""
+    pix = stub.logo.pixmap()
+    return round(pix.height() / pix.devicePixelRatio())
 
 
 def _metrics(stub, zoom):
@@ -87,6 +97,46 @@ def test_zooming_out_then_in_restores_the_original_box(stub):
     _metrics(stub, 100)
     assert (stub.zoom_container.minimumWidth(),
             stub.theme_toggle_btn.width()) == before
+
+
+@pytest.mark.parametrize("zoom", [50, 60, 100, 200, 300])
+def test_brand_logo_is_one_icon_button_tall(stub, zoom):
+    """The logo was the toolbar's height floor: frozen at a scaled(150, 150)
+    box, it held the bar at ~63px when 50%-zoom buttons only needed ~34px, and
+    was dwarfed by 130px buttons at 300%. It now tracks the same box as the
+    zoom pill and the theme toggle, so the whole bar shrinks and grows as one.
+    """
+    _metrics(stub, zoom)
+    assert _logo_height(stub) == stub.theme_toggle_btn.height()
+    assert stub.logo.pixmap().height() > 0
+
+
+def test_brand_logo_keeps_its_aspect_ratio(stub):
+    _metrics(stub, 100)
+    pix = stub.logo.pixmap()
+    assert pix.width() / pix.height() == pytest.approx(632 / 233, rel=0.02)
+
+
+def test_brand_logo_shrinks_and_grows_with_zoom(stub):
+    _metrics(stub, 50)
+    small = _logo_height(stub)
+    _metrics(stub, 100)
+    mid = _logo_height(stub)
+    _metrics(stub, 300)
+    big = _logo_height(stub)
+    assert small < mid < big
+    # The old hard-coded 150x150-box scale rendered 55px tall at every level.
+    assert 55 not in (small, big)
+
+
+def test_metrics_survive_a_missing_logo(stub):
+    """A null/absent pixmap must not take the rest of the toolbar down."""
+    stub._logo_src = QtGui.QPixmap()
+    _metrics(stub, 100)
+    assert stub.theme_toggle_btn.height() > 0
+    del stub._logo_src
+    _metrics(stub, 100)
+    assert stub.theme_toggle_btn.height() > 0
 
 
 def test_theme_toggle_icon_renders_non_empty(qapp):
