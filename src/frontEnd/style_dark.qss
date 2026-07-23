@@ -824,14 +824,6 @@ QTreeWidget#projectTree::branch:has-siblings:selected,
 QTreeWidget#projectTree::branch:!has-children:!has-siblings:selected {
     background: transparent;
 }
-/* Selected project: the arrow gutter gets its own rounded translucent pill
-   (matching the item outline) instead of the boxy default selection slab. */
-QTreeWidget#projectTree::branch:has-children:closed:selected,
-QTreeWidget#projectTree::branch:has-children:open:selected {
-    background: rgba(83,215,255,0.16);
-    border: 1px solid #53D7FF;
-    border-radius: 9px;
-}
 QTreeWidget#projectTree::branch:has-children:closed {
     image: url("images/chevron_right_dark.svg");
 }

@@ -120,6 +120,8 @@ class ProjectExplorer(QtWidgets.QWidget):
         # whole tree. Collect the changed paths and refresh them once, a short
         # delay after the burst goes quiet -- restarting the single-shot timer
         # on each event debounces the storm into a single rebuild.
+        # Built on first PaletteChange (see _scheduleIconRefresh).
+        self._icon_refresh_timer = None
         self._pending_dir_changes = set()
         self._dir_refresh_timer = QtCore.QTimer(self)
         self._dir_refresh_timer.setSingleShot(True)
@@ -265,6 +267,41 @@ class ProjectExplorer(QtWidgets.QWidget):
         same cross-platform reason as _dir_icon."""
         from frontEnd import icon_paths
         return icon_paths.file_icon()
+
+    def changeEvent(self, event):
+        """Rebuild the row icons when the theme flips.
+
+        icon_paths._svg_icon bakes the theme's colour into the pixmap at build
+        time, and the rows are painted once (_buildNode / _fillChildren). A
+        light/dark flip therefore leaves every row holding the *previous*
+        theme's glyph. Folders survive it because they use the accent role,
+        which reads on either background; files use the plain text colour
+        (#F8FBFF dark / #142033 light) and land near-invisible on the opposite
+        one. Only a refresh or an expand rebuilt them before, which is why the
+        symptom looked intermittent.
+        """
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            self._scheduleIconRefresh()
+
+    def _scheduleIconRefresh(self):
+        """Defer the re-render by a tick. Rasterising an icon *inside* the
+        PaletteChange handler re-enters the polish that delivered the event.
+        The timer is parented to self so it cannot outlive the widget."""
+        if getattr(self, '_icon_refresh_timer', None) is None:
+            self._icon_refresh_timer = QtCore.QTimer(self)
+            self._icon_refresh_timer.setSingleShot(True)
+            self._icon_refresh_timer.timeout.connect(self._refreshIcons)
+        self._icon_refresh_timer.start(0)
+
+    def _refreshIcons(self):
+        """Re-render every row's icon against the palette that is live now."""
+        dir_icon, file_icon = self._dir_icon(), self._file_icon()
+        for i in range(self.treewidget.topLevelItemCount()):
+            node = self.treewidget.topLevelItem(i)
+            node.setIcon(0, dir_icon)
+            for j in range(node.childCount()):
+                node.child(j).setIcon(0, file_icon)
 
     def _projectLabel(self, path):
         """Base display label for a project: its stem, else the folder name."""
