@@ -42,8 +42,9 @@ def asset(name):
 
 def font(size, bold=False):
     for path, kw in (
-        (os.path.join(IMAGES, "fonts", "Inter-VariableFont_opsz,wght.ttf"),
-         {"variation": "SemiBold" if bold else "Regular"}),
+        (os.path.join(IMAGES, "fonts",
+                      "Ubuntu-Bold.ttf" if bold else "Ubuntu-Regular.ttf"),
+         {}),
         (r"C:\Windows\Fonts\seguisb.ttf" if bold else r"C:\Windows\Fonts\segoeui.ttf",
          {}),
     ):

@@ -1764,13 +1764,24 @@ def main(args):
         # glow animations + this signal + plot timers/figures before Qt frees
         # the widgets they touch.
         app.aboutToQuit.connect(lambda: _app_teardown(_apply_theme))
-        # Bundled Inter font for the Aurora type scale (QSS has fallbacks).
-        font_path = os.path.join(
-            os.path.dirname(__file__), '..', '..', 'images', 'fonts',
-            'Inter-VariableFont_opsz,wght.ttf'
+        # Bundled Ubuntu font for the Aurora type scale (QSS has fallbacks).
+        # This is the warm, rounded humanist face that ships as Ubuntu's own
+        # desktop default -- so eSim reads the same soft way on Windows as it
+        # does natively on Ubuntu. Static weights register under the single
+        # family "Ubuntu"; QSS font-weight values snap to the nearest of
+        # 400/500/700 (600/800 fall back to Bold, which Qt does not synthesize).
+        fonts_dir = os.path.join(
+            os.path.dirname(__file__), '..', '..', 'images', 'fonts'
         )
-        if os.path.exists(font_path):
-            QtGui.QFontDatabase.addApplicationFont(font_path)
+        for fname in ('Ubuntu-Regular.ttf', 'Ubuntu-Medium.ttf',
+                      'Ubuntu-Bold.ttf'):
+            font_path = os.path.join(fonts_dir, fname)
+            if not os.path.exists(font_path):
+                print("Font missing, using system fallback:", fname)
+                continue
+            fid = QtGui.QFontDatabase.addApplicationFont(font_path)
+            if fid == -1:
+                print("Font failed to register, using fallback:", fname)
     except Exception as e:
         print("Theme load failed, continuing unthemed:", str(e))
 

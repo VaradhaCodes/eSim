@@ -8,8 +8,8 @@ QDialog {
 }
 
 QWidget {
-    font-family: "Inter", "Segoe UI Variable", "Segoe UI", "Noto Sans", sans-serif;
-    font-size: 13px;
+    font-family: "Ubuntu", "Segoe UI Variable", "Segoe UI", "Noto Sans", sans-serif;
+    font-size: 14px;
     color: #142033;
 }
 
@@ -102,7 +102,7 @@ QToolTip {
         stop:0 rgba(0,119,168,0.30), stop:1 rgba(109,93,246,0.18));
     border-radius: 12px;
     padding: 8px 13px;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 /* ── Top Toolbar (glassmorphism) ─────────────────────────────────── */
@@ -235,7 +235,7 @@ QToolBar#leftToolBar {
 
 QLabel[cssClass="railCaption"] {
     color: #9AAABE;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 800;
     letter-spacing: 1.2px;
     padding: 6px 0 2px 0;
@@ -266,7 +266,7 @@ QPushButton {
     border-radius: 10px;
     padding: 8px 16px;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 14px;
     min-height: 32px;
     min-width: 72px;
 }
@@ -582,7 +582,7 @@ QPushButton#addModuleBtn {
     border-radius: 8px;
     color: #0077A8;
     font-weight: 750;
-    font-size: 12px;
+    font-size: 13px;
     padding: 2px 12px;
     min-width: 0px;
     min-height: 24px;
@@ -612,7 +612,7 @@ QDockWidget::title {
     background: #EEF3FA;
     padding: 8px 18px;
     text-align: left;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     color: #6B7F99;
     letter-spacing: 0.8px;
@@ -699,7 +699,7 @@ QFrame#dockCard {
 
 QLabel#dockCardTitle {
     color: #5A6E89;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.8px;
     text-transform: uppercase;
@@ -847,7 +847,7 @@ QHeaderView::section {
     padding: 8px 12px;
     border: none;
     font-weight: 700;
-    font-size: 11px;
+    font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.6px;
 }
@@ -1185,7 +1185,7 @@ QLabel[cssClass="muted"] {
 
 QLabel[cssClass="subtle"] {
     color: #9AAABE;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 QLabel[cssClass="heading"] {
@@ -1202,7 +1202,7 @@ QLabel[cssClass="title"] {
 }
 
 QLabel[cssClass="caps"] {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     color: #6B7F99;
     text-transform: uppercase;
@@ -1229,7 +1229,7 @@ QLabel[cssClass="welcomeTitle"] {
 
 QLabel[cssClass="welcomeDesc"] {
     color: #6B7F99;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 #welcomeScroll {
@@ -1347,7 +1347,7 @@ QPlainTextEdit#simulationConsole {
     border-radius: 14px;
     padding: 12px 14px;
     font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
-    font-size: 12px;
+    font-size: 13px;
     selection-background-color: #0077A8;
     selection-color: #FFFFFF;
 }
@@ -1392,7 +1392,7 @@ QTabWidget#verilogBottomContainer::pane {
 
 QLabel#verilogSidebarTitle {
     color: #0077A8;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 860;
     text-transform: uppercase;
     letter-spacing: 1.0px;
@@ -1445,7 +1445,7 @@ QTextEdit#verilogConsole {
     border: none;
     padding: 0px;
     font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
-    font-size: 12px;
+    font-size: 13px;
     selection-background-color: #0077A8;
     selection-color: #FFFFFF;
 }
@@ -1456,14 +1456,14 @@ QTextEdit#verilogConsoleError {
     border: none;
     padding: 0px;
     font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
-    font-size: 12px;
+    font-size: 13px;
     selection-background-color: #0077A8;
     selection-color: #FFFFFF;
 }
 
 QLabel#verilogNoWaveform {
     color: #9AAABE;
-    font-size: 13px;
+    font-size: 14px;
     font-style: italic;
 }
 
@@ -1474,7 +1474,7 @@ QWidget#hierarchyRow {
 
 QLabel#hierarchyName {
     color: #16263A;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 650;
     background: transparent;
 }
@@ -1521,7 +1521,7 @@ QToolButton#verifierFileBtn {
        the indicator that ::menu-indicator pins to the right edge. */
     padding: 8px 28px 8px 16px;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 14px;
     min-height: 32px;
     min-width: 62px;
 }
@@ -1560,7 +1560,7 @@ QPushButton#verifierConsoleCopy {
     border-radius: 8px;
     color: #5A6B80;
     font-weight: 600;
-    font-size: 12px;
+    font-size: 13px;
     padding: 4px 10px;
     min-width: 0;
     min-height: 0;
@@ -1723,7 +1723,7 @@ QMessageBox#esimMessageBox {
 
 QMessageBox#esimMessageBox QLabel {
     color: #142033;
-    font-size: 13px;
+    font-size: 14px;
 }
 
 QMessageBox#esimMessageBox QPushButton {
