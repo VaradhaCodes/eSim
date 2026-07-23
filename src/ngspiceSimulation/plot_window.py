@@ -88,6 +88,31 @@ class FigureCanvas(_FigureCanvasBase):
     def minimumSizeHint(self) -> QtCore.QSize:
         return QtCore.QSize(10, 10)
 
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        """Force the initial HiDPI pixel-ratio sync matplotlib skips on Qt>=6.6.
+
+        FigureCanvasQT.showEvent has two branches. Below Qt 6.6 it connects
+        screenChanged *and* calls _update_screen(), which performs the initial
+        _update_pixel_ratio(). From Qt 6.6 it only installs a
+        DevicePixelRatioChange event filter -- and that filter fires solely when
+        the ratio *changes*. A window opened on a HiDPI screen whose ratio never
+        changes is therefore never synced: device_pixel_ratio stays 1 and
+        figure.dpi stays at its construction value, so Agg renders the buffer at
+        logical resolution and Qt stretches it to physical size. The plot looks
+        soft and pixelated while the surrounding Qt chrome stays sharp, and no
+        redraw, resize, or re-plot clears it because every one of those re-renders
+        at the same stale ratio.
+
+        Syncing once on show fixes the buffer resolution; it is a no-op on a 1.0
+        ratio display, and harmless if a future matplotlib restores the sync
+        itself (the ratio already matches, so _set_device_pixel_ratio returns
+        False and nothing redraws).
+        """
+        super().showEvent(event)
+        update = getattr(self, '_update_pixel_ratio', None)
+        if update is not None:
+            update()
+
 from configuration.Appconfig import Appconfig
 from .plotting_widgets import CollapsibleBox
 from .data_extraction import DataExtraction
