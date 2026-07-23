@@ -277,6 +277,79 @@ def recolor_accent_rgba(qss, mode_key, accent_hex):
     return pattern.sub("rgba(%d,%d,%d," % (nr, ng, nb), qss)
 
 
+# The UI's px metrics were hand-tuned against a workspace this many *logical*
+# pixels tall and wide -- i.e. the screen size at which zoom_level 100 is the
+# right answer. Derived from the one hand-calibrated data point we have: a
+# 1646x1029 logical workspace (a 2880x1800 panel at 175% Windows scaling) was
+# tuned by eye to 90%, so 1029 / 0.90 ~= 1150 and 1646 / 0.90 ~= 1830.
+_DESIGN_WORKSPACE_H = 1150
+_DESIGN_WORKSPACE_W = 1830
+
+# Never auto-pick a value the user would immediately have to undo. Below 60%
+# the menu and status text stop being comfortably readable, and above 150% we
+# would be overriding the deliberate "I want a small UI" choice the user
+# already expressed in their OS display settings.
+_CALIBRATION_FLOOR = 60
+_CALIBRATION_CEILING = 150
+
+
+def calibrate_default_zoom(screen=None):
+    """Pick a sensible first-run zoom for the screen eSim is starting on.
+
+    Qt has already divided the OS scale factor out of these numbers, so what
+    we read is the *logical* workspace: a 1920x1080 panel at 150% Windows
+    scaling reports 1280x720, and genuinely has only that much room for UI.
+    eSim's chrome (menu bar, top toolbar, left rail, dock tabs, status bar) is
+    a fixed logical-pixel cost, so on a short workspace it eats a far larger
+    share of the window. That -- not the panel's resolution or its DPI -- is
+    why the same build reads as "great at 60%" on one machine and "great at
+    90%" on another, and why a single hard-coded default cannot serve both.
+
+    Height is the binding constraint on every 16:9 / 16:10 display; the width
+    term only bites on unusually narrow screens (e.g. 1280x1024), where the
+    left rail would otherwise crowd the canvas.
+    """
+    if screen is None:
+        screen = QtGui.QGuiApplication.primaryScreen()
+    if screen is None:
+        return 100
+    # availableGeometry, not geometry: the taskbar/dock is space eSim will
+    # never get, and a machine with less of it should start smaller.
+    avail = screen.availableGeometry()
+    if avail.height() <= 0 or avail.width() <= 0:
+        return 100
+    ratio = min(avail.height() / _DESIGN_WORKSPACE_H,
+                avail.width() / _DESIGN_WORKSPACE_W)
+    # Land on the same 10% grid the -/+ buttons step through, so the value the
+    # user sees in the pill is one they could have dialled in themselves.
+    zoom = int(round(ratio * 10)) * 10
+    return max(_CALIBRATION_FLOOR, min(_CALIBRATION_CEILING, zoom))
+
+
+def ensure_zoom_calibrated(screen=None):
+    """Seed zoom_level from the screen on first run, then never touch it again.
+
+    Once the key exists -- because we wrote it here, or because the user
+    touched the zoom pill -- it is the user's preference and is left alone,
+    including if they later move the window to a different monitor. Returns
+    the zoom level now in effect.
+    """
+    prefs = get_preferences()
+    existing = prefs.get("zoom_level")
+    if isinstance(existing, int) and 50 <= existing <= 300:
+        return existing
+    zoom = calibrate_default_zoom(screen)
+    prefs["zoom_level"] = zoom
+    try:
+        paths.write_json_atomic(
+            paths.esim_config_path("preferences.json"), prefs)
+    except Exception:
+        # A read-only config dir must never block startup -- the calibrated
+        # value still applies to this session, we just recompute next launch.
+        pass
+    return zoom
+
+
 def get_preferences(user_home=None):
     prefs = {"theme_mode": "System", "accent_color": "default", "secondary_accent_color": "system"}
     try:

@@ -1769,6 +1769,17 @@ def main(args):
     # instead of the generic pythonw icon.
     app.setWindowIcon(QtGui.QIcon(paths.image_path('logo.png')))
 
+    # First launch on this machine: size the UI to the screen we actually got
+    # before the first stylesheet is built, so the opening frame is already
+    # right rather than something the user has to dial in by hand. Runs once --
+    # after this the stored zoom_level is the user's preference and is left
+    # alone. Guarded: a bad screen must not stop startup.
+    try:
+        theme_utils.ensure_zoom_calibrated()
+    except Exception:
+        pass
+    _stage('zoom calibrated')
+
     # Aurora design system: attach a bound apply_theme to the app instance so
     # the Preferences dialog can live-apply, theme once before widgets build,
     # and follow OS light/dark changes. Guarded so theming cannot block startup.
