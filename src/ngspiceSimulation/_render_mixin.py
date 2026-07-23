@@ -9,7 +9,8 @@ from .constants import (LEGEND_FONT_SIZE, THRESHOLD_ALPHA,
                         TIME_UNIT_THRESHOLD_PS, TIME_UNIT_THRESHOLD_NS,
                         TIME_UNIT_THRESHOLD_US, TIME_UNIT_THRESHOLD_MS,
                         REFRESH_DEBOUNCE_MS, STACKED_REFRESH_DEBOUNCE_MS,
-                        DECIMATION_MIN_POINTS, DECIMATION_BINS)
+                        DECIMATION_MIN_POINTS, DECIMATION_BINS,
+                        MAX_STACKED_GAP_RATIO)
 from .math_utils import (_format_measurement, _format_frequency, _detect_frequency, _trapz,
                          minmax_decimate)
 
@@ -356,15 +357,14 @@ class _RenderMixin:
         match CL by construction — rotated y-labels, stats titles included) and
         drop the engine. No extra layout pass, so rapid toggling stays cheap.
         """
-        if not (self._pending_freeze and self.panes
-                and self._current_view_mode == 'stacked'
-                and len(self.panes) > 1):
+        if not (self.panes and self._current_view_mode == 'stacked'):
             return
-        self._pending_freeze = False
-        positions = [ax.get_position().frozen() for ax in self.panes]
-        self.fig.set_layout_engine('none')       # stop the solver
-        for ax, pos in zip(self.panes, positions):
-            ax.set_position(pos)                 # pin the CL-solved geometry
+        if self._pending_freeze and len(self.panes) > 1:
+            self._pending_freeze = False
+            positions = [ax.get_position().frozen() for ax in self.panes]
+            self.fig.set_layout_engine('none')   # stop the solver
+            for ax, pos in zip(self.panes, positions):
+                ax.set_position(pos)             # pin the CL-solved geometry
 
     def position_legend(self) -> None:
         if not (self.panes and self.legend_check.isChecked()):
@@ -759,14 +759,15 @@ class _RenderMixin:
                      fontsize=LEGEND_FONT_SIZE, fontweight='bold', pad=3)
 
         unit = 'V' if t.index < self.obj_dataext.volts_length else 'A'
-        ax.set_ylabel(unit, rotation=0, va='center')
-        # Fixed axes-fraction label position instead of auto labelpad +
-        # fig.align_ylabels(). All panes span the same gridspec column, so a
-        # constant fraction lines the unit labels up by construction — and it
-        # frees every constrained_layout solve from align-group sibling
-        # walks, which made the solve O(panes²) in tick-label layouts (the
-        # dominant cost of adding/removing a pane once ~10 are stacked).
-        ax.yaxis.set_label_coords(-0.075, 0.5)
+        # No standalone 'V'/'A' axis label here: the formatter below writes the
+        # unit into every tick ('1 V', '500 mV', '16.3 µA'), so a separate one
+        # only restates it — and it has nowhere to sit. Inside the figure there
+        # are ~5px between the numbers and the canvas edge (the roomy-looking
+        # gutter left of the plot is Qt widget padding, outside the canvas), so
+        # the label either overlapped the numbers or bought its gap by pushing
+        # the plot area right, since constrained_layout sizes the left margin
+        # from the axes' tight bbox. Dropping it removes the overlap and gives
+        # the margin back to the plot.
         ax.yaxis.set_major_formatter(FuncFormatter(
             lambda v, _pos, _u=unit: _format_measurement(float(v), _u)))
 
@@ -1021,7 +1022,7 @@ class _RenderMixin:
         self._restore_cursors()
 
         self._connect_xlim_watch()
-        self._set_canvas_height_for_panes(n)
+        resize_scale = self._set_canvas_height_for_panes(n)
 
         # Prune decimation entries whose axes were just deleted.
         fig_axes = self.fig.axes
@@ -1031,15 +1032,36 @@ class _RenderMixin:
         # Position the new pane set. Preferred path: redistribute the frozen
         # envelope by height ratio with the solver kept off — no constrained
         # solve at all. New panes inherit the shared left margin; SI-formatted
-        # tick labels are near-constant width, so the fit holds. Fallback
-        # (old view was single-pane → no gap to sample): one constrained
-        # solve, re-frozen by the draw callback like the full rebuild.
+        # tick labels are near-constant width, so the fit holds. Fallbacks
+        # (one constrained solve, re-frozen by the draw callback like the full
+        # rebuild) when the envelope can't be trusted:
+        #   * old view was single-pane → no gap to sample;
+        #   * the carried-over gap has outgrown the panes it separates. The gap
+        #     is sampled once and reused at face value however far the pane
+        #     count climbs, so a gap solved at N=2 stays ~62px while the panes
+        #     fall to ~34px — every added pane converts plot area into
+        #     whitespace. Re-solving resets it (~30px) and self-heals the stack.
         heights_n = list(gridspec_kw.get('height_ratios', [])) or [1.0] * n
         placed = False
+        if envelope is not None and resize_scale is not None:
+            # The canvas is headed for a different height (one more
+            # MIN_STACKED_PANE_HEIGHT_PX band per pane once the stack passes
+            # the viewport, and back down again as panes are removed). Margins
+            # and the inter-pane gap are pixel-sized decorations — tick labels,
+            # the per-pane title — so restate them as fractions of the height
+            # they are about to be drawn at, and let the panes absorb the rest.
+            # Growing without this leaks the gained band into whitespace;
+            # shrinking without it squeezes titles into the pane above and
+            # clips the top one against the canvas edge.
+            envelope = dict(envelope)
+            envelope['gap'] *= resize_scale
+            envelope['top'] = 1.0 - (1.0 - envelope['top']) * resize_scale
+            envelope['bottom'] *= resize_scale
         if envelope is not None:
             usable = ((envelope['top'] - envelope['bottom'])
                       - envelope['gap'] * (n - 1))
-            if usable > 0.01 * n:
+            if (usable > 0.01 * n
+                    and envelope['gap'] <= MAX_STACKED_GAP_RATIO * (usable / n)):
                 ratio_sum = max(1e-9, sum(heights_n))
                 cur = envelope['top']
                 for ax, r in zip(new_panes, heights_n):

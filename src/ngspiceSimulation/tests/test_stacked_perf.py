@@ -14,6 +14,7 @@ import pathlib
 import numpy as np
 import pytest
 
+from ngspiceSimulation.constants import MAX_STACKED_GAP_RATIO
 from ngspiceSimulation.math_utils import minmax_decimate
 from ngspiceSimulation.plot_window import plotWindow
 
@@ -177,6 +178,109 @@ def test_stacked_pane_reorder_still_full_refresh(stacked_window):
     assert w._stacked_pane_keys[0] == ('t', 1)
     assert w._stacked_pane_keys[1] == ('t', 0)
     assert w.panes[0] is not old0
+
+
+def _pane_geometry_px(w):
+    """(smallest pane height, largest inter-pane gap) in device pixels."""
+    fig_h = w.fig.get_size_inches()[1] * w.fig.dpi
+    pos = [ax.get_position() for ax in w.panes]
+    panes = [(p.y1 - p.y0) * fig_h for p in pos]
+    gaps = [(pos[i].y0 - pos[i + 1].y1) * fig_h for i in range(len(pos) - 1)]
+    return min(panes), (max(gaps) if gaps else 0.0)
+
+
+def test_stacked_incremental_adds_keep_pane_height(qapp, tmp_path):
+    """Adding waveforms one at a time must not starve the panes.
+
+    The incremental path reuses the inter-pane gap solved for the previous
+    (smaller) pane count. Left unbounded that gap keeps its absolute size
+    while the panes it separates shrink, so the stack degenerates into mostly
+    whitespace — panes at ~40% of a fresh layout by N=12, which users worked
+    around by toggling view mode (a full rebuild) to reset it.
+    """
+    _write_tran_project(str(tmp_path), npts=64, nnodes=12)
+    w = plotWindow(str(tmp_path), "proj")
+    w.resize(1400, 900)
+    w.show()
+    qapp.processEvents()
+    try:
+        for i, t in w.traces.items():
+            t.visible = i < 2
+        w.radio_stacked.setChecked(True)
+        w.refresh_plot()
+        w.canvas.draw()
+
+        for n in range(3, 13):           # incremental adds only
+            w.traces[n - 1].visible = True
+            w.refresh_plot()
+            w.canvas.draw()
+        assert len(w.panes) == 12
+        incr_pane, incr_gap = _pane_geometry_px(w)
+
+        w._force_full_refresh = True     # the mode-toggle workaround
+        w.refresh_plot()
+        w.canvas.draw()
+        full_pane, _ = _pane_geometry_px(w)
+
+        assert incr_pane >= 0.8 * full_pane, (
+            f"incremental panes {incr_pane:.1f}px vs {full_pane:.1f}px fresh")
+        assert incr_gap <= MAX_STACKED_GAP_RATIO * incr_pane
+    finally:
+        w.close()
+
+
+def _stacked_margins_px(w):
+    """(margin above the top pane, smallest inter-pane gap) in device pixels."""
+    fig_h = w.fig.get_size_inches()[1] * w.fig.dpi
+    pos = [ax.get_position() for ax in w.panes]
+    gaps = [(pos[i].y0 - pos[i + 1].y1) * fig_h for i in range(len(pos) - 1)]
+    return (1.0 - pos[0].y1) * fig_h, (min(gaps) if gaps else 0.0)
+
+
+def test_stacked_burst_removal_keeps_title_room(qapp, tmp_path):
+    """Select-all, then untick down to 4 faster than Qt applies the resize.
+
+    Every pane carries its name and stats in the margin above it. The canvas
+    minimum height shrinks with the pane count, but Qt applies it on a later
+    layout pass, so a click burst places all its geometry against the old,
+    taller canvas — and when the resize finally lands, the frozen fractions
+    scale down and take the title room with them: titles collide with the pane
+    above and the top one clips against the canvas edge.
+    """
+    _write_tran_project(str(tmp_path), npts=64, nnodes=14)
+    w = plotWindow(str(tmp_path), "proj")
+    w.resize(1400, 900)
+    w.show()
+    qapp.processEvents()
+    try:
+        for t in w.traces.values():
+            t.visible = True
+        w.radio_stacked.setChecked(True)
+        w.refresh_plot()
+        w.canvas.draw()
+        qapp.processEvents()
+
+        for k in range(13, 3, -1):       # burst — no event processing between
+            w.traces[k].visible = False
+            w.refresh_plot()
+            w.canvas.draw()
+        qapp.processEvents()             # resize finally lands
+        w.canvas.draw()
+        assert len(w.panes) == 4
+        burst_top, burst_gap = _stacked_margins_px(w)
+
+        w._force_full_refresh = True     # reference layout at the same N
+        w.refresh_plot()
+        w.canvas.draw()
+        qapp.processEvents()
+        full_top, full_gap = _stacked_margins_px(w)
+
+        assert burst_top >= 0.9 * full_top, (
+            f"title margin {burst_top:.1f}px vs {full_top:.1f}px fresh")
+        assert burst_gap >= 0.7 * full_gap, (
+            f"pane gap {burst_gap:.1f}px vs {full_gap:.1f}px fresh")
+    finally:
+        w.close()
 
 
 # ── decimation integration ───────────────────────────────────────────────

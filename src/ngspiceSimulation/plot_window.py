@@ -192,6 +192,11 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self._stats_cache: Dict[tuple, str] = {}
         # layout freeze: stacked rebuild sets _pending_freeze; draw callback snapshots geometry and drops solver
         self._pending_freeze: bool = False
+        # canvas height the current frozen pane geometry was computed for. Our
+        # own bookkeeping, NOT canvas.height(): Qt applies a new minimum height
+        # asynchronously, so during a click burst the widget still reports the
+        # previous size while several layouts have already been placed.
+        self._canvas_effective_h: float = 0.0
         # display-only scale: line data stays in raw SI; ticks formatted as raw * _x_scale
         self._x_scale: float = 1.0
         self._x_unit: str = 's'
