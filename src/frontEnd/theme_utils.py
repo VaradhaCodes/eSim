@@ -26,6 +26,16 @@ INTERNAL_TOKENS = {
 # the right caption color.
 _CURRENT_DARK = False
 
+# Re-entrancy / coalescing guard for apply_theme. A full repolish (setPalette +
+# setStyleSheet) can post events that re-enter apply_theme (a queued OS
+# colorSchemeChanged, a Preferences live-apply), and running a second repolish
+# on top of the first is both wasteful and a way to churn graphics effects while
+# the first pass still holds pointers to them. _APPLYING serializes the work;
+# _APPLY_PENDING remembers that a re-entrant request arrived so exactly one more
+# apply runs after the current one settles (coalescing a storm into two passes).
+_APPLYING = False
+_APPLY_PENDING = False
+
 
 def current_theme_is_dark():
     return _CURRENT_DARK
@@ -414,21 +424,64 @@ def system_is_dark():
 
 
 def apply_theme(app):
+    """Serialized entry point. Coalesces re-entrant/stacked calls so only one
+    repolish runs at a time; the heavy work lives in _apply_theme_impl."""
+    global _APPLYING, _APPLY_PENDING
+    if _APPLYING:
+        # A repaint or a queued OS colorSchemeChanged re-entered mid-apply.
+        # Don't stack a second repolish; remember it and run once when we settle.
+        _APPLY_PENDING = True
+        return
+    _APPLYING = True
+    try:
+        _apply_theme_impl(app)
+    finally:
+        _APPLYING = False
+
+
+def _apply_theme_impl(app):
     prefs = get_preferences()
     theme_mode = prefs.get("theme_mode", "System")
     accent_color = prefs.get("accent_color", "default")
     secondary_color = prefs.get("secondary_accent_color", "system")
     internal_bg_color = prefs.get("internal_bg_color", "system")
 
-    # Stop every button glow animation before we re-polish: setStyleSheet +
-    # _refresh_graphics_effects() below toggle the very QGraphicsDropShadowEffect
-    # objects a live animation drives, and a freed effect touched by a running
-    # animation is a use-after-free that segfaults during the theme change.
+    # Freeze glow motion and stop every running button-glow animation before we
+    # re-polish: setStyleSheet + _refresh_graphics_effects() below toggle (and
+    # _drop_glow deletes) the very QGraphicsDropShadowEffect objects a live
+    # animation drives, and a freed effect touched by a running animation is a
+    # use-after-free that segfaults (0xc0000005) during the theme change. The
+    # freeze holds until the deferred refresh pass runs (see _thaw), so NO new
+    # glow can start and NO effect is deleted across the whole repolish window --
+    # not just at this instant. stop_all_glow() alone left a gap: hover events
+    # and the deferred pass after this function returned could still spin up an
+    # animation onto an effect being torn down.
     try:
         from frontEnd import motion
+        motion.freeze_glow()
         motion.stop_all_glow()
     except Exception:
         pass
+
+    # Queue the thaw NOW, before the repolish that could (in theory) raise, so a
+    # theme-apply failure can never strand the freeze and kill glows for the rest
+    # of the session. It runs on the next event-loop tick -- after this fully
+    # synchronous apply completes -- does the second effect-refresh pass, lifts
+    # the freeze, then services any coalesced apply that arrived meanwhile.
+    def _thaw():
+        try:
+            _refresh_graphics_effects(app)
+        finally:
+            try:
+                from frontEnd import motion as _m
+                _m.unfreeze_glow()
+            except Exception:
+                pass
+            global _APPLY_PENDING
+            if _APPLY_PENDING:
+                _APPLY_PENDING = False
+                QtCore.QTimer.singleShot(0, lambda: apply_theme(app))
+    QtCore.QTimer.singleShot(0, _thaw)
 
     is_dark = False
     if theme_mode == "Dark":
@@ -530,8 +583,9 @@ def apply_theme(app):
     # response to the QEvent.PaletteChange that this setPalette posts, which can
     # land *after* the synchronous pass and re-stale their effect — the deferred
     # pass mops that up.
+    # Synchronous pass now; the deferred pass runs in _thaw (queued at the top),
+    # which also lifts the glow freeze once effects have settled.
     _refresh_graphics_effects(app)
-    QtCore.QTimer.singleShot(0, lambda: _refresh_graphics_effects(app))
 
     from frontEnd.icon_paths import workspace_icon, timeline_icon, help_icon, dev_docs_icon, settings_icon, home_icon
     for widget in app.topLevelWidgets():

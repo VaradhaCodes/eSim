@@ -1641,10 +1641,19 @@ def _app_teardown(apply_theme_slot=None):
     except Exception:
         pass
     # 2. Stop the OS light/dark signal re-entering apply_theme during teardown.
+    #    The signal now drives a debounce timer, so stop that first (a pending
+    #    trailing-edge fire would otherwise repolish a half-freed widget tree),
+    #    then drop the connection.
+    try:
+        app = QtWidgets.QApplication.instance()
+        timer = getattr(app, "_esim_os_theme_timer", None)
+        if timer is not None:
+            timer.stop()
+    except Exception:
+        pass
     if apply_theme_slot is not None:
         try:
-            QtGui.QGuiApplication.styleHints().colorSchemeChanged.disconnect(
-                apply_theme_slot)
+            QtGui.QGuiApplication.styleHints().colorSchemeChanged.disconnect()
         except Exception:
             pass
     # 3. Stop lingering widget timers (plot refresh/resize/decimate) so a late
@@ -1792,7 +1801,19 @@ def main(args):
         # there is no live OS light/dark signal — users toggle via the menu.
         hints = QtGui.QGuiApplication.styleHints()
         if hasattr(hints, "colorSchemeChanged"):
-            hints.colorSchemeChanged.connect(_apply_theme)
+            # Debounce the OS light/dark signal. The user (or Windows auto
+            # theme) flipping it rapidly used to fire a full repolish per event;
+            # collapse a storm into a single apply on a 120ms trailing edge so
+            # the theme engine is never asked to churn graphics effects faster
+            # than it can settle them. Timer parented to app so it outlives this
+            # scope and is reachable at teardown.
+            _os_theme_timer = QtCore.QTimer(app)
+            _os_theme_timer.setSingleShot(True)
+            _os_theme_timer.setInterval(120)
+            _os_theme_timer.timeout.connect(_apply_theme)
+            app._esim_os_theme_timer = _os_theme_timer
+            hints.colorSchemeChanged.connect(
+                lambda *_: _os_theme_timer.start())
         # Ordered teardown at exit to avoid the sip use-after-free crash: stop
         # glow animations + this signal + plot timers/figures before Qt frees
         # the widgets they touch.

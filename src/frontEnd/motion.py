@@ -44,6 +44,34 @@ _GLOW_PRESS_ALPHA = 76
 _TACTILE_FILTERS = weakref.WeakSet()
 
 
+# Depth counter, not a bool: a theme apply can overlap the deferred tail of the
+# previous one (OS colorSchemeChanged storms, live Preferences toggling), so the
+# freeze must stay up until the LAST apply's thaw runs. While frozen, no new glow
+# animation starts and no glow effect is deleted -- for the full duration of a
+# theme repolish (setStyleSheet + both graphics-effect refresh passes), which is
+# exactly the window that tears down / toggles the QGraphicsDropShadowEffects a
+# live hover animation drives. A freed effect touched by a running animation is a
+# native use-after-free (0xc0000005) that no Python try/except can catch, so the
+# only safe fix is to guarantee no such animation exists across that window.
+# theme_utils.apply_theme owns the freeze/thaw pair.
+_GLOW_FREEZE_DEPTH = 0
+
+
+def freeze_glow():
+    global _GLOW_FREEZE_DEPTH
+    _GLOW_FREEZE_DEPTH += 1
+
+
+def unfreeze_glow():
+    global _GLOW_FREEZE_DEPTH
+    if _GLOW_FREEZE_DEPTH > 0:
+        _GLOW_FREEZE_DEPTH -= 1
+
+
+def glow_frozen():
+    return _GLOW_FREEZE_DEPTH > 0
+
+
 def stop_all_glow():
     """Stop every button glow animation across all installed filters. Call
     before re-applying the theme (setStyleSheet + effect toggling)."""
@@ -222,6 +250,11 @@ def _ensure_glow(widget):
 def _drop_glow(widget):
     """Remove a fully-faded halo so the button goes back to costing nothing.
     Skipped for buttons whose resting state is lit."""
+    # Deleting an effect (setGraphicsEffect(None) frees the C++ object) during a
+    # theme apply is exactly the free that races the repolish. Leave every effect
+    # alive while frozen; the next fade-out after the apply reclaims it.
+    if glow_frozen():
+        return
     if rest_alpha(widget) > 0:
         return
     try:
@@ -260,6 +293,13 @@ class TactileButtonFilter(QtCore.QObject):
         if obj.property("noMotion"):
             return False
 
+        # A theme apply is tearing effects down: never spawn a glow animation
+        # onto an effect that is about to be toggled/deleted mid-repolish. The
+        # pointing-hand cursor was set at install time, so hover feedback still
+        # reads fine without the halo for this brief window.
+        if glow_frozen():
+            return False
+
         is_dock = bool(obj.property("dockPopButton"))
         et = event.type()
 
@@ -281,6 +321,11 @@ class TactileButtonFilter(QtCore.QObject):
 
     def _animate_glow(self, obj, blur, y, alpha):
         """Smoothly transition the drop-shadow glow color on a button."""
+        # Never start a glow while a theme apply is churning graphics effects --
+        # the animation would drive an effect the repolish may free underneath it
+        # (native use-after-free). The freeze is lifted once the apply finishes.
+        if glow_frozen():
+            return
         # The previous animation was started DeleteWhenStopped, so once it has
         # finished Qt has freed its C++ object — calling stop() on the stale
         # Python ref then raises "wrapped C/C++ object … deleted". That storm of
@@ -309,12 +354,19 @@ class TactileButtonFilter(QtCore.QObject):
         anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
 
         def _apply_alpha(val):
-            # The effect can be torn down mid-animation (theme re-polish / dock
-            # close); never touch a freed C++ effect.
+            # Re-fetch the live effect off the widget every tick rather than
+            # closing over `eff`: a captured Python ref to a C++ effect that
+            # setGraphicsEffect(None)/a repolish has freed is a dangling pointer,
+            # and calling into it is a native use-after-free that no try/except
+            # can catch. graphicsEffect() always returns the current effect (or
+            # None) -- never a stale wrapper -- so this can only touch live memory.
             try:
+                live = obj.graphicsEffect()
+                if not isinstance(live, QtWidgets.QGraphicsDropShadowEffect):
+                    return
                 new_c = QtGui.QColor(acc)
                 new_c.setAlpha(int(val * 255))
-                eff.setColor(new_c)
+                live.setColor(new_c)
             except RuntimeError:
                 pass
         anim.valueChanged.connect(_apply_alpha)
