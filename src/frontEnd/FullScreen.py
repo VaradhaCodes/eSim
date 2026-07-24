@@ -18,6 +18,7 @@
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # =========================================================================
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
+from frontEnd.icon_paths import fullscreen_icon, dock_back_icon
 
 
 class FullScreenToggle(QtWidgets.QToolButton):
@@ -31,18 +32,37 @@ class FullScreenToggle(QtWidgets.QToolButton):
         self._content = None
         self.setAutoRaise(True)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        # Icon-only left users hunting for an unlabelled glyph. Show the label
+        # beside the icon so the control reads as "[⛶ Fullscreen]" -- the
+        # affordance is now self-explanatory instead of relying on a tooltip.
+        self.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.setStyleSheet(
-            "QToolButton { border:none; background:transparent; padding:2px 6px; }")
+            "QToolButton { border:none; background:transparent; padding:2px 8px; }")
         self._set_state(full=False)
         self.clicked.connect(self.toggle)
 
     # ------------------------------------------------------------------ #
     def _set_state(self, full):
-        std = QtWidgets.QStyle.StandardPixmap
-        self.setIcon(self.style().standardIcon(
-            std.SP_TitleBarNormalButton if full else std.SP_TitleBarMaxButton))
-        self.setToolTip("Exit fullscreen  (Esc)" if full
-                        else "Fullscreen this panel  (Esc to exit)")
+        # Purpose-built, theme-aware SVGs (icon_paths) rather than the OS
+        # SP_TitleBar* pixmap, which rasterised mushy and read as a window
+        # control, not "fullscreen this panel".
+        if full:
+            self.setIcon(dock_back_icon())
+            self.setText("Exit Fullscreen")
+            self.setToolTip("Exit fullscreen  (Esc)")
+        else:
+            self.setIcon(fullscreen_icon())
+            self.setText("Fullscreen")
+            self.setToolTip("Fullscreen this panel  (Esc to exit)")
+
+    def changeEvent(self, event):
+        # The SVG icon colour is baked in at build time, so a live light/dark
+        # theme switch would leave the glyph the old theme's colour. Rebuild it
+        # (state preserved: _win set == currently fullscreen) on PaletteChange.
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            self._set_state(full=self._win is not None)
+        super().changeEvent(event)
 
     def _resolve_host(self):
         """Walk up to the enclosing QDockWidget; the widget just beneath it is
@@ -87,28 +107,42 @@ class FullScreenToggle(QtWidgets.QToolButton):
 
     def _make_close_handler(self):
         def _on_close(event):
-            if self._win is not None:
-                self._win = None
+            # Keep a LOCAL reference to the fullscreen window for the whole
+            # handler. ``content`` is a child of ``win``; if the only reference
+            # to ``win`` (``self._win``) were dropped first, sip would delete
+            # win -- and content with it -- so the setWidget below touched a
+            # freed QWidget (RuntimeError) and left the dock's tab blank. The
+            # local ref keeps win, hence content, alive until we reparent.
+            win = self._win
+            if win is not None:
+                self._win = None      # re-entrant close is now a no-op
                 dock, content = self._dock, self._content
+                self._dock = None
+                self._content = None
+
+                content_alive = (content is not None
+                                 and not sip.isdeleted(content))
                 # The host dock can be destroyed WHILE its panel is fullscreen
-                # (Close Project / closing the now-empty tab). The content is
-                # safe -- it was reparented into the fullscreen window, not the
-                # dock -- but the QDockWidget wrapper is gone, so setWidget/show/
-                # raise_ on it would RuntimeError inside this closeEvent.
+                # (Close Project / closing the now-empty tab), so verify it too
+                # before setWidget/show/raise_ on a possibly-gone QDockWidget.
                 dock_alive = dock is not None and not sip.isdeleted(dock)
-                if dock_alive and content is not None:
-                    # Back into the dock -- it kept its tab slot all along.
+                if dock_alive and content_alive:
+                    # Reparent BEFORE win dies -- back into the dock, which kept
+                    # its tab slot all along.
                     dock.setWidget(content)
                     dock.show()
                     dock.raise_()
-                elif content is not None and not sip.isdeleted(content):
+                elif content_alive:
                     # Dock is gone: drop the orphaned panel rather than leaving
                     # it floating parentless for the rest of the session.
                     content.setParent(None)
                     content.deleteLater()
-                self._dock = None
-                self._content = None
+
                 self._set_state(full=False)
+                # Reap the now-empty fullscreen wrapper. deleteLater defers the
+                # delete until after this closeEvent unwinds, so win is never
+                # deleted from inside its own event.
+                win.deleteLater()
             event.accept()
         return _on_close
 
