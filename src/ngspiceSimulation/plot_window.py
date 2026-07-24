@@ -571,6 +571,24 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         """
         tb = getattr(self, "nav_toolbar", None)
         if tb is not None:
+            # _icon() decides whether to tint (and with what) from the
+            # TOOLBAR's own palette (backgroundRole value < 128 -> fill with
+            # foregroundRole). This runs mid-repolish: the window QSS that
+            # writes the new theme's colors into descendant palettes hasn't
+            # been re-installed yet, so tb.palette() still holds the OLD
+            # theme and the rebuilt icons come out the old color (white on
+            # white after dark->light). Force the palette to the target
+            # theme's colors first so the tint is deterministic regardless
+            # of polish ordering; the QSS repolish then re-writes the same
+            # values, so this never fights it.
+            try:
+                p = self._palette
+                pal = tb.palette()
+                pal.setColor(tb.backgroundRole(), QColor(p['bg']))
+                pal.setColor(tb.foregroundRole(), QColor(p['text']))
+                tb.setPalette(pal)
+            except Exception:
+                pass
             try:
                 for _text, _tip, image, callback in tb.toolitems:
                     if not image or callback is None:
@@ -580,10 +598,12 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                         act.setIcon(tb._icon(image + '.png'))
             except Exception:
                 pass
-            # _fig_btn reuses the toolbar's own tinting path.
+            # _fig_btn reuses the toolbar's own tinting path. _icon() wants
+            # the filename WITH extension (mpl 3.10 docstring); extensionless
+            # resolves to a nonexistent path and a null pixmap.
             try:
                 if getattr(self, "_fig_btn", None) is not None:
-                    self._fig_btn.setIcon(tb._icon('qt4_editor_options'))
+                    self._fig_btn.setIcon(tb._icon('qt4_editor_options.png'))
             except Exception:
                 pass
         # _focus_btn is a hand-painted glyph — re-render at the palette color.
@@ -685,7 +705,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         # toggle — its icon is palette-tinted at construction (was a local, so
         # nothing could ever refresh it and it stayed the old theme's color).
         self._fig_btn = QToolButton()
-        self._fig_btn.setIcon(self.nav_toolbar._icon('qt4_editor_options'))
+        self._fig_btn.setIcon(self.nav_toolbar._icon('qt4_editor_options.png'))
         self._fig_btn.setIconSize(_icon_sz)
         self._fig_btn.setFixedSize(_tb_h, _tb_h)
         self._fig_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -725,7 +745,10 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         # fullscreen this plotting panel and dock it back.
         from frontEnd.FullScreen import FullScreenToggle
         self._fs_btn = FullScreenToggle()
-        self._fs_btn.setFixedSize(_tb_h, _tb_h)
+        # Height matches the toolbar row; width is free so the "Fullscreen"
+        # label is not clipped by a square box (the other panels never clamped
+        # it). Icon-only was the discoverability complaint this fixes.
+        self._fs_btn.setFixedHeight(_tb_h)
         toolbar_row.addWidget(self._fs_btn)
         # matplotlib wedges its x/y coordinate readout (locLabel) at the end
         # of the nav toolbar, i.e. between Save and Figure Options. Yank it out

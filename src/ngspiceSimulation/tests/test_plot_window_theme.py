@@ -18,7 +18,7 @@ from matplotlib.colors import to_rgba
 from PyQt6.QtCore import QEvent
 
 from ngspiceSimulation import plot_window as pw_mod
-from ngspiceSimulation._palette import _DARK_DEFAULTS
+from ngspiceSimulation._palette import _DARK_DEFAULTS, _LIGHT_DEFAULTS
 from ngspiceSimulation.plot_window import plotWindow
 
 
@@ -127,6 +127,46 @@ def test_fresh_dark_render_uses_palette_tokens(qapp, tmp_path, monkeypatch):
             assert to_rgba(leg.get_frame().get_edgecolor())[:3] == to_rgba(dark["legend_edge"])[:3]
     finally:
         w.close()
+
+
+def _mean_glyph_lum(icon, size=24):
+    """Mean luminance of the icon's opaque glyph pixels (edges excluded)."""
+    img = icon.pixmap(size, size).toImage()
+    lums = []
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            if c.alpha() > 200:
+                lums.append(0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue())
+    assert lums, "icon has no opaque pixels — glyph missing"
+    return sum(lums) / len(lums)
+
+
+def test_toggle_retints_toolbar_glyphs(qapp, plot_window, monkeypatch):
+    """Pixel-truth regression for the invisible-icons bug. cacheKey()-changed
+    was not enough: mpl's _icon() tints from the TOOLBAR's palette, which mid-
+    repolish still held the OLD theme, so the rebuilt icons came out the old
+    color (white on white after dark->light). The fix forces the toolbar
+    palette from self._palette before tinting; assert the actual glyph color
+    flips both ways."""
+    _render_with_grid(plot_window)
+    home = plot_window.nav_toolbar._actions.get("home")
+    assert home is not None
+
+    dark = dict(_DARK_DEFAULTS)
+    monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
+    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    assert _mean_glyph_lum(home.icon()) > 150, "dark theme glyph not light"
+
+    light = dict(_LIGHT_DEFAULTS)
+    monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: light)
+    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    assert _mean_glyph_lum(home.icon()) < 100, "light theme glyph not dark"
+
+    # Figure-options button: _icon() needs the '.png' extension; extensionless
+    # resolved to a nonexistent path and a null pixmap.
+    assert not plot_window._fig_btn.icon().isNull()
+    _mean_glyph_lum(plot_window._fig_btn.icon())
 
 
 def test_light_first_then_dark_toolbar_visible(qapp, plot_window, monkeypatch):
