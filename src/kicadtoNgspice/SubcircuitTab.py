@@ -3,7 +3,8 @@ from configuration import paths
 from configuration import Dialogs
 from . import TrackWidget
 from . import ModelGrouping
-from .ModelGroupWidget import ModelGroupWidget, InstanceRow
+from .ModelGroupWidget import (ModelGroupWidget, InstanceRow,
+                               finish_group_layout)
 from projManagement import Validation
 from projManagement import modelCache
 from projManagement.projectPaths import stem_from_file, previous_values_path
@@ -61,6 +62,8 @@ class SubcircuitTab(QtWidgets.QWidget):
         self._groups = []
 
         self.grid = QtWidgets.QGridLayout()
+        self.grid.setContentsMargins(10, 10, 10, 10)
+        self.grid.setVerticalSpacing(8)
         self.setLayout(self.grid)
 
         components = ModelGrouping.parse_subcircuit_components(schematicInfo)
@@ -92,7 +95,7 @@ class SubcircuitTab(QtWidgets.QWidget):
                 rows.append(InstanceRow(
                     ref, edit, browse_fn=self._make_row_browse(ref)))
 
-            title = "%s  (subcircuit)" % model
+            title = "%s  (Subcircuit)" % model
             group = ModelGroupWidget(
                 title, rows,
                 resolve_fn=self._resolve_subcircuit,
@@ -100,6 +103,8 @@ class SubcircuitTab(QtWidgets.QWidget):
             self._apply_cache_hint(model, group, rows)
             self.grid.addWidget(group)
             self._groups.append((model, group))
+
+        finish_group_layout(self.grid)
 
 
     def _apply_cache_hint(self, model, group, rows):

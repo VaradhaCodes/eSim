@@ -5,7 +5,8 @@ import os
 from xml.etree import ElementTree as ET
 from . import TrackWidget
 from . import ModelGrouping
-from .ModelGroupWidget import ModelGroupWidget, InstanceRow
+from .ModelGroupWidget import (ModelGroupWidget, InstanceRow,
+                               finish_group_layout)
 from projManagement import modelCache
 from projManagement.projectPaths import previous_values_path
 
@@ -639,6 +640,12 @@ class DeviceModel(QtWidgets.QWidget):
             self._apply_cache_hint(model, group, rows)
             self.grid.addWidget(group)
             self._groups.append((model, group))
+
+        # Only this branch fills the tab with group cards (sky130 / IHP build
+        # their own boxes), so the row-share setup belongs here.
+        self.grid.setContentsMargins(10, 10, 10, 10)
+        self.grid.setVerticalSpacing(8)
+        finish_group_layout(self.grid)
 
 
     def _apply_cache_hint(self, model, group, rows):

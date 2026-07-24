@@ -1092,6 +1092,19 @@ QGroupBox[cssClass="ihpGroup"]::title {
     left: 10px;
 }
 
+/* Device-model / subcircuit group card. It carries no ::title (the disclosure
+   header is painted inside it), so it wants none of the base rule's top margin
+   or heavy padding -- those exist to clear a title band that is not there. */
+QGroupBox[cssClass="modelGroup"] {
+    background-color: rgba(255,255,255,0.020);
+    border: 1px solid qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(83,215,255,0.14), stop:1 rgba(155,124,255,0.09));
+    border-radius: 12px;
+    margin-top: 0;
+    padding: 4px 8px 4px 8px;
+    font-weight: 400;
+}
+
 /* ── Scroll Bars ─────────────────────────────────────────────────── */
 QScrollBar:vertical {
     background: transparent;
