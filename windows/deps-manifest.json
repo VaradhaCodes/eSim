@@ -33,8 +33,8 @@
     "version": "v12-20220611",
     "url": "https://bleyer.org/icarus/iverilog-v12-20220611-x64_setup.exe",
     "filename": "iverilog-v12-20220611-x64_setup.exe",
-    "sha256": "",
-    "notes": "Bleyer's Windows Icarus build. FALLBACK ONLY (-SkipSimBuild): it ships without libvvp, so d_cosim cannot run with it - only the Verilog Verifier. The Full build compiles iverilog_source instead. Extracted (7z), NOT run, staged under library/bin/iverilog/."
+    "sha256": "a614057374dfaed5da0fe454cdeb410e54981fd85dbd28bd472f4ccb765deb84",
+    "notes": "Bleyer's Windows Icarus build. FALLBACK ONLY (-SkipSimBuild): it ships without libvvp, so d_cosim cannot run with it - only the Verilog Verifier. The Full build compiles iverilog_source instead. Extracted (7z), NOT run, staged under library/bin/iverilog/. HASH PROVENANCE: bleyer.org publishes no checksum alongside the download, so unlike every other entry here this sha256 could NOT be cross-checked against an upstream-published value - it was recorded from the download (19165730 bytes, Last-Modified 2022-06-12) and is trust-on-first-use. The artifact is immutable (a dated v12 build), so a future mismatch means the upstream file changed and must be re-verified from a second network before -AcceptNewHashes is used on it."
   },
   "iverilog_source": {
     "version": "de415b2f (post-v12, pinned)",

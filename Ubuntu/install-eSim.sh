@@ -47,6 +47,28 @@ KICAD_MIN_MAJOR=""
 QT_PKGS="python3-pyqt6 python3-pyqt6.qtsvg pyqt6-dev-tools"
 QSCI_PKG="python3-pyqt6.qsci"
 
+# Third-party Python deps installed with pip (everything heavy comes from apt).
+# ONE place to bump; installPythonDeps just loops over this array. Keep IN SYNC
+# with the pinned block in windows/requirements-windows.txt -- both OSes must
+# install the same versions, and windows/tests/test_packaging_pins.py fails if
+# the two lists drift.
+#
+# These are external tools the maker/Makerchip flows shell out to, not
+# libraries the app imports, so each carries an UPPER bound: an unannounced new
+# major otherwise changes a CLI under an installer nobody rebuilt to test it.
+# pyhdlparser has no PyPI release and its old `tarball/master` URL was both a
+# moving ref and a stale branch name (upstream renamed master -> main; GitHub
+# serves master only via a legacy redirect), so it is pinned to a commit --
+# same idiom as ICARUS_REF in nghdl/install-nghdl.sh.
+PYHDLPARSER_REF="e1153ace8ca1e25f9fb53350c41058ef8eb8dacf"
+PIP_PINS=(
+    "watchdog>=3.0"
+    "https://github.com/hdl/pyhdlparser/tarball/$PYHDLPARSER_REF"
+    "makerchip-app>=1.1.6,<2"
+    "sandpiper-saas>=1.1.0,<2"
+    "volare>=0.20.6,<0.21"      # 0.x: the MINOR is the breaking unit
+)
+
 #-----------------------------------------------------------------------------
 # Helpers
 #-----------------------------------------------------------------------------
@@ -266,13 +288,15 @@ installDependency() {
     # eSim-specific pure-python deps not packaged in apt. Heavy/native deps
     # (PyQt6, matplotlib, numpy, scipy) come from apt above to stay mutually
     # consistent — pinning them via pip here is what made the old scripts fragile.
-    log "Installing eSim Python deps (watchdog, makerchip, sandpiper, hdlparse, volare)"
+    log "Installing eSim Python deps (watchdog, hdlparse, makerchip, sandpiper, volare)"
+    # Each is optional at runtime -- eSim degrades gracefully when one is
+    # absent -- so a failure warns and the install continues. watchdog used to
+    # be installed WITHOUT a `|| warn`, which under `set +e` meant a failure
+    # scrolled past silently; the loop gives every pin the same warning.
     set +e; trap "" ERR
-    pip install watchdog
-    pip install "https://github.com/hdl/pyhdlparser/tarball/master" || warn "hdlparse (github) failed"
-    pip install makerchip-app   || warn "makerchip-app failed"
-    pip install sandpiper-saas  || warn "sandpiper-saas failed"
-    pip install volare          || warn "volare failed"
+    for spec in "${PIP_PINS[@]}"; do
+        pip install "$spec" || warn "pip install '$spec' failed"
+    done
     set -e; trap error_exit ERR
 }
 

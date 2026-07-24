@@ -131,10 +131,22 @@ Design decisions:
   runs from `esim.bat` every start, idempotently). Multi-user machines and
   upgrades self-heal, and the logic is testable.
 * **Space-free default install root** (`C:\FOSSEE\eSim`): the MSYS2/mingw
-  toolchain and code-model paths break subtly under `Program Files`. The
-  installer grants `users-modify` on the tree because HDL model builds write
-  into it by design (exactly like the Ubuntu install owns
-  `$HOME/nghdl-simulator`).
+  toolchain and code-model paths break subtly under `Program Files`. HDL model
+  builds write into the install tree by design (exactly like the Ubuntu install
+  owns `$HOME/nghdl-simulator`), so the installer grants `users-modify` — but
+  **only on `tools\nghdl` and `library\modelParamXML`**, the two dirs the
+  running app actually writes. It is deliberately NOT granted on the tree root:
+  that would also let any local user replace `python\`, `eSim.exe`,
+  `tools\kicad\bin` or `tools\msys64\` binaries that the next user of a shared
+  lab machine runs. `installer.iss`'s `[Dirs]` comment lists what was verified
+  read-only and why; widen that list rather than moving the grant back to
+  `{app}` if a future change starts writing somewhere new.
+  **Not yet closed:** Windows gives `C:\` an inherit-only
+  `Authenticated Users:(OI)(CI)(IO)(M)`, so a tree under `{sd}\FOSSEE\eSim`
+  inherits user-writable ACLs from the drive root whatever the installer does.
+  Finishing the job means breaking inheritance on `{app}` — see the KNOWN
+  RESIDUAL block in `installer.iss`, which carries the exact `icacls` line and
+  the standard-user test it needs first.
 * **The custom eSim ngspice is built from source on Windows too.**
   `Stage-SimToolchain` compiles `nghdl/nghdl-simulator-source.tar.xz`
   (ngspice-45.2 + the nghdl delta baked in — no separate patch) inside

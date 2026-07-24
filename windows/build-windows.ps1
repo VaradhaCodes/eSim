@@ -387,6 +387,25 @@ function Stage-Msys {
         Die "MSYS2 ghdl reports an mcode backend ($ghdlver). nghdl needs llvm/gcc; pin mingw-w64-x86_64-ghdl-llvm."
     }
     Log "ghdl: $($ghdlver -join ' ')"
+    # Record the package set MSYS2 actually resolved. Everything else this
+    # build downloads is hash-pinned in deps-manifest.json, but the base
+    # tarball is only the STARTING point: the `pacman -Syu` + install above are
+    # ROLLING, so two builds a week apart ship different gcc/verilator/ghdl
+    # with nothing in the artifact recording which. Pinning package URLs
+    # against repo.msys2.org's archive is the full fix; this makes a release
+    # AUDITABLE today -- the same role python-wheels.lock plays for the pip
+    # set. It is written INSIDE the tree (unlike python-wheels.lock, which
+    # installer.iss excludes) so a user's install can be identified after the
+    # fact, from the installed files alone, when a model build misbehaves.
+    # Written on every run, not just first provisioning, so a re-run after a
+    # manual pacman in the stage refreshes rather than lies.
+    $pkgList = & "$dst\usr\bin\bash.exe" -lc 'pacman -Q'
+    if ($pkgList) {
+        Set-Content (Join-Path $dst 'PACKAGES.lock') $pkgList
+        Log "MSYS2 packages recorded: $(@($pkgList).Count) -> tools\msys64\PACKAGES.lock"
+    } else {
+        Log 'WARNING: `pacman -Q` produced no output; PACKAGES.lock not written'
+    }
 }
 
 function Stage-SimToolchain {

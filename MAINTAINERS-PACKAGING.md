@@ -73,7 +73,7 @@ Full install test — clean Windows 10 or 11 VM, checklist in §4.
 |---|---|---|
 | Source code, installers, packaging scripts, this doc | `FOSSEE/eSim` branch `master` | `Ubuntu/install-eSim.sh`, `make-release.sh`, `windows/*`, `PACKAGING.md`, `MAINTAINERS-PACKAGING.md` all live on master — there is **no separate "installers" branch** anymore; per-version script branches are exactly the drift that killed the old scheme. |
 | `eSim-<VERSION>-ubuntu.zip` + `.sha256` | GitHub Release assets on `FOSSEE/eSim`, tag `v<VERSION>` | Never commit built zips to the repo. |
-| `eSim-<VERSION>-installer.exe` + KiCad installer + `.sha256` | Same GitHub Release | Built from the tagged commit; the exe embeds `windows/build/eSim/python-wheels.lock` — attach that lock file to the release notes too. |
+| `eSim-<VERSION>-installer.exe` + KiCad installer + `.sha256` | Same GitHub Release | Built from the tagged commit; the exe embeds `windows/build/eSim/python-wheels.lock` — attach that lock file to the release notes too, together with `windows/build/eSim/tools/msys64/PACKAGES.lock` (the resolved MSYS2 gcc/verilator/ghdl set; `pacman` is rolling, so this is the only record of which toolchain a given release shipped). |
 | nghdl changes (`nghdl/` dir) | `FOSSEE/nghdl` repo, kept in sync | `nghdl/` in this repo is the packaging copy that `make-release.sh` zips; upstream fixes belong in both. The vendored duplicates (`src/maker/kicad_symlib.py` ↔ `nghdl/src/kicad_symlib.py`, `model_teardown.py`) must stay byte-identical — a drift-guard test enforces it. |
 | esim.fossee.in downloads page | FOSSEE web team | Point at the GitHub Release assets; include both sha256 sums. |
 

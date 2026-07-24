@@ -78,12 +78,67 @@ Name: "hdl";  Description: "HDL toolchain: MSYS2 mingw gcc/make/verilator/GHDL (
     Types: full
 
 [Dirs]
-; eSim's HDL model builds WRITE inside the install tree by design (new model
-; sources land in tools\nghdl\src\xspice\icm, the .cm rebuild runs in
-; tools\nghdl\release, XML metadata in library\modelParamXML) -- exactly like
-; the Ubuntu install owns $HOME/nghdl-simulator. The install runs as admin
-; but eSim runs as the user, so grant users modify rights on the tree.
-Name: "{app}"; Permissions: users-modify
+; eSim's HDL model builds WRITE inside the install tree by design -- exactly
+; like the Ubuntu install owns $HOME/nghdl-simulator. Setup runs as admin but
+; eSim runs as the user, so the written dirs carry a users-modify ACE, which
+; NTFS inheritance then extends to everything [Files] installs into them
+; (Inno processes [Dirs] before [Files]).
+;
+; The grant used to sit on {app} itself. That also handed every local user
+; write access to python\, eSim.exe, tools\kicad\bin and tools\msys64\ -- i.e.
+; the ability to swap a binary the NEXT user of the machine runs. On the
+; shared lab machines eSim targets that is a local tamper vector, so the ACE
+; is scoped to the two trees the running app genuinely writes:
+;
+;   tools\nghdl            new model sources land in src\xspice\icm, the .cm
+;                          rebuild runs in release\, `make install` writes
+;                          install_dir\, and windows_bootstrap.fix_spinit
+;                          rewrites install_dir\share\ngspice\scripts\spinit
+;                          on first launch (it ships with build-machine paths
+;                          baked into its codemodel lines).
+;   library\modelParamXML  createkicad / createkicadCosim / NgVeri /
+;                          model_teardown add and remove <model>.xml under
+;                          Ngveri, NgVeriCosim and Nghdl.
+;
+; Read-only at runtime -- verified against the source, deliberately NOT
+; granted (if a future change starts writing to one of these, widen the list
+; here rather than moving the ACE back up to {app}):
+;   library\kicadLibrary   static symbol libs are referenced in place; the
+;                          libs eSim REWRITES moved to ~\.esim\kicad_symbols
+;                          (kicad_symlib.generated_symlib_path) long ago, and
+;                          the install path survives only as a legacy READ
+;                          probe for migrating older installs.
+;   library\bin\iverilog   ensure_unversioned_libvvp() copies libvvp.dll only
+;                          when the build did not -- and Stage-SimToolchain
+;                          stages it (the Bleyer fallback has no libvvp to
+;                          copy at all, so the write never happens either way).
+;   tools\msys64           used purely as a toolchain: mingw32-make, gcc,
+;                          verilator and ghdl are invoked by full path with
+;                          cwd= the model dir, and the generated cfunc's
+;                          scratch file goes to %LOCALAPPDATA%\Temp.
+;   src, windows, python   bytecode is precompiled by [Run] below, as admin.
+;
+; KNOWN RESIDUAL -- this scoping removes eSim's OWN over-broad grant, and on
+; its own it does NOT finish the job at the default install root. Windows
+; ships C:\ with `NT AUTHORITY\Authenticated Users:(OI)(CI)(IO)(M)`, an
+; inherit-only Modify that propagates into every folder created under it, so a
+; tree at {sd}\FOSSEE\eSim inherits user-writable ACLs from the drive root no
+; matter what this section says. Verified on a real install:
+;   C:\FOSSEE\eSim\python -> BUILTIN\Users:(I)(OI)(CI)(M)      [this section]
+;                            NT AUTHORITY\Authenticated Users:(I)(M)  [from C:\]
+; Closing it needs the install root's INHERITANCE broken as well, e.g. a [Run]
+; step after the files land:
+;   icacls "{app}" /inheritance:r ^
+;     /grant *S-1-5-32-544:(OI)(CI)F /grant *S-1-5-18:(OI)(CI)F ^
+;     /grant *S-1-5-32-545:(OI)(CI)RX
+; (well-known SIDs, not names -- localized Windows renames these groups). That
+; is a bigger behavioural change than a permissions narrowing: it must be
+; validated by a Full install followed by an NgVeri + d_cosim + NGHDL model
+; build from a SECOND, standard-user account, since getting it wrong leaves a
+; tree the user can neither build in nor delete. Deliberately left for that
+; test rather than shipped unverified.
+Name: "{app}\tools\nghdl";           Permissions: users-modify
+Name: "{app}\library\modelParamXML"; Permissions: users-modify
 
 [Files]
 ; Core = everything except the HDL build toolchain. NOTE tools\nghdl\

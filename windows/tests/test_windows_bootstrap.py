@@ -239,3 +239,41 @@ def test_main_runs_everything(home, root):
     assert (home / ".esim" / "config.ini").is_file()
     assert (home / ".esim" / "kicad_symbols" /
             "eSim_Nghdl.kicad_sym").is_file()
+
+
+def test_main_isolates_a_failing_step(home, root, monkeypatch, capsys):
+    """A self-heal that cannot write must not cost the user the LATER steps.
+
+    installer.iss no longer grants users-modify on the whole {app} tree (only
+    tools\\nghdl and library\\modelParamXML), so a step touching the install
+    tree can now legitimately raise PermissionError. Run straight-line, that
+    aborted everything after it -- most damagingly register_kicad_libraries,
+    leaving eSim's symbols missing from KiCad with nothing pointing at the
+    real cause."""
+    def boom(_root):
+        raise PermissionError(13, "Access is denied", "spinit")
+
+    monkeypatch.setattr(wb, "fix_spinit", boom)
+    rc = wb.main(["--esim-root", str(root)])
+
+    assert rc == 1, "a failed step must be reported in the exit code"
+    out = capsys.readouterr().out
+    assert "spinit code-model paths skipped" in out
+    assert "PermissionError" in out
+    # Steps before AND after the failure still ran.
+    assert (home / ".esim" / "config.ini").is_file()
+    assert (home / ".esim" / "kicad_symbols" /
+            "eSim_Nghdl.kicad_sym").is_file()
+
+
+def test_main_survives_every_step_failing(home, root, monkeypatch):
+    """Worst case (a wholly read-only install): still no traceback out of
+    main(), because launcher_windows.run_bootstrap treats a raise as 'skip
+    bootstrap entirely' -- which would be a far bigger regression."""
+    for name in ("write_esim_config", "seed_generated_symbols",
+                 "write_nghdl_config", "fix_spinit",
+                 "ensure_unversioned_libvvp", "ensure_kicad_config_dir",
+                 "register_kicad_libraries"):
+        monkeypatch.setattr(wb, name, lambda _root: (_ for _ in ()).throw(
+            OSError("read-only install")))
+    assert wb.main(["--esim-root", str(root)]) == 1

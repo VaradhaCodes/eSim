@@ -321,14 +321,32 @@ def main(argv=None):
     args = ap.parse_args(argv)
     root = os.path.abspath(args.esim_root)
 
-    write_esim_config(root)
-    seed_generated_symbols(root)
-    write_nghdl_config(root)
-    fix_spinit(root)
-    ensure_unversioned_libvvp(root)
-    ensure_kicad_config_dir(root)   # bundled KiCad: make registration
-    register_kicad_libraries(root)  # possible before its first launch
-    return 0
+    # Every step is an INDEPENDENT self-heal, so one failure must not skip the
+    # rest. installer.iss no longer grants users-modify on the whole {app}
+    # tree, only on the two dirs eSim writes -- so a step that touches the
+    # install tree (fix_spinit, ensure_unversioned_libvvp) can now legitimately
+    # raise PermissionError on a hand-tightened, roaming or repackaged install.
+    # Run straight-line, that aborted the remaining steps, and the user lost
+    # register_kicad_libraries(): eSim's symbols silently missing from KiCad,
+    # with nothing anywhere pointing back at spinit. Report and carry on.
+    steps = (
+        ('config.ini', write_esim_config),
+        ('generated symbol seeding', seed_generated_symbols),
+        ('nghdl config.ini', write_nghdl_config),
+        ('spinit code-model paths', fix_spinit),
+        ('libvvp.dll', ensure_unversioned_libvvp),
+        ('kicad config dir', ensure_kicad_config_dir),
+        ('kicad sym-lib-table', register_kicad_libraries),
+    )
+    failed = 0
+    for label, step in steps:
+        try:
+            step(root)
+        except Exception as exc:            # noqa: BLE001 - best effort
+            failed += 1
+            print('eSim bootstrap: %s skipped (%s: %s)'
+                  % (label, type(exc).__name__, exc))
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':
