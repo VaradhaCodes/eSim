@@ -263,13 +263,22 @@ installNGHDL() {
     # $(srcdir)/Ngveri/verilated{,_threads}.o but nothing else builds them
     # (the tarball deliberately ships no platform-specific objects).
     # -DVL_TIME_CONTEXT avoids the weak sc_time_stamp() link trap.
+    # -pthread: verilated_threads.cpp uses std::thread, and these objects end
+    #   up inside the Ngveri.cm shared lib; compile them the way thread-using
+    #   code is meant to be compiled instead of relying on glibc >= 2.34
+    #   having folded libpthread into libc.
+    # -DVL_THREADED: ignored by Verilator >= 5 (threading is always on since
+    #   5.000, which is the minimum this script supports); kept so the flags
+    #   match the upstream nghdl install script.
     VERILATOR_INC="$(verilator --getenv VERILATOR_ROOT 2>/dev/null)/include"
     [ -d "$VERILATOR_INC" ] || VERILATOR_INC="/usr/share/verilator/include"
     log "Compiling Verilator runtime objects from $VERILATOR_INC"
-    g++ -DVL_TIME_CONTEXT -I"$VERILATOR_INC" -I"$VERILATOR_INC/vltstd" \
+    g++ -DVL_TIME_CONTEXT -DVL_THREADED -pthread \
+        -I"$VERILATOR_INC" -I"$VERILATOR_INC/vltstd" \
         -std=gnu++17 -O2 -fPIC -c "$VERILATOR_INC/verilated.cpp" \
         -o src/xspice/icm/Ngveri/verilated.o
-    g++ -DVL_TIME_CONTEXT -I"$VERILATOR_INC" -I"$VERILATOR_INC/vltstd" \
+    g++ -DVL_TIME_CONTEXT -DVL_THREADED -pthread \
+        -I"$VERILATOR_INC" -I"$VERILATOR_INC/vltstd" \
         -std=gnu++17 -O2 -fPIC -c "$VERILATOR_INC/verilated_threads.cpp" \
         -o src/xspice/icm/Ngveri/verilated_threads.o
 
