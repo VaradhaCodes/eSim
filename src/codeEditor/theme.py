@@ -132,6 +132,50 @@ def _classify(desc):
         # Built-in tasks ($display, $finish, …) read as support
         # functions, not control keywords -- colour them apart.
         return FUNCTION, False, False
+    # ── structured-format styles (XML / JSON / Python / Markdown / Intel-hex).
+    # These come before the generic checks below so a description like
+    # "HTML number" still resolves to NUMBER, while the format-specific
+    # names get deliberate colours.  Kept above "keyword"/"operator" etc.
+    if "class name" in d:                       # Python class name
+        return FUNCTION, True, False
+    if "decorator" in d:                        # Python decorator
+        return PREPROC, False, False
+    if "tag" in d:                              # XML/HTML tags
+        return KEYWORD, True, False
+    if "attribute" in d:                        # XML attrs (+ VHDL attributes)
+        return PARAMETER, False, False
+    if "property" in d:                         # JSON object keys
+        return PARAMETER, False, False
+    if "entity" in d:                           # XML/SGML entity refs
+        return VALUE, False, False
+    if "cdata" in d:                            # XML CDATA section
+        return STRING, False, False
+    if "escape sequence" in d:                  # Python/JSON/CPP escapes
+        return STRING, False, False
+    if "header" in d:                           # Markdown headers
+        return KEYWORD, True, False
+    if "emphasis" in d:                         # Markdown *bold* / _italic_
+        return VALUE, "strong" in d, True
+    if "code between" in d or "code block" in d:   # Markdown code spans
+        return STRING, False, False
+    if "list item" in d:                        # Markdown bullets / numbers
+        return KEYWORD, False, False
+    if "block quote" in d:                       # Markdown blockquote
+        return COMMENT, False, True
+    if d == "link":                             # Markdown link
+        return PARAMETER, False, False
+    if "record start" in d or "record type" in d:   # Intel-hex framing
+        return KEYWORD, True, False
+    if "byte count" in d:                       # Intel-hex byte count
+        return NUMBER, False, False
+    if "address" in d:                          # Intel-hex address fields
+        return PARAMETER, False, False
+    if "checksum" in d:                         # Intel-hex checksum
+        return FUNCTION, False, False
+    if "even data" in d:                        # Intel-hex payload bytes
+        return NUMBER, False, False
+    if "odd data" in d:
+        return VALUE, False, False
     if any(k in d for k in ("keyword", "command", "directive")):
         return KEYWORD, True, False
     if "preprocessor" in d or "macro" in d:
