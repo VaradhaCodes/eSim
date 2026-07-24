@@ -313,6 +313,34 @@ class DockArea(QtWidgets.QMainWindow):
         if dock_widget in self.active_plotting_docks:
             main_view.collapse_console_area()
 
+    @staticmethod
+    def _scrollable(widget):
+        """Put a tool panel behind a scroll viewport.
+
+        A panel's layout minimum is a hard floor on the whole application:
+        QMainWindow cannot shrink below the sum of its docks' minimums, so a
+        tall fixed-metric page (the NGHDL VHDL builder is the worst, at
+        720x385) forces the eSim window taller than a short workspace -- on a
+        1920x1080 laptop at 150% Windows scaling there are only 672 logical
+        pixels of desktop -- and the bottom rows end up under the screen edge,
+        unreachable and un-resizable. Behind a viewport the panel keeps its
+        natural size and scrolls instead of pushing the window off-screen.
+
+        ``setWidgetResizable(True)`` means the panel still gets the full
+        viewport whenever there is room, so nothing changes on a large display;
+        scrollbars appear only when the dock is genuinely too small.
+        """
+        area = QtWidgets.QScrollArea()
+        area.setObjectName("dockScroll")
+        area.setWidgetResizable(True)
+        area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        # The card behind it paints the surface; a viewport with its own
+        # background would sit as an opaque rectangle on top of the theme.
+        area.viewport().setAutoFillBackground(False)
+        area.setStyleSheet("QScrollArea#dockScroll { background: transparent; }")
+        area.setWidget(widget)
+        return area
+
     def apply_fullscreen_feature(self, dock_widget, original_widget):
         """Mount a dock's content inside a rounded Aurora card.
 
@@ -336,7 +364,7 @@ class DockArea(QtWidgets.QMainWindow):
         card_layout = QtWidgets.QVBoxLayout(card)
         card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(0)
-        card_layout.addWidget(original_widget)
+        card_layout.addWidget(self._scrollable(original_widget))
 
         holder = QtWidgets.QWidget()
         holder_layout = QtWidgets.QVBoxLayout(holder)

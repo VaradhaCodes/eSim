@@ -420,7 +420,13 @@ class FlowNavigator(QtWidgets.QWidget):
             elif stage == CONVERT:
                 self._set_panel(CONVERT, self._scroll(self._make_convert()))
             elif stage == NGHDL:
-                self._set_panel(NGHDL, self._make_nghdl())
+                # Scrolled like Author/Convert. The NGHDL page is a tall,
+                # fixed-metric form (~720x385 min); dropped in bare, that
+                # minimum propagated up through the dock into the eSim main
+                # window, which Qt then grew past the bottom of a short
+                # workspace -- the last rows unreachable, and the window not
+                # shrinkable back. The scroll area absorbs it.
+                self._set_panel(NGHDL, self._scroll(self._make_nghdl()))
         except Exception as e:       # never let one stage take down the dock
             self._built[stage] = False
             self._set_panel(stage, self._placeholder(
