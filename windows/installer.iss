@@ -47,6 +47,13 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 WizardStyle=modern
 
+; License agreement page. eSim is GPLv3; the repo's root LICENSE is the same
+; text shipped in the install tree. Pointing LicenseFile at it makes Inno add
+; the standard "License Agreement" page (accept/decline) before folder select,
+; matching the old NSIS installer's first step. Path is relative to this .iss.
+; Inno reads it as plain text (no .txt extension needed; RTF is auto-detected).
+LicenseFile=..\LICENSE
+
 ; Branding. One identity end to end: the setup exe carries the SAME icon as
 ; eSim.exe, the Start-menu/desktop shortcuts and the uninstall entry, so the
 ; downloaded file is recognisable in Explorer and the download bar before it
