@@ -394,8 +394,13 @@ class _RenderMixin:
             columnspacing=1.2,
             handlelength=1.5,
         )
-        legend.get_frame().set_facecolor('white')
-        legend.get_frame().set_edgecolor('#E0E0E0')
+        # Frame colors from the live palette, not hardcoded light literals: a
+        # baked 'white'/'#E0E0E0' frame is a white box on dark theme even on a
+        # fresh render (rcParams legend.facecolor/edgecolor already track the
+        # palette; these overrides used to fight it). _retheme_canvas re-applies
+        # these same tokens on a live theme toggle.
+        legend.get_frame().set_facecolor(self._palette['legend_face'])
+        legend.get_frame().set_edgecolor(self._palette['legend_edge'])
         legend.get_frame().set_linewidth(1)
 
     def _get_transient_start_idx(self, time_data: "np.ndarray") -> int:
@@ -409,9 +414,13 @@ class _RenderMixin:
         self.timing_annotations.clear()
 
         if self.plot_type[0] != DataExtraction.TRANSIENT_ANALYSIS:
-            self.axes.text(0.5, 0.5, 'Digital timing view is only\navailable for transient analysis.',
-                           ha='center', va='center', transform=self.axes.transAxes,
-                           color='#757575')
+            _msg = self.axes.text(
+                0.5, 0.5, 'Digital timing view is only\navailable for transient analysis.',
+                ha='center', va='center', transform=self.axes.transAxes,
+                color=self._palette['info_text'])
+            # Tag as chrome so _retheme_canvas recolors it on a live theme
+            # toggle (rcParams don't touch an already-created Text artist).
+            _msg.set_gid('esim-chrome')
             self.axes.set_yticks([])
             self.axes.set_yticklabels([])
             return
@@ -628,7 +637,7 @@ class _RenderMixin:
         # would straddle the spine into the axes area.
         ax.set_title("\n".join(rows), loc='right',
                      fontsize=max(7, LEGEND_FONT_SIZE - 1),
-                     color='#444444', pad=4)
+                     color=self._palette['stats_text'], pad=4)
 
     def _compute_trace_stats_row(self, trace_idx: int,
                                  x_arr: "np.ndarray") -> str:
@@ -699,7 +708,7 @@ class _RenderMixin:
                 parts.append(f"f={_format_frequency(freq)}")
         ax.set_title("  ".join(parts), loc='right',
                      fontsize=max(7, LEGEND_FONT_SIZE - 1),
-                     color='#444444', pad=4)
+                     color=self._palette['stats_text'], pad=4)
 
     def _style_stacked_pane_bottom(self, ax, is_last: bool) -> None:
         """Bottom-edge treatment for a stacked pane.
@@ -715,9 +724,11 @@ class _RenderMixin:
             ax.spines['bottom'].set_linewidth(matplotlib.rcParams['axes.linewidth'])
         else:
             ax.tick_params(labelbottom=False)
-            # Visible separator hint: gray bottom spine reads as a row
-            # divider in the strip chart.
-            ax.spines['bottom'].set_color('#BDBDBD')
+            # Visible separator hint: muted bottom spine reads as a row
+            # divider in the strip chart. Palette token (spine_separator) so it
+            # stays legible on dark theme; _retheme_canvas re-applies it on
+            # toggle for the inner (non-last) stacked panes.
+            ax.spines['bottom'].set_color(self._palette['spine_separator'])
             ax.spines['bottom'].set_linewidth(1.0)
 
     def _plot_stacked_trace_pane(self, ax, trace_idx: int,

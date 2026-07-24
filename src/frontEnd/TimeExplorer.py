@@ -131,6 +131,23 @@ class TimeExplorer(QtWidgets.QWidget):
         self.setMinimumWidth(300)
         self.setMinimumHeight(360)
 
+    def changeEvent(self, event):
+        """Re-tint the refresh icon on a live light/dark toggle.
+
+        refresh_icon() bakes the theme's text color into the SVG once, at
+        construction (icon_paths._svg_icon), and nothing re-tints it on a
+        PaletteChange — so after a toggle the glyph keeps the old theme's color
+        (dark on dark / light on light) and effectively vanishes. This mirrors
+        the ProjectExplorer.changeEvent icon-refresh convention.
+        """
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            try:
+                from frontEnd.icon_paths import refresh_icon
+                self.refresh_btn.setIcon(refresh_icon())
+            except Exception:
+                pass
+
     # ------------------------------------------------------------ helpers
     def _active(self):
         """(name, path) of the live project, or (None, None)."""

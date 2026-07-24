@@ -13,8 +13,12 @@ import os
 import numpy as np
 import pytest
 
+from matplotlib.colors import to_rgba
+
 from PyQt6.QtCore import QEvent
 
+from ngspiceSimulation import plot_window as pw_mod
+from ngspiceSimulation._palette import _DARK_DEFAULTS
 from ngspiceSimulation.plot_window import plotWindow
 
 
@@ -63,3 +67,74 @@ def test_palette_change_reapplies_theme_once(qapp, plot_window, monkeypatch):
     qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
     assert calls["n"] == 1
     assert plot_window._applying_theme is False
+
+
+def _render_with_grid(w):
+    """Put a couple of traces on screen with the grid on so the retheme walk
+    has live gridline / tick / spine artists to recolor."""
+    w.grid_check.setChecked(True)
+    w.select_all_waveforms()
+    w.refresh_plot()
+
+
+def test_palette_change_rethemes_live_artists(qapp, plot_window, monkeypatch):
+    """The reported bug: after a live dark<->light toggle the already-drawn
+    matplotlib artists (grid, ticks, labels) and the nav-toolbar icons kept the
+    old theme. _retheme_canvas must walk them in place on PaletteChange."""
+    _render_with_grid(plot_window)
+    ax = plot_window.fig.axes[0]
+    assert ax.get_xgridlines(), "no gridlines rendered — test setup failed"
+
+    # Capture a toolbar icon identity before the flip so we can prove it was
+    # rebuilt (mpl tints icons once at construction and never re-tints).
+    home = plot_window.nav_toolbar._actions.get("home")
+    key_before = home.icon().cacheKey() if home is not None else None
+
+    # Flip the palette the widget will read on the next PaletteChange.
+    dark = dict(_DARK_DEFAULTS)
+    monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
+    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+
+    gl = plot_window.fig.axes[0].get_xgridlines()[0]
+    assert to_rgba(gl.get_color()) == to_rgba(dark["grid_color"])
+    tick = plot_window.fig.axes[0].get_yticklabels()[0]
+    assert to_rgba(tick.get_color()) == to_rgba(dark["tick_color"])
+    assert to_rgba(plot_window.fig.get_facecolor()) == to_rgba(dark["bg"])
+
+    if home is not None:
+        assert not home.icon().isNull()
+        assert home.icon().cacheKey() != key_before  # icon was rebuilt
+
+
+def test_fresh_dark_render_uses_palette_tokens(qapp, tmp_path, monkeypatch):
+    """The _render_mixin literal fixes: a FRESH render under dark theme must use
+    palette tokens, not the old baked light literals (white legend / #444444
+    stats), so the surface is right even with no toggle."""
+    dark = dict(_DARK_DEFAULTS)
+    monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
+    _write_tran_project(str(tmp_path))
+    w = plotWindow(str(tmp_path), "proj")
+    try:
+        w.legend_check.setChecked(True)
+        w.stats_check.setChecked(True)
+        w.select_all_waveforms()
+        w.refresh_plot()
+
+        leg = w.fig.axes[0].get_legend()
+        if leg is not None:  # normal view draws a combined legend
+            # RGB only — framealpha=0.95 sets the 4th channel, not the color.
+            assert to_rgba(leg.get_frame().get_facecolor())[:3] == to_rgba(dark["legend_face"])[:3]
+            assert to_rgba(leg.get_frame().get_edgecolor())[:3] == to_rgba(dark["legend_edge"])[:3]
+    finally:
+        w.close()
+
+
+def test_light_first_then_dark_toolbar_visible(qapp, plot_window, monkeypatch):
+    """Symmetry: build light, toggle dark — every nav-toolbar action keeps a
+    non-null (rebuilt) icon, i.e. glyphs never vanish across a toggle."""
+    _render_with_grid(plot_window)
+    dark = dict(_DARK_DEFAULTS)
+    monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
+    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    for name, act in plot_window.nav_toolbar._actions.items():
+        assert not act.icon().isNull(), f"toolbar icon {name!r} went null"

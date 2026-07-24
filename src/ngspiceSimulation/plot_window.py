@@ -388,20 +388,22 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             self._applying_theme = False
 
     def _apply_theme_impl(self) -> None:
-        # Re-paint every axes facecolor from the live palette. Matplotlib
-        # defaults to white; without this the empty figure flashes white
-        # before any signal renders, even in dark mode.
+        # Re-theme every live matplotlib artist (facecolors, grid, ticks,
+        # labels, spines, legend, stats, cursors) and re-tint the nav-toolbar
+        # icons from the current palette. rcParams only style artists created
+        # AFTER an update and the toolbar tints its glyphs once at construction,
+        # so a live light/dark toggle would otherwise leave the plot surface and
+        # the toolbar on the old theme. Done in place (no refresh_plot) so the
+        # user's current zoom/pan survives.
+        self._retheme_canvas()
+        # Re-install the canvas-scroll viewport color (widget-level sheet, so it
+        # must be re-applied on every theme apply — see create_plot_area).
         try:
-            p_bg = self._palette.get("bg", None)
-            if p_bg and getattr(self, "fig", None) is not None:
-                self.fig.set_facecolor(p_bg)
-                self.fig.patch.set_facecolor(p_bg)
-                for ax in self.fig.axes:
-                    ax.set_facecolor(self._palette.get("axes_face", p_bg))
-                try:
-                    self.canvas.draw_idle()
-                except Exception:
-                    pass
+            if getattr(self, "canvas_scroll", None) is not None:
+                self.canvas_scroll.setStyleSheet(
+                    f"QScrollArea {{ background-color: {self._palette['axes_face']}; "
+                    "border: none; }"
+                )
         except Exception:
             pass
         em      = self._em
@@ -469,6 +471,129 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         QToolButton#plotToolButton:checked {{ background-color: {p['selection_bg']}; }}
         """
         self.setStyleSheet(theme_stylesheet)
+
+    def _retheme_canvas(self) -> None:
+        """Recolor live matplotlib artists + nav-toolbar icons in place.
+
+        rcParams only style artists created *after* an update, so a live
+        light/dark toggle leaves every already-drawn gridline / tick / label /
+        spine / legend / stats title on the old theme; the nav toolbar tints its
+        icons once at construction and never re-tints on PaletteChange. This
+        walks them all and re-applies palette tokens without a refresh_plot, so
+        the user's zoom/pan and nav stack are untouched. Trace lines and the
+        left-title trace names are data-colored (VIBRANT_COLOR_PALETTE) and are
+        deliberately left alone. Fully guarded — a plot may not be built yet.
+        """
+        p = self._palette
+        fig = getattr(self, "fig", None)
+        if fig is not None:
+            try:
+                fig.set_facecolor(p['bg'])
+                fig.patch.set_facecolor(p['bg'])
+            except Exception:
+                pass
+            # In stacked view every inner (non-last) pane paints its bottom
+            # spine as a row-divider separator; only those get spine_separator,
+            # all other visible spines get the normal axes edge.
+            sep_axes = set()
+            if getattr(self, "_current_view_mode", "") == "stacked" \
+                    and len(getattr(self, "panes", [])) > 1:
+                sep_axes = {id(a) for a in self.panes[:-1]}
+            for ax in fig.axes:
+                try:
+                    ax.set_facecolor(p['axes_face'])
+                    is_sep = id(ax) in sep_axes
+                    for name, sp in ax.spines.items():
+                        if not sp.get_visible():
+                            continue
+                        if name == 'bottom' and is_sep:
+                            sp.set_color(p['spine_separator'])
+                        else:
+                            sp.set_color(p['axes_edge'])
+                    ax.tick_params(axis='both', colors=p['tick_color'],
+                                   labelcolor=p['tick_color'])
+                    ax.xaxis.label.set_color(p['label_color'])
+                    ax.yaxis.label.set_color(p['label_color'])
+                    for gl in ax.get_xgridlines() + ax.get_ygridlines():
+                        gl.set_color(p['grid_color'])
+                    # loc='right' title = stats/chrome overlay; loc='left' title
+                    # = data-colored trace name (leave it).
+                    rt = getattr(ax, '_right_title', None)
+                    if rt is not None and rt.get_text():
+                        rt.set_color(p['stats_text'])
+                    # Explicitly chrome-tagged free text (timing placeholder).
+                    for txt in ax.texts:
+                        if txt.get_gid() == 'esim-chrome':
+                            txt.set_color(p['info_text'])
+                    leg = ax.get_legend()
+                    if leg is not None:
+                        fr = leg.get_frame()
+                        fr.set_facecolor(p['legend_face'])
+                        fr.set_edgecolor(p['legend_edge'])
+                        for t in leg.get_texts():
+                            t.set_color(p['label_color'])
+                except Exception:
+                    pass
+            # Timing view colors ytick labels by trace (data), so restore those
+            # after the generic tick_params pass above overwrote them.
+            try:
+                self.update_timing_tick_colors()
+            except Exception:
+                pass
+            # Cursor axvlines are created plain red/blue; brighten them per
+            # palette so they read on dark theme.
+            try:
+                cur = (p['cursor1'], p['cursor2'])
+                for i, pane_lines in enumerate(getattr(self, "cursor_lines", [])):
+                    col = cur[i] if i < len(cur) else p['cursor_delta']
+                    for ln in pane_lines:
+                        if ln is not None:
+                            ln.set_color(col)
+            except Exception:
+                pass
+        self._refresh_toolbar_icons()
+        try:
+            if getattr(self, "canvas", None) is not None:
+                self.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _refresh_toolbar_icons(self) -> None:
+        """Re-tint the nav-toolbar and custom tool-button icons from the palette.
+
+        matplotlib's NavigationToolbar2QT (mpl 3.10 backend_qt) tints each PNG
+        icon with the widget foreground color once, at construction, and does
+        nothing on PaletteChange — so a toolbar built under dark theme keeps its
+        near-white glyphs, invisible on a light background after a toggle.
+        Rebuild every action icon through the (private) _icon(); the toolitems /
+        _actions / _icon('<name>.png') shape is pinned to mpl 3.10.x, so the
+        whole thing is wrapped defensively against an API shift on upgrade.
+        """
+        tb = getattr(self, "nav_toolbar", None)
+        if tb is not None:
+            try:
+                for _text, _tip, image, callback in tb.toolitems:
+                    if not image or callback is None:
+                        continue
+                    act = tb._actions.get(callback)
+                    if act is not None:
+                        act.setIcon(tb._icon(image + '.png'))
+            except Exception:
+                pass
+            # _fig_btn reuses the toolbar's own tinting path.
+            try:
+                if getattr(self, "_fig_btn", None) is not None:
+                    self._fig_btn.setIcon(tb._icon('qt4_editor_options'))
+            except Exception:
+                pass
+        # _focus_btn is a hand-painted glyph — re-render at the palette color.
+        try:
+            if getattr(self, "_focus_btn", None) is not None and tb is not None:
+                self._focus_btn.setIcon(
+                    self._make_focus_icon(tb.iconSize().width(),
+                                          self._palette['text']))
+        except Exception:
+            pass
 
     def create_main_frame(self) -> None:
         main_widget_layout = QVBoxLayout(self)
@@ -556,16 +681,20 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 self.nav_toolbar.removeAction(_a)
         _icon_sz = self.nav_toolbar.iconSize()
         _tb_h    = self.nav_toolbar.sizeHint().height()
-        _fig_btn = QToolButton()
-        _fig_btn.setIcon(self.nav_toolbar._icon('qt4_editor_options'))
-        _fig_btn.setIconSize(_icon_sz)
-        _fig_btn.setFixedSize(_tb_h, _tb_h)
-        _fig_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        _fig_btn.setToolTip('Figure Options (P)')
-        _fig_btn.setObjectName("plotToolButton")
-        _fig_btn.clicked.connect(self.open_figure_options)
+        # Held on self so _refresh_toolbar_icons can re-tint it on a theme
+        # toggle — its icon is palette-tinted at construction (was a local, so
+        # nothing could ever refresh it and it stayed the old theme's color).
+        self._fig_btn = QToolButton()
+        self._fig_btn.setIcon(self.nav_toolbar._icon('qt4_editor_options'))
+        self._fig_btn.setIconSize(_icon_sz)
+        self._fig_btn.setFixedSize(_tb_h, _tb_h)
+        self._fig_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._fig_btn.setToolTip('Figure Options (P)')
+        self._fig_btn.setObjectName("plotToolButton")
+        self._fig_btn.clicked.connect(self.open_figure_options)
         self._focus_btn = QToolButton()
-        self._focus_btn.setIcon(self._make_focus_icon(_icon_sz.width()))
+        self._focus_btn.setIcon(
+            self._make_focus_icon(_icon_sz.width(), self._palette['text']))
         self._focus_btn.setIconSize(_icon_sz)
         self._focus_btn.setFixedSize(_tb_h, _tb_h)
         self._focus_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -589,7 +718,7 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(0)
         toolbar_row.addWidget(self.nav_toolbar)
-        toolbar_row.addWidget(_fig_btn)
+        toolbar_row.addWidget(self._fig_btn)
         toolbar_row.addWidget(self._focus_btn)
         toolbar_row.addStretch(1)
         # Contextual fullscreen toggle (panel header, not a global toolbar):
@@ -624,13 +753,12 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.canvas_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        # Paint the scroll viewport with the canvas surface so the empty canvas
-        # area doesn't flash white in dark mode. No border — it crowded the
-        # bottom time axis and waveform labels.
-        self.canvas_scroll.setStyleSheet(
-            f"QScrollArea {{ background-color: {self._palette['axes_face']}; "
-            "border: none; }"
-        )
+        # The scroll viewport is painted with the canvas surface so the empty
+        # canvas area doesn't flash white in dark mode (no border — it crowded
+        # the bottom time axis and waveform labels). The stylesheet is installed
+        # in _apply_theme_impl, not here: a widget-level sheet overrides the
+        # window QSS, so baking it once left the viewport on the old theme after
+        # a light/dark toggle. Re-installing it every apply keeps it in sync.
         center_layout.addWidget(self.canvas_scroll)
         self.canvas.mpl_connect('resize_event', self._on_canvas_resize)
         self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
@@ -926,12 +1054,15 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
         self.refresh_plot()
 
     @staticmethod
-    def _make_focus_icon(size: int) -> QIcon:
+    def _make_focus_icon(size: int, color: str = '#444444') -> QIcon:
+        # color defaults to the old light-mode literal for back-compat, but
+        # callers pass the palette text color so the glyph stays legible in
+        # dark mode too (and _refresh_toolbar_icons re-renders it on toggle).
         px = QPixmap(size, size)
         px.fill(Qt.GlobalColor.transparent)
         p = QPainter(px)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(QPen(QColor('#444444'), max(1, size // 12), Qt.PenStyle.SolidLine,
+        p.setPen(QPen(QColor(color), max(1, size // 12), Qt.PenStyle.SolidLine,
                       Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         m = max(2, size // 6)
         a = max(3, size // 4)
@@ -1387,7 +1518,10 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
                 self._setup_matplotlib_style()
                 self.apply_theme()
             except Exception:
-                pass
+                # Never let a re-theme failure escape into Qt's event dispatch
+                # (it would surface as an unhandled-exception dialog mid-toggle),
+                # but log it so future staleness isn't silent.
+                logger.exception("Plot re-theme on PaletteChange failed")
 
     def sizeHint(self) -> QtCore.QSize:
         em = self._em

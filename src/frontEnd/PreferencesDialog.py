@@ -51,6 +51,22 @@ class PreferencesDialog(QtWidgets.QDialog):
         from frontEnd.motion import install_button_motion
         install_button_motion(self)
 
+    def changeEvent(self, event):
+        """Re-tint the header gear when the theme changes under an open dialog.
+
+        This dialog is the theme switch itself, so applying a new theme with it
+        still open must not leave the baked-color gear behind (settings_icon()
+        renders the SVG at the theme color once).
+        """
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.PaletteChange \
+                and getattr(self, "_icon_label", None) is not None:
+            try:
+                from frontEnd.icon_paths import settings_icon
+                self._icon_label.setPixmap(settings_icon(28).pixmap(28, 28))
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------ build
     def _build_ui(self):
         self.setMinimumSize(600, 460)
@@ -61,12 +77,16 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Header (themed gear icon + solid-colour title).
         header_layout = QtWidgets.QHBoxLayout()
         header_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        icon_label = QtWidgets.QLabel()
+        # Held on self so changeEvent can re-tint it: settings_icon() bakes the
+        # theme color into the SVG once, and this dialog is itself the theme
+        # switch — applying a new theme with the dialog still open would leave a
+        # stale-colored gear otherwise.
+        self._icon_label = QtWidgets.QLabel()
         # Same themed SVG gear as the Preferences action in the top toolbar so
         # the header icon matches the toolbar and tracks the theme colour.
         try:
             from frontEnd.icon_paths import settings_icon
-            icon_label.setPixmap(settings_icon(28).pixmap(28, 28))
+            self._icon_label.setPixmap(settings_icon(28).pixmap(28, 28))
         except Exception:
             icon_path = self._find_icon()
             if icon_path and os.path.exists(icon_path):
@@ -75,10 +95,10 @@ class PreferencesDialog(QtWidgets.QDialog):
                     QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                     QtCore.Qt.TransformationMode.SmoothTransformation,
                 )
-                icon_label.setPixmap(pixmap)
+                self._icon_label.setPixmap(pixmap)
         header = QtWidgets.QLabel("Preferences")
         header.setProperty("cssClass", "title")
-        header_layout.addWidget(icon_label)
+        header_layout.addWidget(self._icon_label)
         header_layout.addWidget(header)
         header_layout.addStretch()
         root.addLayout(header_layout)
