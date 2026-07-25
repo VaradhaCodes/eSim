@@ -433,6 +433,62 @@ function Stage-Msys {
     } else {
         Log 'WARNING: `pacman -Q` produced no output; PACKAGES.lock not written'
     }
+    Repair-VerilatorRuntimeMacros
+}
+
+function Repair-VerilatorRuntimeMacros {
+    <# Silence the one warning EVERY NgVeri model build on Windows emits.
+
+       verilator's own runtime source does this on MinGW:
+
+           # define STDOUT_FILENO _fileno(stdout)
+           # define STDERR_FILENO _fileno(stderr)
+
+       unguarded, while mingw's stdio.h has already defined both (as 1 and 2).
+       So every compile of verilated.cpp -- which is every model build, since
+       the generated Makefile rebuilds ../verilated.o -- prints two
+       `warning: 'STDOUT_FILENO' redefined` blocks, six lines each with the
+       include chain. Nothing is wrong: the values agree. But it lands in the
+       NgVeri terminal in the middle of a successful build and users read it
+       as a crash. (ModelGeneration no longer paints stderr red wholesale, so
+       it is amber now, not red -- this removes it outright.)
+
+       `#undef` before the define, NOT `#ifndef` around it: that keeps
+       verilator's own definition winning, so the object is byte-for-byte the
+       semantics upstream intended and only the diagnostic goes away.
+
+       Deliberately tolerant, because MSYS2's verilator is NOT hash-pinned --
+       deps-manifest.json pins the msys2 BASE tarball, then `pacman -S` pulls
+       whatever the rolling repo has that day (recorded after the fact in
+       PACKAGES.lock; 5.050-1 at the time of writing). So this:
+         * is idempotent -- a re-run over an already-patched stage is a no-op;
+         * never Dies -- a verilator that fixed this upstream simply matches
+           nothing, and the build carries on. It is a cosmetic patch; it must
+           not be able to fail a release. #>
+    $inc = Join-Path $Stage `
+        'tools\msys64\mingw64\share\verilator\include\verilated.cpp'
+    if (-not (Test-Path $inc)) {
+        Log 'NOTE: verilated.cpp not found; skipping the STDOUT_FILENO patch'
+        return
+    }
+    $src = Get-Content -Raw $inc
+    if ($src -match '(?m)^\s*#\s*undef\s+STD(OUT|ERR)_FILENO') {
+        Log 'verilator runtime: STDOUT_FILENO guard already present'
+        return
+    }
+    # Keep the file's own `# define` spacing on the inserted `# undef` line.
+    $patched = [regex]::Replace(
+        $src,
+        '(?m)^([ \t]*#[ \t]*)define([ \t]+)(STDOUT_FILENO|STDERR_FILENO)\b',
+        "`${1}undef`${2}`${3}`n`${1}define`${2}`${3}")
+    if ($patched -eq $src) {
+        Log 'NOTE: verilator no longer redefines STD*_FILENO; nothing to patch'
+        return
+    }
+    # LF, no BOM: this is a C++ source compiled by mingw g++, and the file it
+    # replaces has Unix endings.
+    [IO.File]::WriteAllText($inc, $patched, (New-Object Text.UTF8Encoding $false))
+    Log 'verilator runtime: guarded the STDOUT/STDERR_FILENO redefinition'
 }
 
 function Stage-SimToolchain {

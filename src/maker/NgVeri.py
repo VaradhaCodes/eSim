@@ -218,6 +218,7 @@ class NgVeri(QtWidgets.QWidget):
     def _on_legacy_build_finished(self, ok):
         '''GUI-thread epilogue for a completed legacy build (success path).'''
         logs = self._build_logs
+        logs.append(self._diag_summary_html())
         if ok:
             logs.append('''
                 <p style=\" font-size:16pt; font-weight:1000;
@@ -240,6 +241,31 @@ class NgVeri(QtWidgets.QWidget):
             "Error in Ngspice code model generation from Verilog: " + msg)
         self._build_logs.append(self._build_failure_html())
         self._flush_build_logs(self._build_logs)
+
+    def _diag_summary_html(self):
+        '''
+            One-line tally of what the toolchain actually reported, printed
+            just above the verdict.
+
+            Several hundred lines of gcc/make output scroll past during a
+            build, so without a closing count the user judges the run by how
+            much coloured text went by -- and a perfectly good model whose
+            build emitted a couple of routine compiler warnings reads as a
+            failure. Say the numbers, and say plainly that warnings are not
+            failures.
+        '''
+        model = getattr(self, '_build_model', None)
+        errors = getattr(model, 'diag_errors', 0)
+        warnings = getattr(model, 'diag_warnings', 0)
+
+        def _count(n, word):
+            return str(n) + ' ' + word + ('' if n == 1 else 's')
+
+        text = ('Toolchain reported ' + _count(errors, 'error') + ' and ' +
+                _count(warnings, 'warning') + '.')
+        if warnings and not errors:
+            text += ' Warnings do not stop a build.'
+        return ('<p style="font-size:11pt; color:#666666;">' + text + '</p>')
 
     @staticmethod
     def _build_failure_html():

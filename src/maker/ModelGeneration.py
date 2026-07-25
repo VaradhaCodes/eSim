@@ -28,6 +28,7 @@
 
 
 import re
+import html
 import os
 import shutil
 import subprocess
@@ -115,6 +116,15 @@ class ModelGeneration(QtWidgets.QWidget):
         # here is safe.
         self.model_stem = os.path.splitext(self.fname)[0]
         print("Verilog/SystemVerilog/TL Verilog filename is : ", self.fname)
+
+        # Diagnostic tally for the whole pipeline (see _classify_stderr): what
+        # the closing summary reports, so the user reads a verdict instead of
+        # judging the run by how much coloured text scrolled past.
+        self.diag_errors = 0
+        self.diag_warnings = 0
+        # Severity the current diagnostic BLOCK opened with; continuation lines
+        # inherit it. Reset per step in _run.
+        self._diag_severity = None
 
         # Keep a parser for the legacy build methods below, but all constructor
         # values are read through CosimConfig's missing-safe boundary. This is
@@ -309,8 +319,11 @@ class ModelGeneration(QtWidgets.QWidget):
             GUI thread). A long make no longer looks like a hang: the user
             watches the compile progress live. stderr is drained on a helper
             thread (so neither pipe can fill up and deadlock the child) and
-            reported in red once the step finishes.
+            coloured per line by severity, not painted red wholesale.
         '''
+        # A new tool is a new diagnostic block: never let the last line of the
+        # previous step's output decide the colour of this step's first one.
+        self._diag_severity = None
         self.termtitle(title)
         self.termtext("Current Directory: " + (cwd or os.getcwd()))
         self.termtext("Command: " + " ".join(cmd))
@@ -326,18 +339,19 @@ class ModelGeneration(QtWidgets.QWidget):
             return False
 
         def _drain_stderr():
-            # Stream stderr live (in red), line by line, instead of buffering
-            # the whole pipe and emitting it only after the step finishes.
-            # verilator, gcc and make write their progress + warnings to
-            # stderr, so buffering made a multi-minute step look frozen until
-            # it was already done. Runs on its own thread (kept off the stdout
-            # loop) so neither pipe can fill up and deadlock the child; every
-            # emit is queued to the GUI thread via the `line` signal.
+            # Stream stderr live, line by line, instead of buffering the whole
+            # pipe and emitting it only after the step finishes. verilator, gcc
+            # and make write their progress + warnings to stderr, so buffering
+            # made a multi-minute step look frozen until it was already done.
+            # Runs on its own thread (kept off the stdout loop) so neither pipe
+            # can fill up and deadlock the child; every emit is queued to the
+            # GUI thread via the `line` signal. Severity is per line
+            # (_classify_stderr) -- this stream is mostly NOT errors.
             try:
                 for err_line in proc.stderr:
                     err_line = err_line.rstrip()
                     if err_line:
-                        self._emit_error(err_line)
+                        self._emit_stderr(err_line)
             except Exception:
                 pass
 
@@ -386,14 +400,86 @@ class ModelGeneration(QtWidgets.QWidget):
             return False
         return True
 
-    def _emit_error(self, textin):
-        '''Append stderr text in red (theme-independent) to the terminal.'''
-        Text = "<span style=\"font-size:12pt; font-weight:1000; " \
-               "color:#ff0000;\">"
+    # -- stderr diagnostic classification -----------------------------------
+    # gcc, mingw32-make and verilator write ALL of their progress to stderr,
+    # not only their failures: "'x.o' is up to date", the `rm` echo of an
+    # intermediate file, every -W warning and the multi-line source excerpt
+    # under it. Painting that whole stream red made a build that SUCCEEDED end
+    # in a wall of red, and the single most common question about the Windows
+    # NgVeri flow was "what are these red lines?" -- asked about verilator's
+    # own harmless STDOUT_FILENO redefinition warning (verilated.cpp redefines
+    # a macro mingw's stdio.h already defines; windows/build-windows.ps1 now
+    # patches that one at staging time, but the next toolchain bump will bring
+    # another). Classify per line instead, so red keeps one meaning: this is
+    # why your model was not built.
+    _RE_DIAG_ERROR = re.compile(
+        r'\b(?:fatal\s+)?error\s*:'          # gcc/g++/ld: foo.c:1:2: error: x
+        r'|^%Error'                          # verilator
+        r'|\*\*\*\s.*\bError\b'              # make: *** [x] Error 1
+        r'|\bNo rule to make target\b'
+        r'|\bundefined reference to\b'
+        r'|\bcannot find -l',
+        re.IGNORECASE)
+    _RE_DIAG_WARN = re.compile(
+        r'\bwarning\s*:'
+        r'|^%Warning',
+        re.IGNORECASE)
+    # Lines that carry no severity of their own and belong to the diagnostic
+    # above them: gcc's source echo, its caret ruler, the include chain, and
+    # the trailing "note:" that explains the first line.
+    _RE_DIAG_CONT = re.compile(
+        r'\bnote\s*:'
+        r'|^\s*In file included from\b'
+        r'|^\s+from\b'                       # rest of the include chain
+        r'|^\s*In (?:function|member function|instantiation of)\b'
+        r'|^\s*required from\b'
+        r'|^\s*\d+\s*\|'                     # source echo:  78 | # define X
+        r'|^\s*\|'                           # caret ruler:     |       ^~~~
+        r'|^\s*[\^~]+\s*$')
+    # Theme-independent, and deliberately the same values CosimLogger uses for
+    # the d_cosim half of this terminal.
+    _DIAG_COLOR = {'error': '#ff0000', 'warning': '#E07B00'}
+
+    def _classify_stderr(self, line):
+        """``'error'`` / ``'warning'`` / ``None`` for one raw stderr line.
+
+        A continuation line inherits the severity of the diagnostic it belongs
+        to, so a warning's own source excerpt cannot come out in a different
+        colour from its first line. Anything that matches nothing -- make's
+        progress, the `rm` echo -- is plain terminal text, because it is.
+
+        Only the line that OPENS a diagnostic is counted, so one gcc warning
+        with five lines of excerpt tallies as one warning.
+        """
+        if self._RE_DIAG_ERROR.search(line):
+            self._diag_severity = 'error'
+            self.diag_errors += 1
+        elif self._RE_DIAG_WARN.search(line):
+            self._diag_severity = 'warning'
+            self.diag_warnings += 1
+        elif not self._RE_DIAG_CONT.search(line):
+            self._diag_severity = None
+        return self._diag_severity
+
+    def _emit_stderr(self, textin):
+        '''Append stderr text to the terminal, coloured by severity.
+
+        Escaped, unlike the old raw-HTML emit: compiler output is full of
+        ``<stdio.h>``, ``operator<<`` and ``std::vector<int>``, every one of
+        which a QTextEdit parsed as an unknown tag and swallowed -- error text
+        silently lost whole fragments exactly when it mattered most.
+        '''
         for ln in textin.split("\n"):
-            Text += "<br>" + ln
-        Text += "</span>"
-        self.line.emit(Text)
+            color = self._DIAG_COLOR.get(self._classify_stderr(ln))
+            if color:
+                style = ("font-size:12pt; font-weight:1000; color:" +
+                         color + ";")
+            else:
+                # Same style termtext uses, so undistinguished tool chatter is
+                # indistinguishable from the stdout it interleaves with.
+                style = "font-size:12pt; font-weight:500;"
+            self.line.emit('<span style="' + style + '">' +
+                           html.escape(ln) + '</span>')
 
     def verilogfile(self):
         '''
@@ -1718,8 +1804,10 @@ beyond the %d instances this model was built for; skipping it.\\n",
             it is safe from the build worker thread.
         '''
         # No hardcoded colour (was #000000, invisible on dark): inherit the
-        # palette. stderr keeps red via _emit_error.
+        # palette. stderr is coloured by severity in _emit_stderr.
+        # Escaped for the same reason stderr is: a tool path or a stdout line
+        # containing <...> was parsed as a tag and silently dropped.
         Text = "<span style=\"font-size:12pt; font-weight:500;\">"
-        Text += textin
+        Text += html.escape(textin)
         Text += "</span>"
         self.line.emit(Text)

@@ -81,8 +81,8 @@ def test_semantic_colors_are_kept():
 
 
 def test_stderr_uses_the_same_red_as_the_ngveri_terminal():
-    # ModelGeneration._emit_error paints stderr #ff0000; the darker #B00000
-    # CosimLog used read as near-black on the dark theme.
+    # ModelGeneration._emit_stderr paints a real failure #ff0000; the darker
+    # #B00000 CosimLog used read as near-black on the dark theme.
     log, out = _log()
     log.output("undefined reference to `main'", stream="stderr")
     assert "color:#FF0000;" in out[0]

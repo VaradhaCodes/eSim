@@ -168,6 +168,19 @@ Design decisions:
   Icarus ships `libvvp`, and ngspice's `ivlng` adapter dlopens it — this is
   the one piece d_cosim cannot live without. The Bleyer prebuilt is only the
   `-SkipSimBuild` fallback (Verifier works, d_cosim doesn't).
+* **Verilator's runtime source is patched at staging time**, by
+  `Repair-VerilatorRuntimeMacros`. `share/verilator/include/verilated.cpp`
+  redefines `STDOUT_FILENO`/`STDERR_FILENO` on MinGW without guarding against
+  the definitions mingw's own `stdio.h` already has, so *every* NgVeri model
+  build compiled it with two `warning: ... redefined` blocks — harmless (the
+  values agree) but printed mid-build, where users read it as a crash. The
+  patch inserts `#undef` before each `#define`, so verilator's own definition
+  still wins and only the diagnostic goes; the preprocessed translation unit
+  is unchanged apart from `__LINE__` shifting by two in verilator's internal
+  `VL_FATAL_MT` messages. It is idempotent and **never fails the build** — a
+  verilator that fixes this upstream simply matches nothing. Note MSYS2
+  packages are *not* hash-pinned (see `PACKAGES.lock` below), which is exactly
+  why it must tolerate the file changing under it.
 * **GHDL comes from MSYS2's `mingw-w64-x86_64-ghdl-llvm`** — pinned to the
   llvm backend explicitly; the mcode trap from `GHDL-BACKEND-26.04.md`
   applies on Windows too, and the build hard-fails if the staged ghdl

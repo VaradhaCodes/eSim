@@ -119,7 +119,10 @@ class CosimLog:
         'detail': '#666666',        # deliberately dim on both themes
         'fix': '#B30086',
         'stdout': None,             # verbatim tool output -> palette
-        'stderr': '#FF0000',        # same red as ModelGeneration._emit_error
+        # Same two values ModelGeneration._emit_stderr classifies into. This
+        # sink is used for messages that ARE already known to be failures, so
+        # unlike the raw tool stream it does not re-classify.
+        'stderr': '#FF0000',
     }
 
     def __init__(self, termedit=None, name=_ROOT_NAME, sink=None):
