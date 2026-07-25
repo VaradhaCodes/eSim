@@ -304,7 +304,14 @@ $MingwPkgs = 'mingw-w64-x86_64-gcc mingw-w64-x86_64-make ' +
              # link (src/xspice/icm/makedefs) hard-codes -ldl, a Linux-ism.
              # mingw has no libdl in its base -> spice2poly.cm et al. fail with
              # "cannot find -ldl". dlfcn-win32 is a Win32-API-backed libdl.
-             'mingw-w64-x86_64-dlfcn'
+             'mingw-w64-x86_64-dlfcn ' +
+             # readline: ngspice's configure REQUIRES it (`Checking for
+             # readline: ... configure: error: Couldn't find GNU readline
+             # headers`) -- it is not optional in the 45.2 tree, and nothing
+             # else in this package set pulls it in, so a cold provision died
+             # at configure. Brings mingw-w64-x86_64-termcap with it; both DLLs
+             # are already expected by the runtime closure staged below.
+             'mingw-w64-x86_64-readline'
 $MsysPkgs  = 'make autoconf automake libtool bison flex gperf patch tar'
 
 function Set-MsysEnv {
@@ -339,19 +346,28 @@ function Stage-Msys {
     Log 'Staging MSYS2 + mingw gcc/make/verilator/ghdl-llvm (HDL toolchain)'
     $arc = Get-Dep 'msys2'
     $dst = Join-Path $Stage 'tools\msys64'
-    # Set the hermetic MINGW64 login environment for EVERY raw `& $bash` call in
-    # this function -- not just the staging block below. On a re-run (msys64
-    # already staged) that block is skipped, but the ghdl backend check further
-    # down still needs /usr/bin on PATH (else `head` and friends are not found
-    # and the check silently reports nothing).
-    Set-MsysEnv
-    if (-not (Test-Path $dst)) {
+    # "Already staged?" is decided by the BINARY, never by the directory:
+    # Set-MsysEnv points HOME at $dst\home\builder and CREATES it, so after the
+    # very first Set-MsysEnv call $dst exists no matter what. A `Test-Path $dst`
+    # guard therefore skipped extraction on a COLD build, leaving a msys64\
+    # holding nothing but home\, and the run died at the mingw32-make check
+    # below with no pacman output to explain it.
+    $bash = Join-Path $dst 'usr\bin\bash.exe'
+    if (-not (Test-Path $bash)) {
+        # A half-made tree (only home\ from an aborted run, or a partial
+        # extraction) cannot be merged into by Move-Item -- it would nest as
+        # $dst\msys64. Nothing in such a tree is worth keeping; clear it.
+        Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue
         $tmp = Join-Path $Build 'msys-x'
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         & $7z x $arc "-o$tmp" -y | Out-Null            # .tar.xz -> .tar
         & $7z x (Get-ChildItem "$tmp\*.tar").FullName "-o$tmp" -y | Out-Null
         New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
         Move-Item "$tmp\msys64" $dst
         Remove-Item $tmp -Recurse -Force
+        # Hermetic MINGW64 login env -- set only NOW: it creates HOME inside the
+        # tree that has to exist first (see the guard above).
+        Set-MsysEnv
         # First run initializes; then install the toolchain NgVeri/NGHDL
         # invoke (ModelGeneration: mingw64\bin\mingw32-make.exe, verilator,
         # VERILATOR_ROOT=<msys>\mingw64; ngspice_ghdl: gcc, ghdl) plus the
@@ -366,18 +382,29 @@ function Stage-Msys {
         #   * chaining `pacman -Syu && pacman -S ...` never reaches the install;
         #   * gating `Die` on a -Syu exit code would abort a healthy machine.
         # Run -Syu repeatedly, IGNORING its exit code, until a pass makes no
-        # changes (rc 0 with no self-terminate), THEN install the toolchain and
-        # gate only on the install + the binary/ghdl checks below.
-        $bash = "$dst\usr\bin\bash.exe"
+        # changes (rc 0 with no self-terminate). The toolchain install itself
+        # sits AFTER this block (it must also run on re-runs) and is the only
+        # pacman step gated by Die, along with the binary/ghdl checks below.
         & $bash -lc 'true'                                    # trigger first-run init (keyring, post-install)
         for ($i = 1; $i -le 4; $i++) {                        # -Syu may self-terminate several times; rc ignored on purpose
             & $bash -lc 'pacman -Syu --noconfirm'
             if ($LASTEXITCODE -eq 0) { break }                # a clean pass (no core update left) => settled
         }
-        & $bash -lc "pacman -S --noconfirm --needed $MingwPkgs $MsysPkgs"
-        if ($LASTEXITCODE -ne 0) { Die 'MSYS2 toolchain provisioning failed' }
-        & $bash -lc 'pacman -Scc --noconfirm'
     }
+    # Re-run path: the block above was skipped, but the toolchain install, the
+    # ghdl backend check and `pacman -Q` below still need the hermetic login env
+    # (without /usr/bin on PATH `head` and friends are missing and the checks
+    # silently report nothing). Idempotent, so re-calling it after a fresh stage
+    # is harmless.
+    Set-MsysEnv
+    # The toolchain install runs on EVERY build, not only on first provisioning:
+    # it is `--needed` (a no-op costing seconds once satisfied), and it is the
+    # only way a change to $MingwPkgs/$MsysPkgs reaches an ALREADY-staged
+    # tools\msys64 -- otherwise adding a package (readline, say) silently has no
+    # effect until someone deletes the whole staged MSYS2 by hand.
+    & $bash -lc "pacman -S --noconfirm --needed $MingwPkgs $MsysPkgs"
+    if ($LASTEXITCODE -ne 0) { Die 'MSYS2 toolchain provisioning failed' }
+    & $bash -lc 'pacman -Scc --noconfirm'
     if (-not (Test-Path "$dst\mingw64\bin\mingw32-make.exe")) {
         Die 'mingw32-make.exe missing after MSYS2 provisioning'
     }
@@ -478,11 +505,17 @@ function Stage-SimToolchain {
             "LIBS='-lws2_32 -lpsapi -lshlwapi' && " +
             # -j2 NOT -j`$(nproc): MSYS2's fork() emulation collapses under heavy
             # parallel libtool/sh spawning (dofork: child died 0xC0000142, EAGAIN).
+            # Even at -j2 it still trips occasionally: a compile dies with NO
+            # diagnostic at all (`make: *** [rawfile.lo] Error 1` and nothing
+            # else), and the same file then builds fine on its own. So retry the
+            # whole make serially -- make resumes from the objects already built,
+            # so the fallback costs only the handful left, and a genuine code
+            # error still fails the second pass and kills the build.
             # ngspice.exe (and the .cm/ivlng DLLs it loads) depend on MinGW
             # runtime DLLs (gomp/readline/termcap/stdc++/gcc_s/winpthread);
             # their closure is staged by the always-run block below, which the
             # "already staged" fast path also goes through.
-            "make -j2 && make install"
+            "{ make -j2 || make -j1; } && make install"
         ) 'custom ngspice build failed'
     }
     if (-not (Test-Path $ngspiceExe)) { Die 'ngspice.exe missing after custom build' }
@@ -513,7 +546,8 @@ function Stage-SimToolchain {
             "--exec-prefix=`"`$(cygpath -am ../install_dir)`" " +
             "CFLAGS='-m64 -O2 -fno-strict-aliasing' LDFLAGS='-m64 -s' " +
             "LIBS='-lws2_32 -lpsapi -lshlwapi' && " +
-            "make -j2 && " +
+            # Serial retry, same reason as the console build above.
+            "{ make -j2 || make -j1; } && " +
             "cp src/ngspice.exe ../install_dir/bin/ngspice_gui.exe && " +
             # The build tree is throwaway: only `release` is shipped (runtime
             # model rebuilds use it) and a second one would near-double it.
@@ -581,7 +615,9 @@ function Stage-SimToolchain {
             "tar -xzf `"`$(cygpath -u '$srcU')`" --strip-components=1 && " +
             "sh autoconf.sh && " +
             "./configure --prefix=`"`$(cygpath -m '$dstU')`" --enable-libvvp && " +
-            "make -j`$(nproc) && make install"
+            # Serial retry: same MSYS2 parallel-spawn flakiness as the ngspice
+            # builds, and -j$(nproc) exposes far more of it than their -j2.
+            "{ make -j`$(nproc) || make -j1; } && make install"
         ) 'iverilog (libvvp) build failed'
     }
     if (-not (Test-Path $ivExe)) { Die 'iverilog.exe missing after build' }
