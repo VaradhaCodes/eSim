@@ -31,6 +31,7 @@ import re
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
@@ -225,6 +226,48 @@ class ModelGeneration(QtWidgets.QWidget):
             (cand or "~/.nghdl/config.ini [COMPILER] MSYS_HOME unset") +
             "). Reinstall eSim with the HDL-toolchain (MSYS2) component.")
         return None
+
+    def _python_for_make(self):
+        """Windows: a `PYTHON3=<interpreter>` argument for verilator's
+        generated Makefile, or None when the default should stand.
+
+        verilated.mk hard-codes `PYTHON3 = python3` and runs
+        `$(PYTHON3) $(VERILATOR_ROOT)/bin/verilator_includer` to concatenate
+        the generated C++ into V<model>__ALL.cpp. MSYS2 ships no Python at all
+        and eSim's bundled CPython is python.exe -- there is no python3.exe
+        anywhere in a Windows install -- so that recipe died with
+        `/usr/bin/sh: line 1: python3: command not found` (make Error 127)
+        before one object was compiled. Reuse the interpreter eSim is already
+        running under rather than adding a ~60 MB MSYS2 python to the
+        installer.
+
+        It has to travel as a COMMAND-LINE variable: a makefile's own
+        `PYTHON3 = python3` assignment overrides the environment, but nothing
+        overrides `make PYTHON3=...`.
+
+        POSIX keeps make's default -- python3 is on PATH there, and the venv
+        interpreter is not necessarily the one verilator's scripts expect.
+        """
+        if os.name != 'nt':
+            return None
+        exe = sys.executable or ''
+        # A --no-console launch runs the GUI under pythonw.exe, whose stdout
+        # the includer recipe redirects into V<model>__ALL.cpp; prefer the
+        # console twin beside it so that redirection cannot come up empty.
+        base = os.path.basename(exe).lower()
+        if base.startswith('pythonw'):
+            cand = os.path.join(os.path.dirname(exe),
+                                base.replace('pythonw', 'python', 1))
+            if os.path.isfile(cand):
+                exe = cand
+        if not exe or not os.path.isfile(exe):
+            return None
+        # Forward slashes: make splices the value into an sh recipe, where
+        # backslashes are escapes (the same trap as VERILATOR_ROOT above).
+        exe = exe.replace('\\', '/')
+        if ' ' in exe:
+            exe = '"' + exe + '"'
+        return 'PYTHON3=' + exe
 
     def _verilator_binary(self):
         """verilator (POSIX) / the MSYS2 mingw64 verilator (Windows), or None
@@ -1422,6 +1465,9 @@ beyond the %d instances this model was built for; skipping it.\\n",
                "V" + model + "__ALL.a",
                "sim_main_" + model + ".o",
                "../verilated.o", "../verilated_threads.o"]
+        python3 = self._python_for_make()
+        if python3:
+            cmd.append(python3)
         return self._run(cmd, "MAKE VERILATOR", cwd=self.modelpath,
                          env=self._nt_build_env())
 
