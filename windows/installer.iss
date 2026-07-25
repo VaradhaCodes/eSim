@@ -187,11 +187,21 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Components: core; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 ; MSYS2 ship-size excludes, verified against what runtime model builds use:
 ;  * pacman download cache (var\cache) and locale/man/doc/info trees.
-;  * gdb (debugger; nothing in a user install debugs). mingw64's python3.14
-;    deliberately STAYS despite arriving as gdb's scripting dep: verilator's
-;    verilated.mk hardcodes `PYTHON3 = python3` and every NgVeri model make
-;    runs $(PYTHON3) verilator_includer -- pruning it broke NgVeri with
-;    "Error 127" (caught by the counter e2e on the pruned test install).
+;  * gdb (debugger; nothing in a user install debugs). NOTE: this exclusion
+;    used to be paired with "mingw64's python3.14 deliberately STAYS despite
+;    arriving as gdb's scripting dep", because verilator's verilated.mk
+;    hardcodes `PYTHON3 = python3` and every NgVeri model make runs
+;    $(PYTHON3) verilator_includer -- pruning it broke NgVeri with "Error
+;    127". That reasoning silently depended on gdb being INSTALLED, and gdb
+;    has never been in $MingwPkgs: it was only ever present in a
+;    hand-provisioned build tree ("Install Reason: Explicitly installed"),
+;    so the python it dragged in vanished the moment anyone built from
+;    scratch -- and NgVeri died with `python3: command not found` again.
+;    ModelGeneration now passes eSim's OWN bundled interpreter as a make
+;    command-line variable (_python_for_make), so no MSYS2 python is needed
+;    on any path and nothing here has to be kept alive for it. Do not
+;    "restore" mingw-w64-x86_64-python to fix a python3 error; check that
+;    override instead.
 ;  * gnat*.exe + adainclude: the Ada COMPILER that built ghdl. ghdl.exe is
 ;    statically linked (imports only system DLLs) and never compiles Ada at
 ;    runtime. adalib STAYS: lib\ghdl\grt.lst passes -L...\adalib\ at VHDL
