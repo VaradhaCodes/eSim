@@ -374,12 +374,17 @@ class ModelGeneration:
 
             cm_count_ptr = cm_count_ptr + 1
 
+        # Everything here is *tracing*, and every line of it is already written
+        # to client.log by the fprintf below. Printing it to stdout as well put
+        # a per-iteration wall of "Client-..." chatter into the eSim console and
+        # buried the real simulator output. Trace goes to the log file only.
+        # (The old `printf(ctime(&systime))` also passed a non-literal as the
+        # format string -- undefined behaviour if the locale's date ever
+        # contains a '%'. It is gone with the rest.)
         systime_info = '''
                 /*Taking system time info for log */
                 time_t systime;
                 systime = time(NULL);
-                printf(ctime(&systime));
-                printf("Client-Initialising GHDL...\\n\\n");
                 fprintf(log_client,"Setup Client Server Connection at %s \\n"''' \
                 ''',ctime(&systime));
         '''
@@ -479,7 +484,6 @@ class ModelGeneration:
                 exit(1);
             }
 
-            printf("Client-Socket (Id : %d) created\\n", socket_fd);
             fprintf(log_client,"Client-Client Socket created ''' \
             '''successfully \\n");
             fprintf(log_client,"Client- Socket Id : %d \\n",socket_fd);
@@ -516,7 +520,6 @@ class ModelGeneration:
                 }
                 else
                 {
-                    printf("Client-Connected to server \\n");
                     fprintf(log_client,"Client-Connected to server \\n");
                     break;
                 }
@@ -580,7 +583,6 @@ class ModelGeneration:
             }
             else
             {
-                printf("Client-Message sent: %s \\n",send_data);
                 fprintf(log_client,"Socket Id : %d & Message sent : %s \\n"''' \
                 ''',socket_fd,send_data);
             }
@@ -599,7 +601,6 @@ class ModelGeneration:
             }
             recv_data[bytes_recieved] = '\\0';
 
-            printf("Client-Message Received -  %s\\n\\n",recv_data);
             fprintf(log_client,"Message Received From Server-''' \
             '''%s\\n",recv_data);
 

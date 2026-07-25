@@ -1004,7 +1004,11 @@ and set the load for input ports */
             }\n\
         else\n\
         {\n\
-            printf(\"Unknown value\\n\");\n\
+            /* Neither 0 nor 1. This used to printf and fall through, leaving\n\
+               _op_ at whatever the previous timestep left there -- a stale\n\
+               level silently presented as real data, once per timestep. Drive\n\
+               the port to the X state the type actually has. */\n\
+            _op_" + item.split(':')[0] + "[Ii]=UNKNOWN;\n\
                 }\n\n\
         if(ANALYSIS == DC)\n\
         {\n\
@@ -1269,13 +1273,23 @@ and set the load for input ports */
         #include <verilated.h>
         #include "V''' + self.model_stem + '''.h"
         #include <stdio.h>
-        #include <stdio.h>
         #include <fstream>
         #include <stdlib.h>
         #include <string>
         #include <iostream>
         #include <cstring>
         using namespace std;
+
+        /* Per-iteration port tracing. This model is evaluated once per ngspice
+           timestep (hundreds to millions of times), so tracing it on stdout
+           drowns the simulator's own output in the eSim console and costs a
+           write() per line. Off by default; rebuild the model with
+           -DESIM_NGVERI_TRACE to get the old behaviour back. */
+        #ifdef ESIM_NGVERI_TRACE
+        #define ESIM_TRACE(...) printf(__VA_ARGS__)
+        #else
+        #define ESIM_TRACE(...) ((void)0)
+        #endif
 
         /* How many instances of this model one netlist may hold. The array
            below is indexed by ngspice's instance_id, which is not known when
@@ -1351,17 +1365,17 @@ beyond the %d instances this model was built for; skipping it.\\n",
             else
             {
                 contextp->timeInc(1);
-                printf("=============''' + self.model_stem + \
+                ESIM_TRACE("=============''' + self.model_stem + \
             ''' : New Iteration===========");
-                printf("\\nInstance : %d\\n",count);
-                printf("\\nInside foo before eval.....\\n");
+                ESIM_TRACE("\\nInstance : %d\\n",count);
+                ESIM_TRACE("\\nInside foo before eval.....\\n");
 '''
 
         before_eval = []
         after_eval = []
         for i, item in enumerate(self.input_port + self.output_port):
             before_eval.append(
-                '''\t\t\t\tprintf("''' +
+                '''\t\t\t\tESIM_TRACE("''' +
                 item.split(':')[0] +
                 '''=%d\\n", ''' +
                 self.model_stem +
@@ -1388,10 +1402,10 @@ beyond the %d instances this model was built for; skipping it.\\n",
             "[count]->eval();\n")
 
         after_eval.append('''
-                printf("\\nInside foo after eval.....\\n");\n''')
+                ESIM_TRACE("\\nInside foo after eval.....\\n");\n''')
         for i, item in enumerate(self.input_port + self.output_port):
             after_eval.append(
-                '''\t\t\t\tprintf("''' +
+                '''\t\t\t\tESIM_TRACE("''' +
                 item.split(':')[0] +
                 '''=%d\\n", ''' +
                 self.model_stem +

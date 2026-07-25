@@ -1209,8 +1209,19 @@ class MainWindow(QtWidgets.QWidget):
         if event_nodes:
             out.writelines('eprint ' + ' '.join(event_nodes)
                            + ' > plot_data_event.txt\n')
-        for item in plotText:
-            out.writelines(item + '\n')
+        # eSim always launches ngspice with `-b`, where `plot` is unavailable --
+        # every one of these emitted "Warning: command 'plot' is not available
+        # during batch simulation, ignored!" into the user's console, once per
+        # plotted node, on every single run. eSim draws the waveforms itself
+        # from plot_data_v.txt / plot_data.raw, so the warnings bought nothing.
+        # Keep the lines (a .cir.out is also meant to be runnable by hand) but
+        # let only an interactive ngspice reach them: `-b` defines `batchmode`,
+        # `-i` does not.
+        if plotText:
+            out.writelines('if $?batchmode = 0\n')
+            for item in plotText:
+                out.writelines('  ' + item + '\n')
+            out.writelines('end\n')
         out.writelines('.endc\n')
         out.writelines('.end\n')
         out.close()
