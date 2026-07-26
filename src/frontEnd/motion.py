@@ -17,12 +17,42 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 # only ever one per view.
 _MOTION_DEFAULT = True
 
-# Windows rounds popups through DWM (theme_utils.apply_round_corners) rather
-# than through WA_TranslucentBackground + a rounded mask: under Fusion the
-# popup window is never layered, so translucency yields black corners instead
-# of transparent ones, and the 1-bit mask that hid them could only produce a
-# staircase. Every other platform keeps the translucency+mask path.
-_ROUND_VIA_DWM = sys.platform == "win32"
+# How a popup gets its rounded corners, decided once per process.
+#
+#   "dwm"    Windows 11+. The compositor clips and antialiases the window
+#            (theme_utils.apply_round_corners). Best result available here:
+#            WA_TranslucentBackground is NOT usable on this path -- under
+#            Fusion the popup window is never layered, and a screen grab
+#            through the corner of a translucent popup reads #000000, not the
+#            desktop behind it.
+#   "mask"   Windows 10. Same lack of alpha, and DWM rejects the corner
+#            attribute (it arrived in build 22000), so nothing rounds the
+#            window at all and the popup ships as a white square with the QSS
+#            border curving uselessly inside it. A 1-bit mask is a poor
+#            rounding -- hard staircase, no partial coverage -- but it is the
+#            only one left, and a stair-stepped curve beats a square.
+#   "alpha"  Everything else: translucency rounds the corners properly, with
+#            the mask kept as the fallback for alpha-less X11 surfaces.
+_ROUND_MODE = None
+
+
+def round_mode():
+    global _ROUND_MODE
+    if _ROUND_MODE is None:
+        if sys.platform != "win32":
+            _ROUND_MODE = "alpha"
+        else:
+            try:
+                from frontEnd import theme_utils
+                _ROUND_MODE = ("dwm" if theme_utils.dwm_rounds_popups()
+                               else "mask")
+            except Exception:
+                _ROUND_MODE = "mask"
+    return _ROUND_MODE
+
+
+def _on_windows():
+    return round_mode() in ("dwm", "mask")
 
 # Buttons that keep a resting halo instead of only glowing under the cursor:
 # the single call-to-action per view. Everything else stays calm — the QSS
@@ -130,13 +160,12 @@ def make_menu_rounded(menu):
     (the native window must be created with the translucent attribute), so
     call it right after ``QMenu(...)`` / ``addMenu(...)``.
 
-    Windows is the exception and takes the DWM path instead
-    (theme_utils.apply_round_corners): there the popup never gets an alpha
-    surface, so asking for translucency here would only paint the corners
-    black. Nothing to do at create time — DWM needs the native window, so the
-    rounding is applied on Show.
+    Windows is the exception on both of its paths (see round_mode): the popup
+    never gets an alpha surface there, so asking for translucency would only
+    paint the corners black. Nothing to do at create time — DWM and the mask
+    both need the native window, so the rounding is applied on Show.
     """
-    if menu is None or _ROUND_VIA_DWM:
+    if menu is None or _on_windows():
         return menu
     try:
         menu.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -206,11 +235,26 @@ def _round_popup_via_dwm(popup):
     exist before then. Re-applying on every Show is harmless (it is a plain
     window attribute, not an animation) and covers popups whose native window
     Qt has destroyed and rebuilt in between.
+
+    If DWM refuses the attribute, this permanently downgrades the process to
+    the mask path and rounds this popup with it. The build-number check in
+    round_mode() is a prediction; this is the answer. They disagree whenever
+    something other than the Windows version is what stopped the compositor
+    from rounding -- and the failure mode being guarded against here (a menu
+    shipping as a plain white square) is exactly what an over-confident
+    prediction produced on the user's second machine.
     """
     if popup is None:
         return
+    global _ROUND_MODE
     from frontEnd import theme_utils
-    theme_utils.apply_round_corners(popup)
+    if not theme_utils.apply_round_corners(popup):
+        _ROUND_MODE = "mask"
+        # The sheet is already carrying the DWM override on this path (it is
+        # emitted for exactly the builds that took it), so the mask has to cut
+        # at the radius the border is drawn at, not at the mask path's own.
+        apply_menu_rounded_mask(
+            popup, radius=theme_utils.DWM_CORNER_RADIUS_PX)
 
 
 def rest_alpha(widget):
@@ -554,9 +598,19 @@ class PopupMotionFilter(QtCore.QObject):
             theme_utils.apply_titlebar_theme(obj)
 
         if type(obj).__name__ == "QComboBoxPrivateContainer":
-            if _ROUND_VIA_DWM:
+            mode = round_mode()
+            if mode == "dwm":
                 if et == QtCore.QEvent.Type.Show:
                     _round_popup_via_dwm(obj)
+                return False
+            if mode == "mask":
+                # Windows 10: no compositor rounding and no alpha. Mask only —
+                # setting translucency here would blacken the corners it is
+                # supposed to remove.
+                if et == QtCore.QEvent.Type.Show:
+                    apply_menu_rounded_mask(obj, radius=10)
+                    QtCore.QTimer.singleShot(
+                        0, lambda c=obj: apply_menu_rounded_mask(c, radius=10))
                 return False
             if et == QtCore.QEvent.Type.Polish:
                 if not obj.testAttribute(
@@ -572,12 +626,22 @@ class PopupMotionFilter(QtCore.QObject):
             return False
 
         if isinstance(obj, QtWidgets.QMenu):
-            # Windows: no translucency (it would only blacken the corners) and
-            # no mask (it would only stair-step them) — DWM rounds the window
-            # itself once it exists, which is Show, not Polish.
-            if _ROUND_VIA_DWM:
+            mode = round_mode()
+            # Windows 11: no translucency (it would only blacken the corners)
+            # and no mask (it would only stair-step them) — DWM rounds the
+            # window itself once it exists, which is Show, not Polish.
+            if mode == "dwm":
                 if et == QtCore.QEvent.Type.Show:
                     _round_popup_via_dwm(obj)
+                return False
+            if mode == "mask":
+                # Windows 10: DWM will not round it and there is no alpha to
+                # round it with, so the mask is the only thing standing
+                # between the user and a square white popup.
+                if et == QtCore.QEvent.Type.Show:
+                    apply_menu_rounded_mask(obj)
+                    QtCore.QTimer.singleShot(
+                        0, lambda m=obj: apply_menu_rounded_mask(m))
                 return False
             if et == QtCore.QEvent.Type.Polish:
                 # Set translucency BEFORE the native popup window is created.
@@ -701,7 +765,19 @@ def apply_toolbar_depth(window):
     shadow at the joint, hiding the seam. The left rail's own shadow is
     pushed slightly DOWN (y=6) so its blur does not bleed upward into
     the corner.
+
+    The shadow goes on an empty backdrop behind each bar, NOT on the bar
+    itself. A QGraphicsEffect renders its source into an offscreen ARGB pixmap,
+    and Qt cannot run subpixel antialiasing against a translucent buffer — so
+    an effect directly on the toolbar quietly downgraded every glyph in it
+    (the zoom pill, the menu-bar labels) to grayscale AA. That is the "fonts
+    look subtly low-res" report: invisible on a 175%-scaled panel, plain at 1x
+    on 1080p. See elevation._ShadowBackdrop.
     """
+    from frontEnd.elevation import elevate_backdrop
+
+    # Offsets tuned to hide the seam where the two bars meet, so they stay
+    # verbatim rather than snapping to a named elevation level.
     specs = {
         "topToolbar": (34, 0, 5, 82),
         "leftToolBar": (24, 4, 6, 72),
@@ -710,15 +786,24 @@ def apply_toolbar_depth(window):
         tb = window.findChild(QtWidgets.QToolBar, name)
         if not tb:
             continue
-        eff = QtWidgets.QGraphicsDropShadowEffect(tb)
-        eff.setBlurRadius(blur)
-        eff.setOffset(x, y)
-        eff.setColor(QtGui.QColor(0, 0, 0, alpha))
-        tb.setGraphicsEffect(eff)
+        elevate_backdrop(tb, radius=0, tint=QtGui.QColor(0, 0, 0),
+                         spec=(blur, x, y, alpha, alpha))
 
 
 def install_menu_depth(root):
-    """Pre-install depth shadows on menu bars for consistent 3D presence."""
+    """Pre-install depth shadows on menu bars for consistent 3D presence.
+
+    Windows is excluded, and gets a sharper menu for it. A QGraphicsEffect on
+    a QMenu forces the whole popup — every item label in it — through an
+    offscreen ARGB buffer, which costs it ClearType. On Windows that buys
+    nothing: make_menu_rounded() returns early there, so the popup keeps the
+    platform's own window shadow (and its DWM-rounded corners), and this effect
+    was only ever painting a second shadow on top of it. Elsewhere the popup
+    is already translucent (WA_TranslucentBackground), so its text is on
+    grayscale AA either way and the effect is the only shadow there is.
+    """
+    if _on_windows():
+        return
     for menu in root.findChildren(QtWidgets.QMenu):
         eff = QtWidgets.QGraphicsDropShadowEffect(menu)
         eff.setBlurRadius(34)
