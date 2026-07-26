@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from PyQt6 import QtCore, QtGui, QtWidgets
+from frontEnd.theme_utils import zoom_px, on_zoom_changed
 
 # eSim is PyQt6-only. These aliases keep the call sites below terse.
 TEXT_SELECTABLE = QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
@@ -14,7 +15,6 @@ ORIENT_HORIZ = QtCore.Qt.Orientation.Horizontal
 TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
 TOOLBTN_INSTANT = QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
 
-from frontEnd.theme_utils import zoom_px, on_zoom_changed
 from PyQt6.Qsci import QsciScintilla
 # Reuse eSim's shared editor lexers + theme so HDL here looks exactly like the
 # project code editor (same QsciLexerVerilog/VHDL colours), instead of a
