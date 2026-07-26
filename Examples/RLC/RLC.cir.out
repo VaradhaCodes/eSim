@@ -10,12 +10,9 @@ v1  in gnd pwl(0m 0 0.5m 5)
 
 * Control Statements 
 .control
-set width=1000
 run
 print allv > plot_data_v.txt
 print alli > plot_data_i.txt
-set filetype=ascii
-write plot_data.raw
 plot v(in)
 plot v(out)
 .endc
