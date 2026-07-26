@@ -31,8 +31,84 @@ ESIM_BRANCH="${ESIM_BRANCH:-dev}"
 ESIM_DIR="${ESIM_DIR:-$HOME/eSim}"
 MARKER=".esim-bootstrap"          # stamped only on trees THIS script created
 
-log() { echo -e "\n>>> $*"; }
-die() { echo -e "\n[ERROR] $*\n" >&2; exit 1; }
+#-----------------------------------------------------------------------------
+# Terminal UI (compact)
+#-----------------------------------------------------------------------------
+# A deliberately small copy of install-eSim.sh's UI block rather than a shared
+# file: this script is fetched by `curl ... | bash`, so at the moment it runs
+# there is no eSim tree on disk to source anything from. It shows a compact
+# header only -- the full wordmark belongs to install-eSim.sh, which takes
+# over a few seconds later, and printing it in both places would just look
+# like a stutter.
+#
+# Same rules as the installer's block: every helper returns 0, every read is
+# ${x:-}, and detection probes /dev/tty (this script's own stdin is the
+# download pipe, so `[ -t 0 ]` is always false here). It must survive the
+# `set -euo pipefail` above.
+UI_ON=0
+C_RESET=''; C_DIM=''; C_BOLD=''; C_ACCENT=''; C_OK=''; C_WARN=''; C_ERR=''
+G_ARROW='>'; G_OK='ok'; G_ERR='x'; G_RULE='-'; G_DOT='-'
+
+ui_detect() {
+    [ -n "${ESIM_NO_FANCY:-}" ] && return 0
+    [ -n "${NO_COLOR:-}" ]      && return 0
+    case "${TERM:-dumb}" in dumb|"") return 0 ;; esac
+    { : > /dev/tty; } 2>/dev/null || return 0
+
+    local ncolors=0
+    ncolors=$(tput colors 2>/dev/null) || ncolors=0
+    [ "${ncolors:-0}" -ge 8 ] 2>/dev/null || return 0
+
+    # Same brand gold as install-eSim.sh (sampled from images/esim_text.png):
+    # the two run back to back, so a different accent here would read as two
+    # unrelated tools rather than one install.
+    UI_ON=1
+    C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
+    C_ACCENT=$'\033[33m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'
+    if [ "${ncolors:-0}" -ge 256 ] 2>/dev/null; then
+        C_ACCENT=$'\033[38;5;214m'; C_OK=$'\033[38;5;114m'
+        C_WARN=$'\033[38;5;208m';   C_ERR=$'\033[38;5;203m'
+    fi
+    case "${COLORTERM:-}" in
+        truecolor|24bit)
+            C_ACCENT=$'\033[38;2;240;160;48m'; C_OK=$'\033[38;2;126;211;133m'
+            C_WARN=$'\033[38;2;255;140;26m';   C_ERR=$'\033[38;2;235;110;110m' ;;
+    esac
+
+    local charmap=""
+    charmap=$(locale charmap 2>/dev/null) || charmap=""
+    case "${charmap}:${LC_ALL:-}:${LC_CTYPE:-}:${LANG:-}" in
+        *UTF-8*|*utf8*|*UTF8*|*utf-8*)
+            G_ARROW='▸'; G_OK='✔'; G_ERR='✖'; G_RULE='─'; G_DOT='·' ;;
+    esac
+    return 0
+}
+
+ui_header() {
+    if [ "$UI_ON" = 0 ]; then
+        printf '\n=== eSim EDA Suite -- bootstrap ===\n'
+        return 0
+    fi
+    local rule='' i=0
+    while [ "$i" -lt 46 ]; do rule="$rule$G_RULE"; i=$((i + 1)); done
+    printf '\n  %s%seSim EDA Suite%s %s%s bootstrap%s\n  %s%s%s\n' \
+        "$C_BOLD" "$C_ACCENT" "$C_RESET" "$C_DIM" "$G_DOT" "$C_RESET" \
+        "$C_ACCENT" "$rule" "$C_RESET"
+    return 0
+}
+
+log()  { if [ "$UI_ON" = 1 ]; then printf '  %s%s%s %s\n' "$C_ACCENT" "$G_ARROW" "$C_RESET" "$*"
+         else echo -e "\n>>> $*"; fi; return 0; }
+note() { if [ "$UI_ON" = 1 ]; then printf '  %s%s %s%s\n' "$C_OK" "$G_OK" "$*" "$C_RESET"
+         else echo ">>> $*"; fi; return 0; }
+die()  {
+    if [ "$UI_ON" = 1 ]; then
+        printf '\n  %s%s %s%s\n\n' "$C_ERR" "$G_ERR" "$*" "$C_RESET" >&2
+    else
+        echo -e "\n[ERROR] $*\n" >&2
+    fi
+    exit 1
+}
 
 _tmpdirs=()
 cleanup() { rm -rf "${_tmpdirs[@]}" 2>/dev/null || true; }
@@ -88,11 +164,15 @@ fetch_tree() {
     done
     [ -n "$url" ] || die "No branch or tag '$ESIM_BRANCH' at https://github.com/$ESIM_REPO"
 
-    log "Downloading eSim ($ESIM_REPO @ $ESIM_BRANCH) — a couple hundred MB," \
+    # curl's own --progress-bar is left in charge of the download: it is the
+    # only thing here that knows the byte count, and it writes to stderr (the
+    # terminal) rather than into the tar pipe.
+    log "Downloading eSim ($ESIM_REPO @ $ESIM_BRANCH) $G_DOT a couple hundred MB," \
         "this can take a while"
     curl -fL --progress-bar "$url" | tar -xz -C "$tmp" \
         || die "Download or extraction failed. Check your connection and that
        '$ESIM_BRANCH' exists at https://github.com/$ESIM_REPO"
+    note "Downloaded and extracted"
     sub=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)
     [ -n "$sub" ] && is_esim_tree "$sub" \
         || die "Downloaded archive does not look like an eSim source tree."
@@ -161,6 +241,8 @@ find_installed_tree() {
 
 main() {
     local action="${1:---install}" tree
+    ui_detect
+    ui_header
     case "$action" in
         --install|--uninstall|--dry-run) ;;
         *) die "Unknown option: $action

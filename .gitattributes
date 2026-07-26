@@ -51,6 +51,10 @@
 # ---- test suites ----
 /src/conftest.py                 export-ignore
 src/**/tests/                    export-ignore
+# The zip drops Ubuntu/ entirely (make-release.sh flattens the installer to
+# the root), but the curl path tarballs the branch WITH Ubuntu/ -- so this
+# line is what keeps the installer's own tests out of a user download.
+/Ubuntu/tests/                   export-ignore
 
 # ---- regeneratable ngspice output committed into the library ----
 # 427 MB of the 644 MB tree. eSim rewrites these the first time a circuit is
@@ -65,3 +69,11 @@ plot_data_*.txt                  export-ignore
 
 # MSYS2 sh runs these; CRLF from autocrlf checkout breaks them on fresh clones.
 windows/*.sh text eol=lf
+
+# Same reasoning, higher stakes: these two ARE the Ubuntu install path. A
+# contributor on Windows with core.autocrlf=true checks them out as CRLF, and
+# an editor that writes the file back verbatim commits them that way -- which
+# ships an installer that dies on the first line with
+#   /bin/bash^M: bad interpreter: No such file or directory
+# Pin them to LF in the working tree so that can never happen.
+Ubuntu/*.sh text eol=lf
