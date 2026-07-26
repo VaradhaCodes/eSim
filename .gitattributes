@@ -77,3 +77,14 @@ windows/*.sh text eol=lf
 #   /bin/bash^M: bad interpreter: No such file or directory
 # Pin them to LF in the working tree so that can never happen.
 Ubuntu/*.sh text eol=lf
+
+# ---- audit / handoff scratch (also .gitignore'd; this is the archive guard) ----
+# One-off fuzz/soak harnesses and the audit write-ups that drove a fix batch.
+# Untracked as of the cleanup commit, so these lines normally match nothing --
+# they exist so that re-adding one by hand still cannot put it in a user
+# download. The regression tests those passes produced live in src/*/tests and
+# DO stay in the repo (they are export-ignored above like every other test).
+/CRASH_AUDIT.md                  export-ignore
+/MAKER_AUDIT.md                  export-ignore
+/audit_harness/                  export-ignore
+/verify_theme_crash.py           export-ignore

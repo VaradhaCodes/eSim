@@ -966,6 +966,230 @@ function Optimize-Stage {
         Remove-Item -Recurse -Force
 }
 
+# Upstream demo models that are genuinely part of the distribution (they came
+# with the sky130 PDK + analog IPs). Everything else under modelParamXML is a
+# local user's model. Keep in sync with library\modelParamXML\Ngveri\.gitignore.
+$script:ShippedModelXml = @('dvsd_8_bit_priority_encoder.xml', 'vsdserializer_v1.xml')
+
+function Reset-StageModels {
+    <# Return the staged tree to a FRESH-INSTALL model state.
+
+       Stage-App mirrors the working tree with robocopy, and Stage-SimToolchain
+       reuses an already-built tools\nghdl on re-runs. Both faithfully carry
+       across whatever the packager's own eSim did on this box, and a model the
+       packager added leaks into the release three ways at once:
+
+         1. library\modelParamXML\{Ngveri,NgVeriCosim,Nghdl}\<model>.xml
+            -- NgVeri._list_models reads these back, so a fresh install opens
+            Remove Models already listing a stranger's models.
+         2. tools\nghdl\{src,release}\src\xspice\icm\{Ngveri,ghdl}\<model>\
+            -- the model's generated C + compiled objects, plus its line in
+            modpath.lst (which is what cmpp builds the code model FROM).
+         3. tools\nghdl\install_dir\lib\ngspice\{Ngveri.cm,ghdl.cm}
+            -- worst of the three: the model is LINKED INTO the shipped code
+            model, so it is loadable in the user's ngspice whether or not any
+            of the files above survive.
+
+       .gitignore cannot help here: robocopy mirrors the working tree, not the
+       index. So scrub the stage itself, then relink the two code models from a
+       model-free icm tree. Idempotent -- on a clean stage every step no-ops.
+
+       Anything found is reported, not silently swallowed: a packager should
+       see what their box was about to ship. #>
+    Log 'Resetting staged models to fresh-install state'
+    $script:RemovedModelNames = @()
+
+    # --- 1) modelParamXML: drop everything not on the shipped whitelist ------
+    foreach ($d in @('Ngveri', 'NgVeriCosim', 'Nghdl')) {
+        $dir = Join-Path $Stage "library\modelParamXML\$d"
+        if (-not (Test-Path $dir)) { continue }
+        Get-ChildItem $dir -Filter '*.xml' -File -ErrorAction SilentlyContinue |
+            Where-Object { $script:ShippedModelXml -notcontains $_.Name } |
+            ForEach-Object {
+                Log "  drop local model xml: $d\$($_.Name)"
+                $script:RemovedModelNames += $_.BaseName
+                Remove-Item $_.FullName -Force
+            }
+    }
+
+    # --- 2) audit / handoff scratch --------------------------------------- --
+    # Untracked on a clean checkout, but a packager's tree can still hold them
+    # (they were tracked until the cleanup commit) and robocopy would ship them
+    # -- captured stdout and all, absolute C:\Users\<name>\... paths included.
+    foreach ($p in @('CRASH_AUDIT.md', 'MAKER_AUDIT.md', 'audit_harness',
+                     'verify_theme_crash.py', 'THEME_HANDOFF.md',
+                     'SYNTAX_HANDOFF.md')) {
+        $t = Join-Path $Stage $p
+        if (Test-Path $t) {
+            Log "  drop audit scratch: $p"
+            Remove-Item $t -Recurse -Force
+        }
+    }
+
+    # --- 3) icm model dirs + modpath.lst ------------------------------------
+    $nghdlDst = Join-Path $Stage 'tools\nghdl'
+    $icmRoots = @("$nghdlDst\src\xspice\icm", "$nghdlDst\release\src\xspice\icm")
+    $dirty = $false
+    foreach ($root in $icmRoots) {
+        foreach ($fam in @('Ngveri', 'ghdl')) {
+            $famDir = Join-Path $root $fam
+            if (-not (Test-Path $famDir)) { continue }
+            # Every subdirectory here IS a model, bar automake's own .deps:
+            # the family's build artifacts (Ngveri.cm, dlmain.o, verilated*.o,
+            # cm*.h, objects.inc) are files, never directories.
+            Get-ChildItem $famDir -Directory -ErrorAction SilentlyContinue |
+                Where-Object { -not $_.Name.StartsWith('.') } |
+                ForEach-Object {
+                    Log "  drop compiled model: $fam\$($_.Name)"
+                    $script:RemovedModelNames += $_.Name
+                    Remove-Item $_.FullName -Recurse -Force
+                    $dirty = $true
+                }
+            # modpath.lst is the model list cmpp compiles from; an entry with no
+            # directory makes it abort, so the list must be emptied, not left.
+            $mp = Join-Path $famDir 'modpath.lst'
+            if ((Test-Path $mp) -and (Get-Item $mp).Length -gt 0) {
+                $script:RemovedModelNames += (Get-Content $mp |
+                    Where-Object { $_.Trim() })
+                Clear-Content $mp
+                $dirty = $true
+            }
+        }
+    }
+    $script:RemovedModelNames = @($script:RemovedModelNames |
+        Where-Object { $_ } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+
+    # --- 4) relink the code models without them ------------------------------
+    # Unconditional, not gated on $dirty. A model can be linked into Ngveri.cm
+    # with no trace left in the icm tree -- eSim's d_cosim teardown removes the
+    # model directory and its modpath.lst line but never relinks -- so "nothing
+    # to delete" does not imply "nothing in the .cm". The relink is ~30 s.
+    if (-not $dirty) { Log 'no model files staged; relinking anyway' }
+    $relIcm = Join-Path $nghdlDst 'release\src\xspice\icm'
+    $bash = Join-Path $Stage 'tools\msys64\usr\bin\bash.exe'
+    if (-not ((Test-Path $relIcm) -and (Test-Path $bash))) {
+        # No toolchain to rebuild with (-SkipMsys / -SkipSimBuild). Do NOT
+        # pretend this is fine: the .cm files still carry the models, and
+        # Assert-CleanStage will refuse to package them.
+        Log 'WARNING: cannot relink code models (no staged MSYS2/release tree)'
+        return
+    }
+    # Delete the built code models first: make compares timestamps, and the
+    # existing .cm is newer than the sources whose object list just shrank, so
+    # an incremental make would leave the model linked in.
+    foreach ($fam in @('Ngveri', 'ghdl')) {
+        Remove-Item (Join-Path $relIcm "$fam\$fam.cm") -Force -ErrorAction SilentlyContinue
+    }
+    $instU = ((Join-Path $nghdlDst 'install_dir') -replace '\\', '/')
+    $icmU = ($relIcm -replace '\\', '/')
+    # Same two commands the runtime model build runs (ModelGeneration.runMake /
+    # runMakeInstall), including the pkglibdir/pkgdatadir override: the tree was
+    # configured with the BUILD box's absolute prefix baked into makedefs, so a
+    # stock `make install` would write the .cm somewhere outside this stage.
+    Log 'Relinking Ngveri.cm/ghdl.cm without local models'
+    # Strip afterwards rather than relinking with '-s': the icm makefile keeps
+    # -shared (and the -lws2_32/-lpsapi closure) in LDFLAGS, so passing
+    # LDFLAGS='-m64 -s' on the command line REPLACES all of it and the link
+    # collapses into an exe link -- "undefined reference to `WinMain'". Without
+    # a strip the relinked models come back ~2.6x the size the toolchain build
+    # shipped, so strip the four copies (release tree + install_dir) instead.
+    # --strip-unneeded keeps the export table these DLLs are dlopen'd for.
+    Invoke-MsysBash (
+        "set -e; cd `"`$(cygpath -u '$icmU')`" && " +
+        "mingw32-make && " +
+        "mingw32-make install pkglibdir='$instU/lib/ngspice' " +
+        "pkgdatadir='$instU/share/ngspice' && " +
+        "strip --strip-unneeded Ngveri/Ngveri.cm ghdl/ghdl.cm " +
+        "'$instU/lib/ngspice/Ngveri.cm' '$instU/lib/ngspice/ghdl.cm'"
+    ) 'code-model relink failed'
+
+    # The relinked models must still load: ngspice reads spinit at startup and
+    # `codemodel`s every .cm in lib\ngspice, so a broken one fails here.
+    $ngspiceExe = Join-Path $nghdlDst 'install_dir\bin\ngspice.exe'
+    if (Test-Path $ngspiceExe) {
+        $smoke = Join-Path $Build 'cm-relink-smoke.cir'
+        Set-Content $smoke "relink smoke`nv1 1 0 dc 1`nr1 1 0 1k`n.op`n.end"
+        $out = & $ngspiceExe -b $smoke 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or $out -match 'could not be loaded|error') {
+            Die "relinked code models broke ngspice (rc=$LASTEXITCODE): $out"
+        }
+        Log 'Relinked code models load and simulate OK'
+    }
+}
+
+function Assert-CleanStage {
+    <# Refuse to package a stage that carries anything from the packager's own
+       machine. Reset-StageModels does the removing; this is the independent
+       check that it worked, so a silent regression in the staging order (or a
+       future -Skip flag that bypasses the reset) cannot ship a dirty tree.
+
+       Fails the build rather than warning: a leak is only discoverable after
+       the installer is in users' hands. #>
+    Log 'Verifying stage carries no local models or audit scratch'
+    $bad = @()
+
+    foreach ($d in @('Ngveri', 'NgVeriCosim', 'Nghdl')) {
+        $dir = Join-Path $Stage "library\modelParamXML\$d"
+        if (-not (Test-Path $dir)) { continue }
+        $bad += Get-ChildItem $dir -Filter '*.xml' -File -ErrorAction SilentlyContinue |
+            Where-Object { $script:ShippedModelXml -notcontains $_.Name } |
+            ForEach-Object { "local model xml: modelParamXML\$d\$($_.Name)" }
+    }
+
+    foreach ($p in @('CRASH_AUDIT.md', 'MAKER_AUDIT.md', 'audit_harness',
+                     'verify_theme_crash.py', 'THEME_HANDOFF.md',
+                     'SYNTAX_HANDOFF.md')) {
+        if (Test-Path (Join-Path $Stage $p)) { $bad += "audit scratch: $p" }
+    }
+
+    $nghdlDst = Join-Path $Stage 'tools\nghdl'
+    foreach ($root in @("$nghdlDst\src\xspice\icm", "$nghdlDst\release\src\xspice\icm")) {
+        foreach ($fam in @('Ngveri', 'ghdl')) {
+            $famDir = Join-Path $root $fam
+            if (-not (Test-Path $famDir)) { continue }
+            $bad += Get-ChildItem $famDir -Directory -ErrorAction SilentlyContinue |
+                Where-Object { -not $_.Name.StartsWith('.') } |
+                ForEach-Object { "compiled model dir: $fam\$($_.Name)" }
+            $mp = Join-Path $famDir 'modpath.lst'
+            if (Test-Path $mp) {
+                $bad += Get-Content $mp | Where-Object { $_.Trim() } |
+                    ForEach-Object { "modpath.lst entry: $fam -> $_" }
+            }
+        }
+    }
+
+    # The decisive one. Files can be deleted after the fact; a model linked
+    # into the code model can only be removed by relinking it, so scan the
+    # shipped binaries for the names we pulled out. ASCII-decoding the bytes is
+    # enough -- cmpp emits the model name as a plain C identifier/string.
+    $cmdir = Join-Path $nghdlDst 'install_dir\lib\ngspice'
+    foreach ($cm in @('Ngveri.cm', 'ghdl.cm')) {
+        $f = Join-Path $cmdir $cm
+        if (-not (Test-Path $f)) { continue }
+        $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($f))
+        foreach ($n in $script:RemovedModelNames) {
+            if ($n -and $text.Contains($n)) { $bad += "$cm still links model '$n'" }
+        }
+    }
+
+    # The generated symbol libs are seeds: eSim writes a user's model symbols to
+    # %LOCALAPPDATA%-side kicad_symbols, never back into these, so any symbol
+    # here came from the packager's box.
+    foreach ($sym in @('eSim_NgVeri.kicad_sym', 'eSim_Nghdl.kicad_sym',
+                       'eSim_NgVeriCosim.kicad_sym')) {
+        $f = Join-Path $Stage "library\kicadLibrary\eSim-symbols\$sym"
+        if (-not (Test-Path $f)) { continue }
+        $n = @(Select-String -Path $f -Pattern '^\s*\(symbol "' -AllMatches).Count
+        if ($n -gt 0) { $bad += "$sym carries $n pre-seeded symbol(s)" }
+    }
+
+    if ($bad.Count) {
+        Die ("stage is not clean -- refusing to package:`n  " +
+             ($bad -join "`n  "))
+    }
+    Log 'Stage clean: no local models, no audit scratch'
+}
+
 # ----------------------------------------------------------------- main ----
 if ($Clean) { Remove-Item $Build, $Dist -Recurse -Force -ErrorAction SilentlyContinue }
 $7z = Resolve-7z
@@ -980,6 +1204,8 @@ Stage-Iverilog       # Bleyer fallback, only on -SkipSimBuild
 Stage-Kicad          # pruned official KiCad payload -> tools\kicad (bundled)
 Stage-Launcher       # eSim.exe (native shortcut target; after Stage-App's /MIR)
 Optimize-Stage       # strip iverilog + prune PyQt6/scipy (idempotent, last)
+Reset-StageModels    # fresh-install model state (relinks the code models)
+Assert-CleanStage    # ...and refuse to package if anything local survived
 
 Log 'Compiling installer (Inno Setup)'
 $Iscc = Resolve-Iscc
