@@ -29,6 +29,7 @@ from configuration.Appconfig import Appconfig                    # noqa: E402
 from subcircuit import openSub as openSubMod                     # noqa: E402
 from subcircuit import convertSub as convertSubMod               # noqa: E402
 from subcircuit import newSub as newSubMod                       # noqa: E402
+from kicadtoNgspice import KicadNetlister                        # noqa: E402
 
 _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
 
@@ -65,6 +66,11 @@ def clean_selection(monkeypatch):
     FakeThread.launched = []
     monkeypatch.setattr(openSubMod, 'WorkerThread', FakeThread)
     monkeypatch.setattr(newSubMod.Worker, 'WorkerThread', FakeThread)
+    # Convert regenerates the netlist first; these tests are about WHICH
+    # subcircuit it acts on, so the generator is stubbed to the "cannot help,
+    # use the existing .cir" answer it gives on a KiCad-4 folder.
+    monkeypatch.setattr(KicadNetlister, 'generate_netlist',
+                        lambda d, s: (False, 'stubbed'))
     Appconfig.current_subcircuit = {"SubcircuitName": None, "Stem": None}
     yield
     Appconfig.current_subcircuit = {"SubcircuitName": None, "Stem": None}
@@ -80,8 +86,13 @@ def _make_sub(root, folder, files):
 
 
 def _convert(dock):
+    """Click Convert and settle the background netlist step."""
     widget = convertSubMod.convertSub(dock)
     widget.createSub()
+    job = widget._netlist_job
+    if job is not None:
+        assert job.wait(20000), 'netlist job did not finish'
+        _app.processEvents()
     return widget
 
 

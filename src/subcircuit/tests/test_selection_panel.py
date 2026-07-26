@@ -82,12 +82,18 @@ def test_the_panel_leaves_no_orphan_top_level_widget():
     calls findChildren on every entry -- eventually read freed memory and took
     the process down with 0xc0000005 and no traceback.
     """
-    before = len(_app.topLevelWidgets())
+    def panels():
+        # Count only this class: neighbouring tests leave their own top-level
+        # widgets around, and a raw total would measure them instead.
+        return [t for t in _app.topLevelWidgets()
+                if isinstance(t, Subcircuit)]
+
+    before = len(panels())
     w = Subcircuit(None)
-    assert len(_app.topLevelWidgets()) == before + 1
+    assert len(panels()) == before + 1
     _destroy(w)
     assert sip.isdeleted(w)
-    assert len(_app.topLevelWidgets()) == before
+    assert len(panels()) == before
 
 
 def test_empty_state_says_so_and_disables_convert(panel):

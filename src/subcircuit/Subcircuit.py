@@ -346,7 +346,11 @@ class Subcircuit(QtWidgets.QWidget):
             self._select(self.obj_opensubcircuit.editfile, stem)
 
     def convertsch(self):
-        self.obj_convertsubcircuit = convertSub(self.obj_dockarea)
+        # One converter per panel, reused. Netlist generation runs on a worker
+        # thread now, so the guard against a second click while the first is
+        # still exporting has to live on an object that survives the click.
+        if getattr(self, 'obj_convertsubcircuit', None) is None:
+            self.obj_convertsubcircuit = convertSub(self.obj_dockarea)
         self.obj_convertsubcircuit.createSub()
 
     def uploadSub(self):
