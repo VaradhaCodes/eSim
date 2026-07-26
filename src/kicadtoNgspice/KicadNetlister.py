@@ -281,6 +281,20 @@ def generate_netlist(proj_dir, proj_name):
             return False, "kicad-cli netlist export failed: " + proc.stderr.strip()
 
         lines = xml_to_spice_lines(xml_path, title=proj_name, proj_dir=proj_dir)
+
+        # Never overwrite a working netlist with an empty one. A .kicad_sch can
+        # legitimately exist and contain no components: KiCad 6+ migration
+        # writes a sibling .kicad_sch beside a legacy .sch, and some of those
+        # in eSim's own Subcircuit Library are empty stubs (3_nor is one) next
+        # to a perfectly good hand-made .cir. Export "succeeds" on them, and
+        # writing the result would destroy the netlist the subcircuit is built
+        # from. Decline instead, exactly as when there is no schematic at all.
+        components = [ln for ln in lines
+                      if ln and not ln.startswith('*') and ln != '.end']
+        if not components:
+            return False, ("Schematic has no components; keeping the existing "
+                           ".cir.")
+
         cir_path = os.path.join(proj_dir, proj_name + '.cir')
         with open(cir_path, 'w') as fh:
             fh.write('\n'.join(lines) + '\n')
