@@ -1,7 +1,0 @@
-== H4: DesignBus abandoned WITHOUT close() ==
-   threads base=1 peak=61 end=61  (leak=60)
-== control: DesignBus WITH close() ==
-   threads base=61 peak=61 end=61  (leak=0)
-== NgspiceWidget process-registry after 25 runs ==
-   process_obj=25 proc_dict[proj]=25  (0 == no leak)
-done

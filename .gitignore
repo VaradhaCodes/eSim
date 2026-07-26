@@ -39,3 +39,16 @@ nghdl/*.tar.xz
 # hundreds of MB, rebuilt by windows/build -- never source.
 /python/
 /tools/
+
+# Audit / handoff scratch. These are session artifacts, not source: one-off
+# fuzz+soak harnesses, their captured stdout, and the long-form audit write-ups
+# that drove a batch of fixes. The fixes and their regression tests live in
+# src/ and src/*/tests where a contributor can actually run them; keeping the
+# scratch out means `git clone` gives you the codebase, not somebody's session
+# log (which also carried absolute C:\Users\<name>\... paths). Archived outside
+# the repo on the machines that still want them.
+/CRASH_AUDIT.md
+/MAKER_AUDIT.md
+/audit_harness/
+/verify_theme_crash.py
+/*_HANDOFF.md
