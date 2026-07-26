@@ -60,9 +60,20 @@ class FullScreenToggle(QtWidgets.QToolButton):
         # The SVG icon colour is baked in at build time, so a live light/dark
         # theme switch would leave the glyph the old theme's colour. Rebuild it
         # (state preserved: _win set == currently fullscreen) on PaletteChange.
+        # Deferred by a tick: rasterising an SVG icon inside the PaletteChange
+        # handler re-enters the polish that delivered the event (same rule as
+        # ProjectExplorer._scheduleIconRefresh; see theme_utils.defer_restyle).
         if event.type() == QtCore.QEvent.Type.PaletteChange:
-            self._set_state(full=self._win is not None)
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._retint_icon)
         super().changeEvent(event)
+
+    def _retint_icon(self):
+        """Deferred icon rebuild; state preserved (_win set == fullscreen)."""
+        try:
+            self._set_state(full=self._win is not None)
+        except RuntimeError:
+            pass    # button torn down between the palette event and this tick
 
     def _resolve_host(self):
         """Walk up to the enclosing QDockWidget; the widget just beneath it is

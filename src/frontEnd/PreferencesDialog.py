@@ -59,13 +59,20 @@ class PreferencesDialog(QtWidgets.QDialog):
         renders the SVG at the theme color once).
         """
         super().changeEvent(event)
+        # Deferred by a tick: rasterising the SVG inside the handler re-enters
+        # the polish that delivered the event (theme_utils.defer_restyle).
         if event.type() == QtCore.QEvent.Type.PaletteChange \
                 and getattr(self, "_icon_label", None) is not None:
-            try:
-                from frontEnd.icon_paths import settings_icon
-                self._icon_label.setPixmap(settings_icon(28).pixmap(28, 28))
-            except Exception:
-                pass
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._retint_header_icon)
+
+    def _retint_header_icon(self):
+        """Deferred body of the PaletteChange branch of changeEvent."""
+        try:
+            from frontEnd.icon_paths import settings_icon
+            self._icon_label.setPixmap(settings_icon(28).pixmap(28, 28))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ build
     def _build_ui(self):

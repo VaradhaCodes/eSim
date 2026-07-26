@@ -291,11 +291,22 @@ class HdlEditor(QsciScintilla):
         # Re-theme the editor content when the app palette flips dark<->light
         # so the Verilog tabs track the Aurora theme live, matching the project
         # code editor. Guard on _mono: the event can arrive mid-construction.
+        # Deferred by a tick -- same reason as codeEditor.CodeEditor: the event
+        # is delivered from inside the app-wide repolish, and re-skinning the
+        # editor there re-enters the style walk (see theme_utils.defer_restyle).
         if (event.type() == QtCore.QEvent.Type.PaletteChange
                 and hasattr(self, "_mono")):
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._retheme_content)
+        super().changeEvent(event)
+
+    def _retheme_content(self):
+        """Deferred body of the PaletteChange branch of changeEvent."""
+        try:
             theme.apply(self, self._lexer, self._mono)
             self._blend_margins()
-        super().changeEvent(event)
+        except RuntimeError:
+            pass    # editor torn down between the palette event and this tick
 
     # -- QPlainTextEdit-compatible text accessors (keep call sites terse) --
     def toPlainText(self):

@@ -720,9 +720,14 @@ class EditorWindow(QtWidgets.QMainWindow):
         # The app palette flips dark<->light on a theme switch; repaint the
         # chrome so the floating editor tracks it live (the per-tab editors
         # re-theme themselves via their own changeEvent).
+        # Deferred by a tick: the event arrives from inside the app-wide
+        # repolish, and _apply_chrome_theme calls setStyleSheet -- re-entering
+        # the style engine mid-walk is the use-after-free window (see
+        # frontEnd.theme_utils.defer_restyle).
         if (event.type() == QtCore.QEvent.Type.PaletteChange
                 and not self._applying_theme):
-            self._apply_chrome_theme()
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._apply_chrome_theme)
         super().changeEvent(event)
 
     def resizeEvent(self, event):

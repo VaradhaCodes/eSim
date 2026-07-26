@@ -9,13 +9,14 @@ Constructing the widget at all exercises the loop, since __init__ calls
 apply_theme.
 """
 import os
+import time
 
 import numpy as np
 import pytest
 
 from matplotlib.colors import to_rgba
 
-from PyQt6.QtCore import QEvent
+from PyQt6.QtCore import QEvent, QEventLoop
 
 from ngspiceSimulation import plot_window as pw_mod
 from ngspiceSimulation._palette import _DARK_DEFAULTS, _LIGHT_DEFAULTS
@@ -34,6 +35,20 @@ def _write_tran_project(d: str, npts: int = 32, nnodes: int = 2) -> None:
         M = np.column_stack([np.arange(npts), t] + cols)
         np.savetxt(f, M, fmt=["%d"] + ["%.9g"] * (nnodes + 1), delimiter="\t")
     open(os.path.join(d, "plot_data_i.txt"), "w").close()
+
+
+def _repaint(qapp, plot_window, ms=250):
+    """Deliver a PaletteChange and let the DEFERRED restyle run.
+
+    The handler no longer re-themes inline: doing that from inside the app-wide
+    repolish re-entered Qt's style engine and was crashing eSim natively
+    (theme_utils.defer_restyle). The work is queued to the next event-loop tick
+    instead, so the tests have to turn the loop before asserting.
+    """
+    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    deadline = time.monotonic() + ms / 1000.0
+    while time.monotonic() < deadline:
+        qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
 
 
 @pytest.fixture
@@ -64,9 +79,56 @@ def test_palette_change_reapplies_theme_once(qapp, plot_window, monkeypatch):
         return orig(self)
 
     monkeypatch.setattr(plotWindow, "_apply_theme_impl", counting_impl)
-    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    _repaint(qapp, plot_window)
     assert calls["n"] == 1
     assert plot_window._applying_theme is False
+
+
+def test_palette_change_restyle_is_deferred(qapp, plot_window, monkeypatch):
+    """The native-crash fix: the restyle must NOT run inside the handler.
+
+    A PaletteChange is delivered from inside the app-wide repolish that
+    QApplication.setStyleSheet() runs. Re-theming there (our own setStyleSheet,
+    the nav toolbar's setPalette, a canvas redraw) re-enters Qt's style engine
+    while it is still walking a snapshot of the widget tree -- the window eSim
+    was dying in with a 0xC0000005 on a zoom change. The work has to land one
+    event-loop tick later instead.
+    """
+    calls = {"n": 0}
+    orig = plotWindow._apply_theme_impl
+
+    def counting_impl(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(plotWindow, "_apply_theme_impl", counting_impl)
+    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    assert calls["n"] == 0, "re-themed INSIDE the polish that delivered the event"
+
+    deadline = time.monotonic() + 0.25
+    while time.monotonic() < deadline:
+        qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
+    assert calls["n"] == 1, "deferred restyle never ran"
+
+
+def test_palette_change_storm_collapses_to_one_restyle(qapp, plot_window,
+                                                       monkeypatch):
+    """A burst of palette events (what holding the zoom pill produces) must
+    coalesce into a single restyle, not one repolish per event."""
+    calls = {"n": 0}
+    orig = plotWindow._apply_theme_impl
+
+    def counting_impl(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(plotWindow, "_apply_theme_impl", counting_impl)
+    for _ in range(8):
+        qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    deadline = time.monotonic() + 0.25
+    while time.monotonic() < deadline:
+        qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
+    assert calls["n"] == 1, f"8 palette events ran {calls['n']} restyles"
 
 
 def _render_with_grid(w):
@@ -93,7 +155,7 @@ def test_palette_change_rethemes_live_artists(qapp, plot_window, monkeypatch):
     # Flip the palette the widget will read on the next PaletteChange.
     dark = dict(_DARK_DEFAULTS)
     monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
-    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    _repaint(qapp, plot_window)
 
     gl = plot_window.fig.axes[0].get_xgridlines()[0]
     assert to_rgba(gl.get_color()) == to_rgba(dark["grid_color"])
@@ -155,12 +217,12 @@ def test_toggle_retints_toolbar_glyphs(qapp, plot_window, monkeypatch):
 
     dark = dict(_DARK_DEFAULTS)
     monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
-    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    _repaint(qapp, plot_window)
     assert _mean_glyph_lum(home.icon()) > 150, "dark theme glyph not light"
 
     light = dict(_LIGHT_DEFAULTS)
     monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: light)
-    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    _repaint(qapp, plot_window)
     assert _mean_glyph_lum(home.icon()) < 100, "light theme glyph not dark"
 
     # Figure-options button: _icon() needs the '.png' extension; extensionless
@@ -175,6 +237,6 @@ def test_light_first_then_dark_toolbar_visible(qapp, plot_window, monkeypatch):
     _render_with_grid(plot_window)
     dark = dict(_DARK_DEFAULTS)
     monkeypatch.setattr(pw_mod, "current_palette", lambda *a, **k: dark)
-    qapp.sendEvent(plot_window, QEvent(QEvent.Type.PaletteChange))
+    _repaint(qapp, plot_window)
     for name, act in plot_window.nav_toolbar._actions.items():
         assert not act.icon().isNull(), f"toolbar icon {name!r} went null"

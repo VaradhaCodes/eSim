@@ -266,10 +266,22 @@ class CodeEditor(QsciScintilla):
         # Re-theme the content (lexer colours, paper, gutter) when the app
         # palette flips dark<->light, so the editor tracks the Aurora theme
         # live. Guard on _mono: the event can arrive mid-construction.
+        # Deferred by a tick: this arrives from inside the app-wide repolish and
+        # theme.apply re-skins a QScintilla widget (paper, lexer colours, gutter)
+        # -- work that must not re-enter the style walk that delivered the event.
+        # See frontEnd.theme_utils.defer_restyle.
         if (event.type() == QtCore.QEvent.Type.PaletteChange
                 and hasattr(self, "_mono")):
-            theme.apply(self, self._lexer, self._mono)
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._retheme_content)
         super().changeEvent(event)
+
+    def _retheme_content(self):
+        """Deferred body of the PaletteChange branch of changeEvent."""
+        try:
+            theme.apply(self, self._lexer, self._mono)
+        except RuntimeError:
+            pass    # editor torn down between the palette event and this tick
 
     # ------------------------------------------------------------------
     # find highlighting (driven by the FindBar)

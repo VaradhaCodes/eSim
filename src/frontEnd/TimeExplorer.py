@@ -141,12 +141,19 @@ class TimeExplorer(QtWidgets.QWidget):
         the ProjectExplorer.changeEvent icon-refresh convention.
         """
         super().changeEvent(event)
+        # Deferred by a tick: rasterising the SVG inside the handler re-enters
+        # the polish that delivered the event (theme_utils.defer_restyle).
         if event.type() == QtCore.QEvent.Type.PaletteChange:
-            try:
-                from frontEnd.icon_paths import refresh_icon
-                self.refresh_btn.setIcon(refresh_icon())
-            except Exception:
-                pass
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._retint_refresh_icon)
+
+    def _retint_refresh_icon(self):
+        """Deferred body of the PaletteChange branch of changeEvent."""
+        try:
+            from frontEnd.icon_paths import refresh_icon
+            self.refresh_btn.setIcon(refresh_icon())
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ helpers
     def _active(self):

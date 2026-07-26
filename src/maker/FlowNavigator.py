@@ -315,8 +315,12 @@ class FlowNavigator(QtWidgets.QWidget):
 
     def changeEvent(self, event):
         super().changeEvent(event)
+        # Deferred by a tick: _apply_pill_theme calls setStyleSheet on the tab
+        # bar and every pill button, and this event is delivered from inside the
+        # app-wide repolish (see frontEnd.theme_utils.defer_restyle).
         if event.type() == QtCore.QEvent.Type.PaletteChange:
-            self._apply_pill_theme()
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._apply_pill_theme)
 
     # ------------------------------------------------------------------ #
     #  Mode + stage switching (lazy build + guard)

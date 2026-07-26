@@ -41,6 +41,36 @@ def current_theme_is_dark():
     return _CURRENT_DARK
 
 
+def defer_restyle(widget, slot, delay=0):
+    """Run a theme-driven restyle one event-loop tick LATER, never inline.
+
+    QApplication.setStyleSheet()/setPalette() repolish the whole app by walking
+    a snapshot of the widget tree and delivering PaletteChange/StyleChange to
+    every widget in it. A handler that restyles *inside* that walk -- calling
+    setStyleSheet or setPalette, re-rasterising an icon, redrawing a canvas --
+    re-enters Qt's style engine while the outer walk is still holding raw
+    pointers into that snapshot. That is how eSim was dying on a zoom change:
+    a 0xC0000005 (DEP/execute) fault on a freed C++ object, reached from inside
+    ``theme_utils._apply_theme_impl -> app.setStyleSheet``, with no Python
+    frame of its own to blame.
+
+    Deferring is visually identical (the tick runs before the next paint) and
+    touches only widgets that are still alive. The timer is parented to the
+    widget so it cannot outlive it, and restarting an already-pending timer
+    coalesces a storm of palette events into a single restyle.
+
+    Use this from every ``changeEvent`` that reacts to a palette/style change.
+    """
+    attr = "_esim_deferred_" + getattr(slot, "__name__", "restyle")
+    timer = getattr(widget, attr, None)
+    if timer is None:
+        timer = QtCore.QTimer(widget)
+        timer.setSingleShot(True)
+        timer.timeout.connect(slot)
+        setattr(widget, attr, timer)
+    timer.start(delay)
+
+
 def apply_titlebar_theme(window, is_dark=None):
     """Windows-only: color the native titlebar to match the active theme.
 
@@ -387,13 +417,25 @@ def _refresh_graphics_effects(app):
     for tlw in app.topLevelWidgets():
         try:
             targets = [tlw] + tlw.findChildren(QtWidgets.QWidget)
-            for w in targets:
+        except Exception:
+            continue
+        # Guard per WIDGET, not per window: toggling an effect repaints, and a
+        # repaint can retire a widget further down this snapshot. One dead entry
+        # used to abandon every remaining widget in that window, leaving their
+        # shadows stale for the rest of the session.
+        for w in targets:
+            try:
                 eff = w.graphicsEffect()
                 if eff is not None and eff.isEnabled():
                     eff.setEnabled(False)
                     eff.setEnabled(True)
+            except RuntimeError:
+                continue    # widget (or its effect) died mid-walk
+            except Exception:
+                continue
+        try:
             tlw.update()
-        except Exception:
+        except RuntimeError:
             pass
 
 

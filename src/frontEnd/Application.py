@@ -725,7 +725,7 @@ class Application(QtWidgets.QMainWindow):
 
     def change_zoom(self, delta):
         """Adjust the global UI zoom (50–300%); persists + re-applies theme."""
-        from frontEnd.theme_utils import get_preferences, apply_theme
+        from frontEnd.theme_utils import get_preferences
         prefs = get_preferences()
         current_zoom = prefs.get("zoom_level", 100)
         new_zoom = max(50, min(300, current_zoom + delta))
@@ -736,10 +736,43 @@ class Application(QtWidgets.QMainWindow):
                 paths.write_json_atomic(path, prefs)
             except Exception:
                 pass
+            # The readout is the part the user is watching, so it moves NOW.
             if hasattr(self, 'zoom_label'):
                 self.zoom_label.setText(f" {new_zoom}% ")
-            apply_theme(QtWidgets.QApplication.instance())
-            self._apply_view_control_metrics(new_zoom)
+            self._schedule_zoom_apply()
+
+    def _schedule_zoom_apply(self):
+        """Collapse a burst of zoom clicks into ONE app-wide restyle.
+
+        Every click used to run a full ``QApplication.setStyleSheet()`` repolish
+        synchronously, from inside the button's own ``clicked`` handler. Clicking
+        the pill repeatedly (or holding it) therefore stacked repolish on
+        repolish: each new one re-entered Qt's style engine while the previous
+        one's deferred work -- the graphics-effect refresh, the palette-change
+        handlers, the queued repaints -- was still in flight, and every widget
+        pointer the outer pass was still holding could be freed under it. That
+        window is where eSim was crashing (0xC0000005 inside setStyleSheet, no
+        Python frame to blame; ~/.esim/crash.log 2026-07-25 session).
+
+        The zoom label already updated, so the control still feels instant; the
+        expensive part lands once, shortly after the last click. Timer is
+        parented to the window, so it dies with it.
+        """
+        timer = getattr(self, '_zoom_apply_timer', None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(90)
+            timer.timeout.connect(self._apply_zoom_now)
+            self._zoom_apply_timer = timer
+        timer.start()
+
+    def _apply_zoom_now(self):
+        """Trailing edge of _schedule_zoom_apply: restyle at the settled zoom."""
+        from frontEnd.theme_utils import get_preferences, apply_theme
+        zoom_level = get_preferences().get("zoom_level", 100)
+        apply_theme(QtWidgets.QApplication.instance())
+        self._apply_view_control_metrics(zoom_level)
 
     def _apply_view_control_metrics(self, zoom_level):
         """Scale every toolbar size that the QSS cannot reach.

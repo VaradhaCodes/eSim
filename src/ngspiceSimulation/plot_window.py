@@ -1530,21 +1530,40 @@ class plotWindow(QWidget, _PaneMixin, _CursorMixin, _FuncTraceMixin, _RenderMixi
             self.updateGeometry()
         elif (event.type() == QtCore.QEvent.Type.PaletteChange
               and not self._applying_theme):
-            # Live light/dark toggle while a plot is open: rebuild the palette
-            # and re-skin the chrome + matplotlib facecolors in place. Trace
-            # colors are data (VIBRANT_COLOR_PALETTE) and stay put; we avoid a
-            # full refresh_plot so the user's current view isn't reset.
-            # Guarded by _applying_theme: setStyleSheet() inside apply_theme
-            # fires its own PaletteChange, which must not re-enter here.
-            try:
-                self._palette = current_palette(QtWidgets.QApplication.instance())
-                self._setup_matplotlib_style()
-                self.apply_theme()
-            except Exception:
-                # Never let a re-theme failure escape into Qt's event dispatch
-                # (it would surface as an unhandled-exception dialog mid-toggle),
-                # but log it so future staleness isn't silent.
-                logger.exception("Plot re-theme on PaletteChange failed")
+            # Live light/dark toggle (or a zoom change) while a plot is open:
+            # rebuild the palette and re-skin the chrome + matplotlib facecolors
+            # in place. Trace colors are data (VIBRANT_COLOR_PALETTE) and stay
+            # put; we avoid a full refresh_plot so the user's current view isn't
+            # reset. Guarded by _applying_theme: setStyleSheet() inside
+            # apply_theme fires its own PaletteChange, which must not re-enter.
+            #
+            # DEFERRED, never inline: this event is delivered from inside the
+            # app-wide repolish that QApplication.setStyleSheet() is running.
+            # Doing the work here re-entered Qt's style engine mid-walk (our
+            # own setStyleSheet + the nav toolbar's setPalette + a canvas
+            # redraw), which is the crash window -- see theme_utils.defer_restyle.
+            from frontEnd.theme_utils import defer_restyle
+            defer_restyle(self, self._retheme_on_palette_change)
+
+    def _retheme_on_palette_change(self) -> None:
+        """Deferred body of the PaletteChange branch of :meth:`changeEvent`.
+
+        Runs one event-loop tick after the app-wide repolish that triggered it,
+        so every widget it touches is guaranteed to still be alive and Qt is no
+        longer walking the widget tree.
+        """
+        try:
+            self._palette = current_palette(QtWidgets.QApplication.instance())
+            self._setup_matplotlib_style()
+            self.apply_theme()
+        except RuntimeError:
+            # Window torn down between the palette event and this tick.
+            pass
+        except Exception:
+            # Never let a re-theme failure escape into Qt's event dispatch
+            # (it would surface as an unhandled-exception dialog mid-toggle),
+            # but log it so future staleness isn't silent.
+            logger.exception("Plot re-theme on PaletteChange failed")
 
     def sizeHint(self) -> QtCore.QSize:
         em = self._em
