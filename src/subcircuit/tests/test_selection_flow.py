@@ -101,9 +101,11 @@ def test_convert_rebuilds_the_subcircuit_that_edit_opened(tmp_path):
 
     dock = FakeDock()
     _convert(dock)
-    netlist, kind, _kw = dock.calls[0]
+    netlist, kind, kw = dock.calls[0]
     assert os.path.basename(netlist) == 'half_adder.cir'
     assert kind == 'sub'
+    # ... and the converter tab is named for the subcircuit, not the project.
+    assert kw['label'] == 'half_adder'
 
 
 def test_folder_name_match_still_converts_silently(tmp_path):

@@ -838,13 +838,19 @@ class DockArea(QtWidgets.QMainWindow):
                 pass
 
     def kicadToNgspiceEditor(self, clarg1, clarg2=None,
-                             projDir=None, projName=None):
+                             projDir=None, projName=None, label=None):
         """
         This function is creating Editor UI for Kicad to Ngspice conversion.
 
         ``projDir``/``projName`` carry the project CAPTURED when a background
         netlist export began (see Kicad.openKicadToNgspice). Synchronous callers
         (subcircuit convert) pass neither and fall back to the live project.
+
+        ``label`` names the tab when what is being converted is not the project
+        itself. A subcircuit conversion belongs to the open project for cleanup
+        purposes -- closing the project must still reap the tab -- but the tab
+        has to say which *subcircuit* it is rebuilding, or the user is looking
+        at a converter titled after a circuit it will not touch.
         """
 
         from kicadtoNgspice.KicadtoNgspice import MainWindow
@@ -864,7 +870,7 @@ class DockArea(QtWidgets.QMainWindow):
             return
         if projName is None:
             projName = os.path.basename(projDir)
-        dockName = f'Netlist-{projName}-'
+        dockName = f'Netlist-{label or projName}-'
 
         self.kicadToNgspiceWidget = QtWidgets.QWidget()
         self.kicadToNgspiceLayout = QtWidgets.QVBoxLayout()

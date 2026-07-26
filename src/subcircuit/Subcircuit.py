@@ -1,3 +1,5 @@
+import os
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration.Appconfig import Appconfig
 from configuration import Dialogs
@@ -21,8 +23,16 @@ class Subcircuit(QtWidgets.QWidget):
     """
 
     def __init__(self, parent=None):
+        # ONE initialiser. This used to call super().__init__() and then
+        # QtWidgets.QWidget.__init__(self) again: on PyQt the second call
+        # constructs a FRESH C++ QWidget and rebinds this Python wrapper to it,
+        # abandoning the first one. The orphan stays registered as a top-level
+        # widget with no live owner, so every open of the Subcircuit tab left
+        # one behind -- and anything that walks
+        # QApplication.topLevelWidgets() (theme repolish, and _app_teardown at
+        # exit, which calls findChildren on each) eventually touches freed
+        # memory. That is an 0xc0000005 with no Python traceback.
         super(Subcircuit, self).__init__()
-        QtWidgets.QWidget.__init__(self)
         self.obj_appconfig = Appconfig()
         self.obj_validation = Validation()
         self.obj_dockarea = parent
@@ -50,6 +60,19 @@ class Subcircuit(QtWidgets.QWidget):
         subtitle.setProperty("cssClass", "muted")
         subtitle.setWordWrap(True)
         col.addWidget(subtitle)
+
+        # ── Selection strip ──────────────────────────────────────────────
+        # Which subcircuit the next Convert will rebuild. Before this existed
+        # the panel showed nothing at all: the only name on screen belonged to
+        # the open *project*, which the Subcircuit Builder never touches, so
+        # there was no way to tell what Convert was about to act on -- or that
+        # anything was selected at all.
+        self.selection_label = QtWidgets.QLabel()
+        self.selection_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.selection_label.setWordWrap(True)
+        self.selection_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        col.addWidget(self.selection_label)
 
         # ── Action tiles ─────────────────────────────────────────────────
         # Each tile is a real button with two lines of its own: a bold action
@@ -156,8 +179,11 @@ class Subcircuit(QtWidgets.QWidget):
             '<b>To convert Subcircuit Kicad Netlist to Ngspice Netlist</b>',
             self.convertsch)
         self.uploadbtn = _tile(
-            "Upload", "Import an existing subcircuit file",
-            '<b>To Upload a subcircuit</b>', self.uploadSub)
+            "Upload", "Import a .sub you already have",
+            '<b>Add an existing .sub file to the eSim Subcircuit Library</b>'
+            '<br/>No schematic is drawn and nothing is converted -- use this '
+            'for a model you wrote by hand or received from someone else.',
+            self.uploadSub)
 
         schematic_group = QtWidgets.QGroupBox("Schematic")
         schematic_group.setProperty("cssClass", "themedGroupBox")
@@ -226,6 +252,71 @@ class Subcircuit(QtWidgets.QWidget):
         col.addLayout(body)
         col.addStretch(1)
 
+        # Selection is per-panel, not per-application. Appconfig keeps it in a
+        # CLASS attribute shared by every instance, so two projects each with a
+        # Subcircuit tab open used to share one selection: work in project A,
+        # switch to B, hit Convert, and B's panel rebuilt A's subcircuit. The
+        # panel owns its own selection and re-asserts it whenever it is the one
+        # on screen (see showEvent).
+        self._folder = None
+        self._stem = None
+        self._adopt_existing_selection()
+        self._refresh_selection()
+
+    # -- selection ----------------------------------------------------------
+
+    def _adopt_existing_selection(self):
+        """Inherit a selection made before this panel existed.
+
+        Keeps a reopened tab (and any code path that set the selection without
+        going through this widget) showing what is actually active instead of
+        claiming nothing is selected.
+        """
+        folder = self.obj_appconfig.current_subcircuit.get("SubcircuitName")
+        if folder and os.path.isdir(str(folder)):
+            self._folder = folder
+            self._stem = self.obj_appconfig.get_subcircuit_stem()
+
+    def _select(self, folder, stem):
+        """Record the subcircuit this panel is working on."""
+        self._folder = folder
+        self._stem = stem
+        self.obj_appconfig.set_current_subcircuit(folder, stem)
+        self._refresh_selection()
+
+    def _refresh_selection(self):
+        """Repaint the selection strip and gate Convert on having a target."""
+        if self._folder and self._stem:
+            self.selection_label.setText(
+                "Working on <b>%s</b> &nbsp;<span>%s</span>"
+                % (self._stem, self._folder))
+        else:
+            self.selection_label.setText(
+                "<i>No subcircuit selected — start one with <b>New</b>, "
+                "or open an existing one with <b>Edit</b>.</i>")
+        ready = bool(self._folder and self._stem)
+        self.convertbtn.setEnabled(ready)
+        self.convertbtn.setToolTip(
+            '<b>To convert Subcircuit Kicad Netlist to Ngspice Netlist</b>'
+            if ready else
+            '<b>Select a subcircuit first</b><br/>Use <b>New</b> or '
+            '<b>Edit</b>; Convert then rebuilds that subcircuit&#39;s '
+            '<code>.sub</code> model.')
+
+    def showEvent(self, event):
+        """Make the visible panel's selection the active one.
+
+        Subcircuit tabs are per project and tabbed together with everything
+        else; raising one has to hand the shared selection back to it, or
+        Convert would act on whatever another tab last touched.
+        """
+        super(Subcircuit, self).showEvent(event)
+        if self._folder and self._stem:
+            self.obj_appconfig.set_current_subcircuit(
+                self._folder, self._stem)
+        self._refresh_selection()
+
+    # -- actions ------------------------------------------------------------
 
     def newsch(self):
         text, ok = QtWidgets.QInputDialog.getText(
@@ -243,13 +334,16 @@ class Subcircuit(QtWidgets.QWidget):
             self.schematic_name = (str(text))
             self.subcircuit = NewSub()
             self.subcircuit.createSubcircuit(self.schematic_name)
+            self._sync_from_appconfig()
 
         else:
             print("Sub circuit creation cancelled")
 
     def editsch(self):
         self.obj_opensubcircuit = openSub()
-        self.obj_opensubcircuit.body()
+        stem = self.obj_opensubcircuit.body()
+        if stem:
+            self._select(self.obj_opensubcircuit.editfile, stem)
 
     def convertsch(self):
         self.obj_convertsubcircuit = convertSub(self.obj_dockarea)
@@ -258,3 +352,16 @@ class Subcircuit(QtWidgets.QWidget):
     def uploadSub(self):
         self.obj_uploadsubcircuit = UploadSub()
         self.obj_uploadsubcircuit.upload()
+
+    def _sync_from_appconfig(self):
+        """Adopt whatever the helper widget just selected.
+
+        New/Edit run in their own objects and record the selection through
+        Appconfig; this pulls it back so the panel's own copy -- the one
+        showEvent re-asserts -- cannot drift from it.
+        """
+        folder = self.obj_appconfig.current_subcircuit.get("SubcircuitName")
+        if folder and folder != self._folder:
+            self._folder = folder
+            self._stem = self.obj_appconfig.get_subcircuit_stem()
+        self._refresh_selection()

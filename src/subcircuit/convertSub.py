@@ -60,8 +60,12 @@ class convertSub(QtWidgets.QWidget):
 
         self.projName = stem
         self.project = os.path.join(self.projDir, str(stem))
+        # Registered under the open project so Close Project reaps the tab,
+        # but LABELLED with the subcircuit, which is what it actually rebuilds.
+        self.obj_appconfig.print_info(
+            'Converting subcircuit ' + str(stem))
         self.obj_dockarea.kicadToNgspiceEditor(
-            netlist_path(self.projDir, stem), "sub")
+            netlist_path(self.projDir, stem), "sub", label=str(stem))
 
     def _error(self, message):
         """Show a modal converter error and mirror it into the eSim log."""
