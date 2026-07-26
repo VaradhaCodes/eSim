@@ -107,9 +107,15 @@ class ProjectExplorer(QtWidgets.QWidget):
         self.loadProjects()
         self._vbox.addWidget(self.treewidget)
         # Static elevation (e2) so the project tree reads as a raised panel.
+        # Backdrop, not elevate(): a QGraphicsEffect on the tree itself would
+        # render every project name through an offscreen ARGB buffer and cost
+        # the whole panel its subpixel antialiasing.
         try:
-            from frontEnd.elevation import elevate
-            elevate(self.treewidget, "e2")
+            from frontEnd.elevation import elevate_backdrop
+            # 14 == the QTreeWidget border-radius in both sheets. A square
+            # backdrop behind a rounded tree shows its corners sticking out
+            # past the curve as four hard tabs.
+            elevate_backdrop(self.treewidget, "e2", radius=14)
         except Exception:
             pass
         self.fs_watcher.directoryChanged.connect(self.handleDirectoryChanged)

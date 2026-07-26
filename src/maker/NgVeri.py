@@ -31,6 +31,7 @@
 from PyQt6 import QtCore, QtWidgets
 from configuration import Dialogs
 from configuration import paths
+from frontEnd.theme_utils import zoom_px, on_zoom_changed
 from . import Maker
 from . import ModelGeneration
 from . import createkicad
@@ -1092,7 +1093,13 @@ class NgVeri(QtWidgets.QWidget):
 
         controls_box = QtWidgets.QWidget()
         controls_box.setLayout(controls)
-        controls_box.setFixedWidth(210)
+        # The buttons in this column ("Add Project", "Remove Models", ...) take
+        # their padding and font from the QSS, which scales with zoom -- so the
+        # column that holds them has to as well, or their labels outgrow it.
+        # Registered rather than set once: this panel outlives a zoom change.
+        on_zoom_changed(
+            controls_box,
+            lambda z, w=controls_box: w.setFixedWidth(zoom_px(210, z)))
         self.trgrid.addWidget(
             controls_box, 0, 1, QtCore.Qt.AlignmentFlag.AlignTop)
 

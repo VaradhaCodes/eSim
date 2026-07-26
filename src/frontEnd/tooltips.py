@@ -72,7 +72,8 @@ class AuroraToolTip(QtWidgets.QWidget):
         self._label = QtWidgets.QLabel(self._card)
         self._label.setTextFormat(QtCore.Qt.TextFormat.AutoText)
         self._label.setWordWrap(True)
-        self._label.setMaximumWidth(380)
+        from frontEnd.theme_utils import zoom_px
+        self._label.setMaximumWidth(zoom_px(380))
 
         card_lay = QtWidgets.QVBoxLayout(self._card)
         card_lay.setContentsMargins(13, 9, 13, 10)

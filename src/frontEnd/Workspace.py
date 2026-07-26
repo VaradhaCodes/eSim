@@ -47,7 +47,8 @@ class Workspace(QtWidgets.QDialog):
     def init_ui(self):
         self.setWindowTitle('Choose your workspace')
         self.setModal(True)
-        self.setMinimumWidth(520)
+        from frontEnd.theme_utils import zoom_px
+        self.setMinimumWidth(zoom_px(520))
 
         # On first run this picker is the ONLY visible window (the main
         # window is built hidden, the splash is already closed). Since Qt 6.3

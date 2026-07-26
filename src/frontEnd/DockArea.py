@@ -590,8 +590,9 @@ class DockArea(QtWidgets.QMainWindow):
         source_layout = QHBoxLayout(source_group)
         source_layout.setSpacing(10)
 
+        from frontEnd.theme_utils import zoom_px
         file_path_text_box = QLineEdit()
-        file_path_text_box.setMinimumHeight(38)
+        file_path_text_box.setMinimumHeight(zoom_px(38))
         file_path_text_box.setClearButtonEnabled(True)
         file_path_text_box.setPlaceholderText(
             "Choose a PSpice (.sch, .lib) or LTspice (.asc, .asy) file…"
@@ -604,7 +605,7 @@ class DockArea(QtWidgets.QMainWindow):
 
         browse_button = QPushButton("Browse…")
         browse_button.setProperty("cssClass", "primary")
-        browse_button.setMinimumHeight(38)
+        browse_button.setMinimumHeight(zoom_px(38))
         browse_button.clicked.connect(
             lambda: browse_path(self, file_path_text_box))
         source_layout.addWidget(browse_button, 0)
@@ -619,7 +620,7 @@ class DockArea(QtWidgets.QMainWindow):
         # a cramped row.
         def _convert_btn(text, handler):
             btn = QPushButton(text)
-            btn.setMinimumHeight(64)
+            btn.setMinimumHeight(zoom_px(64))
             btn.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Expanding,

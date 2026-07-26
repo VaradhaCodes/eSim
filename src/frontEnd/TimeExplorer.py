@@ -128,8 +128,9 @@ class TimeExplorer(QtWidgets.QWidget):
 
         # Floor that keeps button labels from clipping when the panel/dock is
         # dragged small.
-        self.setMinimumWidth(300)
-        self.setMinimumHeight(360)
+        from frontEnd.theme_utils import zoom_px
+        self.setMinimumWidth(zoom_px(300))
+        self.setMinimumHeight(zoom_px(360))
 
     def changeEvent(self, event):
         """Re-tint the refresh icon on a live light/dark toggle.

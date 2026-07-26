@@ -61,20 +61,29 @@ class Subcircuit(QtWidgets.QWidget):
         # default-font height while painting the bigger font — clipping
         # descenders (g/p/y) and overlapping the caption. setFont keeps metrics
         # and paint in sync.
+        # 16px/12px are the design sizes at 100% zoom; the padding below is in
+        # design pixels too. Both go through theme_utils so the tiles zoom with
+        # the rest of the UI -- and because the height is derived from the
+        # scaled font metrics, the box grows to fit the text rather than
+        # clipping it.
+        from frontEnd.theme_utils import scale_font_px, zoom_px
+
         title_font = QtGui.QFont()
-        title_font.setPixelSize(16)
+        title_font.setPixelSize(scale_font_px(16))
         title_font.setWeight(QtGui.QFont.Weight.DemiBold)
         cap_font = QtGui.QFont()
-        cap_font.setPixelSize(12)
+        cap_font.setPixelSize(scale_font_px(12))
 
         # A QPushButton ignores its child layout when computing its own height,
         # so a hardcoded minHeight is fragile: the real app's QSS adds more
         # button padding than a bare stylesheet, and the caption's bottom gets
         # clipped. Derive the height from the actual font metrics plus generous
         # slack for whatever padding/border the theme applies.
-        _top_pad, _bot_pad, _gap = 14, 14, 4
+        _top_pad = _bot_pad = zoom_px(14)
+        _gap = zoom_px(4)
+        _side_pad = zoom_px(18)
         _tile_min_h = (
-            _top_pad + _bot_pad + _gap + 16
+            _top_pad + _bot_pad + _gap + zoom_px(16)
             + QtGui.QFontMetrics(title_font).height()
             + QtGui.QFontMetrics(cap_font).height()
         )
@@ -96,7 +105,7 @@ class Subcircuit(QtWidgets.QWidget):
             btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
 
             inner = QtWidgets.QVBoxLayout(btn)
-            inner.setContentsMargins(18, _top_pad, 18, _bot_pad)
+            inner.setContentsMargins(_side_pad, _top_pad, _side_pad, _bot_pad)
             inner.setSpacing(_gap)
 
             title_lbl = QtWidgets.QLabel(title)

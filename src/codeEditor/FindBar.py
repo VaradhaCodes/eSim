@@ -51,17 +51,20 @@ class FindBar(QtWidgets.QFrame):
         self._expand.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self._expand.toggled.connect(self._set_replace_visible)
 
+        # Field widths are design pixels; zoom_px keeps them in step with the
+        # font the QSS grows, so the bar does not squeeze its own inputs.
+        from frontEnd.theme_utils import zoom_px
         self._find_edit = QtWidgets.QLineEdit()
         self._find_edit.setPlaceholderText("Find")
         self._find_edit.setClearButtonEnabled(True)
-        self._find_edit.setMinimumWidth(240)
+        self._find_edit.setMinimumWidth(zoom_px(240))
         self._find_edit.textChanged.connect(self._search_timer.start)
         # Enter = next, Shift+Enter = previous (VS Code).
         self._find_edit.returnPressed.connect(self._on_find_return)
 
         self._count = QtWidgets.QLabel("")
         self._count.setObjectName("findCount")
-        self._count.setMinimumWidth(80)
+        self._count.setMinimumWidth(zoom_px(80))
         self._count.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignRight
             | QtCore.Qt.AlignmentFlag.AlignVCenter)
@@ -81,7 +84,7 @@ class FindBar(QtWidgets.QFrame):
         self._replace_edit = QtWidgets.QLineEdit()
         self._replace_edit.setPlaceholderText("Replace")
         self._replace_edit.setClearButtonEnabled(True)
-        self._replace_edit.setMinimumWidth(240)
+        self._replace_edit.setMinimumWidth(zoom_px(240))
         # Enter = replace this match, Ctrl+Enter = replace all (VS Code).
         self._replace_edit.returnPressed.connect(self._on_replace_return)
         self._rep_btn = QtWidgets.QPushButton("Replace")

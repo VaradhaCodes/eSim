@@ -769,10 +769,16 @@ class Application(QtWidgets.QMainWindow):
 
     def _apply_zoom_now(self):
         """Trailing edge of _schedule_zoom_apply: restyle at the settled zoom."""
-        from frontEnd.theme_utils import get_preferences, apply_theme
+        from frontEnd.theme_utils import (get_preferences, apply_theme,
+                                          reapply_zoom_metrics)
         zoom_level = get_preferences().get("zoom_level", 100)
         apply_theme(QtWidgets.QApplication.instance())
         self._apply_view_control_metrics(zoom_level)
+        # Python-set sizes elsewhere in the app (panel widths, tile heights)
+        # were measured at the zoom in force when their surface was built.
+        # Re-measure the long-lived ones now that the sheet has settled, so
+        # they do not stay frozen while the QSS metrics around them move.
+        reapply_zoom_metrics(zoom_level)
 
     def _apply_view_control_metrics(self, zoom_level):
         """Scale every toolbar size that the QSS cannot reach.

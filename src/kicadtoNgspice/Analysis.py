@@ -3,6 +3,7 @@ from . import TrackWidget
 import os
 from projManagement.projectPaths import previous_values_path
 from xml.etree import ElementTree as ET
+from frontEnd.theme_utils import zoom_px
 
 
 class Analysis(QtWidgets.QWidget):
@@ -266,15 +267,15 @@ class Analysis(QtWidgets.QWidget):
         self.count = 0
         self.ac_entry_var[self.count] = QtWidgets.QLineEdit()  # start
         self.acgrid.addWidget(self.ac_entry_var[self.count], 2, 1)
-        self.ac_entry_var[self.count].setMaximumWidth(150)
+        self.ac_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count = self.count + 1
         self.ac_entry_var[self.count] = QtWidgets.QLineEdit()  # stop
         self.acgrid.addWidget(self.ac_entry_var[self.count], 3, 1)
-        self.ac_entry_var[self.count].setMaximumWidth(150)
+        self.ac_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count = self.count + 1
         self.ac_entry_var[self.count] = QtWidgets.QLineEdit()  # no of pts
         self.acgrid.addWidget(self.ac_entry_var[self.count], 4, 1)
-        self.ac_entry_var[self.count].setMaximumWidth(150)
+        self.ac_entry_var[self.count].setMaximumWidth(zoom_px(150))
 
         self.parameter_cnt = 0
         self.start_fre_combo = QtWidgets.QComboBox()
@@ -283,7 +284,7 @@ class Analysis(QtWidgets.QWidget):
         self.start_fre_combo.addItem("Meg")
         self.start_fre_combo.addItem("GHz")
         self.start_fre_combo.addItem("THz")
-        self.start_fre_combo.setMaximumWidth(150)
+        self.start_fre_combo.setMaximumWidth(zoom_px(150))
         self.acgrid.addWidget(self.start_fre_combo, 2, 2)
         self.ac_parameter[0] = "Hz"
 
@@ -303,7 +304,7 @@ class Analysis(QtWidgets.QWidget):
         self.stop_fre_combo.addItem("Meg")
         self.stop_fre_combo.addItem("GHz")
         self.stop_fre_combo.addItem("THz")
-        self.stop_fre_combo.setMaximumWidth(150)
+        self.stop_fre_combo.setMaximumWidth(zoom_px(150))
         self.acgrid.addWidget(self.stop_fre_combo, 3, 2)
         self.ac_parameter[1] = "Hz"
 
@@ -424,22 +425,22 @@ class Analysis(QtWidgets.QWidget):
         self.dcbox.setLayout(self.dcgrid)
 
         self.source_name = QtWidgets.QLabel('Enter Source 1', self)
-        self.source_name.setMaximumWidth(150)
+        self.source_name.setMaximumWidth(zoom_px(150))
         self.start = QtWidgets.QLabel('Start', self)
-        self.start.setMaximumWidth(150)
+        self.start.setMaximumWidth(zoom_px(150))
         self.increment = QtWidgets.QLabel('Increment', self)
-        self.increment.setMaximumWidth(150)
+        self.increment.setMaximumWidth(zoom_px(150))
         self.stop = QtWidgets.QLabel('Stop', self)
-        self.stop.setMaximumWidth(150)
+        self.stop.setMaximumWidth(zoom_px(150))
 
         self.source_name2 = QtWidgets.QLabel('Enter Source 2', self)
-        self.source_name2.setMaximumWidth(150)
+        self.source_name2.setMaximumWidth(zoom_px(150))
         self.start2 = QtWidgets.QLabel('Start', self)
-        self.start2.setMaximumWidth(150)
+        self.start2.setMaximumWidth(zoom_px(150))
         self.increment2 = QtWidgets.QLabel('Increment', self)
-        self.increment2.setMaximumWidth(150)
+        self.increment2.setMaximumWidth(zoom_px(150))
         self.stop2 = QtWidgets.QLabel('Stop', self)
-        self.stop2.setMaximumWidth(150)
+        self.stop2.setMaximumWidth(zoom_px(150))
 
         self.dcgrid.addWidget(self.source_name, 1, 0)
         self.dcgrid.addWidget(self.start, 2, 0)
@@ -455,46 +456,46 @@ class Analysis(QtWidgets.QWidget):
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # source
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 1, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # start
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 2, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # increment
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 3, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # stop
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 4, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # source
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 5, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # start
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 6, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # increment
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 7, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.dc_entry_var[self.count] = QtWidgets.QLineEdit()  # stop
         self.dcgrid.addWidget(self.dc_entry_var[self.count], 8, 1)
-        self.dc_entry_var[self.count].setMaximumWidth(150)
+        self.dc_entry_var[self.count].setMaximumWidth(zoom_px(150))
 
         self.parameter_cnt = 0
         self.start_combo = QtWidgets.QComboBox(self)
-        self.start_combo.setMaximumWidth(150)
+        self.start_combo.setMaximumWidth(zoom_px(150))
         self.start_combo.addItem('Volts or Amperes')
         self.start_combo.addItem('mV or mA')
         self.start_combo.addItem('uV or uA')
@@ -511,7 +512,7 @@ class Analysis(QtWidgets.QWidget):
         self.parameter_cnt += 1
 
         self.increment_combo = QtWidgets.QComboBox(self)
-        self.increment_combo.setMaximumWidth(150)
+        self.increment_combo.setMaximumWidth(zoom_px(150))
         self.increment_combo.addItem("Volts or Amperes")
         self.increment_combo.addItem("mV or mA")
         self.increment_combo.addItem("uV or uA")
@@ -528,7 +529,7 @@ class Analysis(QtWidgets.QWidget):
         self.parameter_cnt += 1
 
         self.stop_combo = QtWidgets.QComboBox(self)
-        self.stop_combo.setMaximumWidth(150)
+        self.stop_combo.setMaximumWidth(zoom_px(150))
         self.stop_combo.addItem("Volts or Amperes")
         self.stop_combo.addItem("mV or mA")
         self.stop_combo.addItem("uV or uA")
@@ -545,7 +546,7 @@ class Analysis(QtWidgets.QWidget):
         self.parameter_cnt += 1
 
         self.start_combo2 = QtWidgets.QComboBox(self)
-        self.start_combo2.setMaximumWidth(150)
+        self.start_combo2.setMaximumWidth(zoom_px(150))
         self.start_combo2.addItem('Volts or Amperes')
         self.start_combo2.addItem('mV or mA')
         self.start_combo2.addItem('uV or uA')
@@ -562,7 +563,7 @@ class Analysis(QtWidgets.QWidget):
         self.parameter_cnt += 1
 
         self.increment_combo2 = QtWidgets.QComboBox(self)
-        self.increment_combo2.setMaximumWidth(150)
+        self.increment_combo2.setMaximumWidth(zoom_px(150))
         self.increment_combo2.addItem("Volts or Amperes")
         self.increment_combo2.addItem("mV or mA")
         self.increment_combo2.addItem("uV or uA")
@@ -580,7 +581,7 @@ class Analysis(QtWidgets.QWidget):
         self.parameter_cnt += 1
 
         self.stop_combo2 = QtWidgets.QComboBox(self)
-        self.stop_combo2.setMaximumWidth(150)
+        self.stop_combo2.setMaximumWidth(zoom_px(150))
         self.stop_combo2.addItem("Volts or Amperes")
         self.stop_combo2.addItem("mV or mA")
         self.stop_combo2.addItem("uV or uA")
@@ -737,15 +738,15 @@ class Analysis(QtWidgets.QWidget):
 
         self.tran_entry_var[self.count] = QtWidgets.QLineEdit()
         self.trgrid.addWidget(self.tran_entry_var[self.count], 1, 1)
-        self.tran_entry_var[self.count].setMaximumWidth(150)
+        self.tran_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
         self.tran_entry_var[self.count] = QtWidgets.QLineEdit()
         self.trgrid.addWidget(self.tran_entry_var[self.count], 2, 1)
-        self.tran_entry_var[self.count].setMaximumWidth(150)
+        self.tran_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
         self.tran_entry_var[self.count] = QtWidgets.QLineEdit()
         self.trgrid.addWidget(self.tran_entry_var[self.count], 3, 1)
-        self.tran_entry_var[self.count].setMaximumWidth(150)
+        self.tran_entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.count += 1
 
         self.parameter_cnt = 0

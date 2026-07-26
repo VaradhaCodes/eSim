@@ -136,6 +136,8 @@ def _about_palette(parent):
 def _logo_chip(icon_path, c, size=76, logo_px=48):
     """Bronze eSim coin inside a clean neutral rounded chip so its warm tone
     reads cleanly on any theme — fixes the coin-on-cyan clash + opaque band."""
+    from frontEnd.theme_utils import zoom_px
+    size, logo_px = zoom_px(size), zoom_px(logo_px)
     chip = QtWidgets.QLabel()
     chip.setFixedSize(size, size)
     chip.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -181,12 +183,17 @@ def _about_header(icon_path, c, rounded=False):
     chip = _logo_chip(icon_path, c)
     body.addWidget(chip, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
 
+    # Sizes here are *design* sizes at 100%; scale_font takes them through the
+    # same text curve the stylesheet uses, so the About card zooms with the
+    # rest of the UI instead of staying frozen at 22pt/9pt.
+    from frontEnd.theme_utils import scale_font
+
     title = QtWidgets.QLabel("eSim")
     title.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
     tf = title.font()
     tf.setPointSize(22)
     tf.setWeight(QtGui.QFont.Weight.Black)
-    title.setFont(tf)
+    title.setFont(scale_font(tf))
     title.setStyleSheet(f"color: {c['title']}; background: transparent;")
     body.addWidget(title)
 
@@ -194,7 +201,7 @@ def _about_header(icon_path, c, rounded=False):
     tagline.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
     gf = tagline.font()
     gf.setPointSize(9)
-    tagline.setFont(gf)
+    tagline.setFont(scale_font(gf))
     tagline.setStyleSheet(f"color: {c['muted']}; background: transparent;")
     body.addWidget(tagline)
 
@@ -205,9 +212,12 @@ def _about_header(icon_path, c, rounded=False):
 def show_about_dialog(parent):
     """About eSim — a calm, on-brand card: neutral logo chip, quiet accent
     header (no loud gradient), correct version, product blurb and credits."""
+    from frontEnd.theme_utils import zoom_px
     dlg = QtWidgets.QDialog(parent)
     dlg.setWindowTitle("About eSim")
-    dlg.setFixedSize(440, 500)
+    # A *fixed* size has to move with zoom or the card simply crops its own
+    # contents at anything above 100%.
+    dlg.setFixedSize(zoom_px(440), zoom_px(500))
     dlg.setObjectName("aboutDialog")
 
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -283,7 +293,7 @@ def show_about_dialog(parent):
     btn_row.addStretch()
     close_btn = QtWidgets.QPushButton("Close")
     close_btn.setProperty("cssClass", "secondary")
-    close_btn.setFixedWidth(100)
+    close_btn.setFixedWidth(zoom_px(100))
     close_btn.clicked.connect(dlg.accept)
     btn_row.addWidget(close_btn)
     content_layout.addLayout(btn_row)

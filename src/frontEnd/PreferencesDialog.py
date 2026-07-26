@@ -115,7 +115,9 @@ class PreferencesDialog(QtWidgets.QDialog):
         body.setSpacing(14)
         self.nav = QtWidgets.QListWidget()
         self.nav.setObjectName('prefsNav')
-        self.nav.setFixedWidth(150)
+        # Fixed width + a font that grows with zoom = clipped category names.
+        from frontEnd.theme_utils import zoom_px
+        self.nav.setFixedWidth(zoom_px(150))
         self.nav.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         for label in ("General", "About"):
             QtWidgets.QListWidgetItem(label, self.nav)
@@ -201,6 +203,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         ]:
             self.theme_combo.addItem(label, key)
 
+        from frontEnd.theme_utils import zoom_px
         seg = QtWidgets.QWidget()
         segh = QtWidgets.QHBoxLayout(seg)
         segh.setContentsMargins(0, 0, 0, 0)
@@ -213,7 +216,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             b.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
             b.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed,
                             QtWidgets.QSizePolicy.Policy.Fixed)
-            b.setMinimumWidth(96)
+            b.setMinimumWidth(zoom_px(96))
             b.clicked.connect(lambda _c=False, k=key: self._set_theme_mode(k))
             self._theme_btns[key] = b
             segh.addWidget(b)

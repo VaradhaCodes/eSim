@@ -9,6 +9,7 @@ from .ModelGroupWidget import (ModelGroupWidget, InstanceRow,
                                finish_group_layout)
 from projManagement import modelCache
 from projManagement.projectPaths import previous_values_path
+from frontEnd.theme_utils import zoom_px
 
 
 class DeviceModel(QtWidgets.QWidget):
@@ -158,7 +159,7 @@ class DeviceModel(QtWidgets.QWidget):
         sky130grid.addWidget(self.parameterLabel[self.count], self.row, 0)
         self.entry_var[self.count] = QtWidgets.QLineEdit()
         self.entry_var[self.count].setText("")
-        self.entry_var[self.count].setMaximumWidth(150)
+        self.entry_var[self.count].setMaximumWidth(zoom_px(150))
         self.entry_var[self.count].setObjectName("%d" % beg)
         path_name = ''
         for child in self.root:
@@ -241,7 +242,7 @@ class DeviceModel(QtWidgets.QWidget):
                     self.parameterLabel[self.count], self.row, 0)
                 self.entry_var[self.count] = QtWidgets.QLineEdit()
                 self.entry_var[self.count].setText("")
-                self.entry_var[self.count].setMaximumWidth(1000)
+                self.entry_var[self.count].setMaximumWidth(zoom_px(1000))
                 self.entry_var[self.count].setObjectName("%d" % beg)
                 sky130grid.addWidget(self.entry_var[self.count], self.row, 1)
                 self.entry_var[self.count].textChanged.connect(self.textChange)
@@ -612,7 +613,7 @@ class DeviceModel(QtWidgets.QWidget):
                             (("W", "100u"), ("L", "100u"), ("M", "1")),
                             start=1):
                         dim_edit = QtWidgets.QLineEdit()
-                        dim_edit.setMaximumWidth(120)
+                        dim_edit.setMaximumWidth(zoom_px(120))
                         dim_edit.setPlaceholderText("default %s" % default)
                         self.entry_var[beg + offset] = dim_edit
                         extras.append((label, dim_edit))

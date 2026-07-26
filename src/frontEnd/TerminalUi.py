@@ -83,10 +83,13 @@ class TerminalUi(QtWidgets.QMainWindow):
             "Cycle application theme (Light → Dark → System)"
         )
         self.lightDarkModeButton.setText("◐")
+        # 13pt is the design size of the ◐ glyph; run it through the app's
+        # text curve so the button's label tracks zoom like every other label.
+        from frontEnd.theme_utils import scale_font
         font = self.lightDarkModeButton.font()
         font.setPointSize(13)
         font.setBold(True)
-        self.lightDarkModeButton.setFont(font)
+        self.lightDarkModeButton.setFont(scale_font(font))
         self.lightDarkModeButton.clicked.connect(self._cycle_theme)
         self.cancelSimulationButton.clicked.connect(self.cancelSimulation)
         self.redoSimulationButton.clicked.connect(self.redoSimulation)

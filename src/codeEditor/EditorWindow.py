@@ -253,11 +253,20 @@ class EditorWindow(QtWidgets.QMainWindow):
         # Find/replace is a floating overlay pinned to the editor's
         # top-right (VS Code style), not a row that steals layout space.
         self.find_bar = FindBar(central, host=self)
-        shadow = QtWidgets.QGraphicsDropShadowEffect(self.find_bar)
-        shadow.setBlurRadius(18)
-        shadow.setOffset(0, 3)
-        shadow.setColor(QtGui.QColor(0, 0, 0, 70))
-        self.find_bar.setGraphicsEffect(shadow)
+        # Shadow on a backdrop behind the bar, not on the bar: an effect on the
+        # bar itself would push its search field and match counter through an
+        # offscreen ARGB buffer and lose their subpixel antialiasing.
+        try:
+            from frontEnd.elevation import elevate_backdrop
+            elevate_backdrop(self.find_bar, radius=8,
+                             tint=QtGui.QColor(0, 0, 0),
+                             spec=(18, 0, 3, 70, 70))
+        except Exception:
+            shadow = QtWidgets.QGraphicsDropShadowEffect(self.find_bar)
+            shadow.setBlurRadius(18)
+            shadow.setOffset(0, 3)
+            shadow.setColor(QtGui.QColor(0, 0, 0, 70))
+            self.find_bar.setGraphicsEffect(shadow)
 
         self._build_menu()
         self._build_status_bar()
@@ -563,7 +572,8 @@ class EditorWindow(QtWidgets.QMainWindow):
         btn = QtWidgets.QToolButton()
         btn.setObjectName("tabClose")
         btn.setText("✕")
-        btn.setFixedSize(18, 18)
+        from frontEnd.theme_utils import zoom_px
+        btn.setFixedSize(zoom_px(18), zoom_px(18))
         btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn.setToolTip("Close (Ctrl+W)")
         btn.clicked.connect(lambda _c=False, e=editor: self._close_editor(e))

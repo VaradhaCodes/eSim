@@ -11,10 +11,10 @@ TEXT_SELECTABLE = QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
 WIN_MAX = QtCore.Qt.WindowType.WindowMaximizeButtonHint
 WIN_MIN = QtCore.Qt.WindowType.WindowMinimizeButtonHint
 ORIENT_HORIZ = QtCore.Qt.Orientation.Horizontal
-FONT_BOLD = QtGui.QFont.Weight.Bold
 TAB_RIGHT = QtWidgets.QTabBar.ButtonPosition.RightSide
 TOOLBTN_INSTANT = QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
 
+from frontEnd.theme_utils import zoom_px, on_zoom_changed
 from PyQt6.Qsci import QsciScintilla
 # Reuse eSim's shared editor lexers + theme so HDL here looks exactly like the
 # project code editor (same QsciLexerVerilog/VHDL colours), instead of a
@@ -571,8 +571,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         
         lbl_sidebar = QtWidgets.QLabel("Module Hierarchy")
+        # Font comes from QSS (#verilogSidebarTitle). It used to be pinned here
+        # to QFont("Segoe UI", 10) -- a hard-coded family and an absolute point
+        # size, so this one label ignored the app's type scale, ignored zoom
+        # entirely, and rendered in a different face from everything around it.
         lbl_sidebar.setObjectName("verilogSidebarTitle")
-        lbl_sidebar.setFont(QtGui.QFont("Segoe UI", 10, FONT_BOLD))
         sidebar_layout.addWidget(lbl_sidebar)
         
         self.btn_auto_detect = QtWidgets.QPushButton("Auto-Detect")
@@ -648,8 +651,14 @@ class VerilogVerifier(QtWidgets.QWidget):
         # Seed the sidebar a touch wider so the hierarchy card's right edge lands
         # under the Verilog|VHDL toggle and its rows fit the index badge + name +
         # both move arrows without feeling cramped. Still drag-resizable.
-        sidebar_widget.setMinimumWidth(232)
-        top_h_splitter.setSizes([248, 752])
+        # zoom_px, not a bare 232: the QSS metrics inside this sidebar scale
+        # with zoom but a Python-set width does not, so at 150% the buttons
+        # grew and the box that holds them did not -- which is how "Remove
+        # Models" ended up wider than the button drawn around it.
+        on_zoom_changed(
+            sidebar_widget,
+            lambda z, w=sidebar_widget: w.setMinimumWidth(zoom_px(232, z)))
+        top_h_splitter.setSizes([zoom_px(248), zoom_px(752)])
 
         # Design editor (Module 1)
         self.design_views = []
@@ -809,7 +818,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_replace.clicked.connect(self.replace_text)
         
         self.btn_close_find = QtWidgets.QPushButton("X")
-        self.btn_close_find.setFixedWidth(30)
+        self.btn_close_find.setFixedWidth(zoom_px(30))
         self.btn_close_find.clicked.connect(self.find_widget.hide)
         
         find_layout.addWidget(self.find_input)
@@ -834,7 +843,9 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.console = ConsoleEdit()
         self.console.setReadOnly(True)
         self.console.setPlaceholderText("Console logs will appear here...\nDouble-click a syntax error (e.g. design.v:5: error) to jump directly to the line.")
-        self.console.setFont(QtGui.QFont("Consolas", 11))
+        # No setFont here: the mono family and size come from #verilogConsole in
+        # the QSS, which is the only path that tracks zoom. A hard-coded
+        # QFont("Consolas", 11) stayed 11pt at every zoom level.
         self.console.error_clicked.connect(self.jump_to_error)
         # Aurora styles the console via #verilogConsole (and #verilogConsoleError
         # for the error state, toggled in _set_console_error). No inline sheet,
@@ -1043,14 +1054,14 @@ class VerilogVerifier(QtWidgets.QWidget):
 
             btn_up = QtWidgets.QPushButton("▴")
             btn_up.setObjectName("hierarchyMoveBtn")
-            btn_up.setFixedSize(22, 22)
+            btn_up.setFixedSize(zoom_px(22), zoom_px(22))
             btn_up.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             _no_glow(btn_up)
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
 
             btn_down = QtWidgets.QPushButton("▾")
             btn_down.setObjectName("hierarchyMoveBtn")
-            btn_down.setFixedSize(22, 22)
+            btn_down.setFixedSize(zoom_px(22), zoom_px(22))
             btn_down.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
             _no_glow(btn_down)
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))

@@ -479,7 +479,14 @@ def show_dialog(parent=None):
 
     view = QtWidgets.QPlainTextEdit(dlg)
     view.setReadOnly(True)
-    mono = QtGui.QFont('Monospace')
+    # Same mono stack the QSS uses for every other console in eSim. The old
+    # QFont('Monospace') named a family that does not exist on Windows, so the
+    # style hint fell through to Courier New -- thin, badly hinted, and nothing
+    # like the rest of the app. Size is left alone: it inherits the app font,
+    # which already tracks zoom.
+    mono = QtGui.QFont()
+    mono.setFamilies(['JetBrains Mono', 'Cascadia Mono', 'Consolas',
+                      'DejaVu Sans Mono', 'Monospace'])
     mono.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
     view.setFont(mono)
     lay.addWidget(view)

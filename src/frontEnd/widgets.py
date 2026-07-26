@@ -131,7 +131,8 @@ class RailDragGrip(QtWidgets.QWidget):
         super().__init__()
         self._mw = main_window
         self._tb = toolbar
-        self.setFixedHeight(26)
+        from frontEnd.theme_utils import zoom_px
+        self.setFixedHeight(zoom_px(26))
         self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
         self.setToolTip("Drag to move this toolbar to the left or right edge")
         self._press = None
