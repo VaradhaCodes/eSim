@@ -21,6 +21,29 @@ INIT_PATH = _BASE_DIR + os.sep
 
 
 # --------------------------------------------------------------------- helpers
+def _is_dark_theme() -> bool:
+    """True when the dark theme is active.
+
+    Deliberately NOT ``widget.palette().color(Window).lightness() < 128``: once
+    the app stylesheet gives a widget a *gradient* background (as
+    ``QFrame#welcomeHero`` has), QStyleSheetStyle puts that gradient in the
+    widget's Window brush, and ``QBrush.color()`` on a gradient brush is black
+    — so the lightness test reported "dark" while the light theme was active.
+    That is what kept the hero links on their pale dark-mode colour in light
+    mode. theme_utils owns the real answer; the app palette (never rewritten by
+    a widget's stylesheet) is the fallback.
+    """
+    try:
+        from frontEnd.theme_utils import current_theme_is_dark
+        return current_theme_is_dark()
+    except Exception:  # pragma: no cover - theme_utils always present in-app
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return False
+        return app.palette().color(
+            QtGui.QPalette.ColorRole.Window).lightness() < 128
+
+
 def _rounded_pixmap(path: str, size: int, radius_ratio: float = 0.18) -> QtGui.QPixmap:
     """Load an icon and return it as a rounded pixmap.
 
@@ -67,9 +90,17 @@ class HoverSurfaceMixin:
         self._hover_progress = float(value)
         self.update()
 
-        eff = self.graphicsEffect()
+        # The shadow lives on a backdrop behind the tile now (see
+        # Welcome._apply_tile_shadow), so ask elevation where it is instead of
+        # assuming it is on this widget -- otherwise the hover glow silently
+        # animates nothing.
+        try:
+            from frontEnd.elevation import backdrop_effect
+            eff = backdrop_effect(self)
+        except Exception:
+            eff = self.graphicsEffect()
         if isinstance(eff, QtWidgets.QGraphicsDropShadowEffect):
-            dark = self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
+            dark = _is_dark_theme()
 
             # Base shadow vs Glow shadow
             base_a = 48
@@ -123,7 +154,8 @@ class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
         self.setObjectName('welcomeCard')
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
-        self.setMinimumHeight(96)
+        from frontEnd.theme_utils import zoom_px
+        self.setMinimumHeight(zoom_px(96))
         self._press_origin = None
         self._press_anim = None
         self._release_anim = None
@@ -135,22 +167,42 @@ class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
         layout.setSpacing(14)
 
         icon_label = QtWidgets.QLabel()
-        icon_label.setPixmap(_rounded_pixmap(icon_path, 56, 0.18))
-        icon_label.setFixedSize(56, 56)
+        _icon_px = zoom_px(56)
+        icon_label.setPixmap(_rounded_pixmap(icon_path, _icon_px, 0.18))
+        icon_label.setFixedSize(_icon_px, _icon_px)
         icon_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignCenter
         )
         icon_label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(icon_label, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
 
+        # Title + description form one optically centred block: the stretches
+        # above *and* below keep the pair vertically centred against the 56px
+        # icon whatever the description wraps to (one line or two), instead of
+        # being pinned to the top of the card as a single trailing stretch did.
         text = QtWidgets.QVBoxLayout()
         text.setSpacing(2)
+        text.setContentsMargins(0, 0, 0, 0)
+        text.addStretch(1)
         title = QtWidgets.QLabel(name)
         title.setProperty('cssClass', 'welcomeTitle')
+        title.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         title.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         desc = QtWidgets.QLabel(description)
         desc.setProperty('cssClass', 'welcomeDesc')
         desc.setWordWrap(True)
+        desc.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        # A word-wrapping QLabel reports a height-for-width, but the parent
+        # QVBoxLayout only honours it when the policy says so — without this the
+        # two-line descriptions clip instead of growing the block.
+        desc.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
         desc.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         text.addWidget(title)
         text.addWidget(desc)
@@ -225,7 +277,8 @@ class HeroBanner(QtWidgets.QFrame):
     def __init__(self):
         super().__init__()
         self.setObjectName('welcomeHero')
-        self.setMinimumHeight(160)
+        from frontEnd.theme_utils import zoom_px
+        self.setMinimumHeight(zoom_px(160))
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
@@ -234,14 +287,15 @@ class HeroBanner(QtWidgets.QFrame):
         # eSim logo (if available), otherwise a soft monogram
         logo_label = QtWidgets.QLabel()
         logo_path = os.path.join(_BASE_DIR, 'images', 'logo.png')
+        _logo_px = zoom_px(64)
         if os.path.exists(logo_path):
             logo_pix = QtGui.QPixmap(logo_path).scaled(
-                64, 64,
+                _logo_px, _logo_px,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
             logo_label.setPixmap(logo_pix)
-        logo_label.setFixedSize(64, 64)
+        logo_label.setFixedSize(_logo_px, _logo_px)
         layout.addWidget(logo_label, 0, QtCore.Qt.AlignmentFlag.AlignTop)
 
         # Title + subtitle
@@ -257,24 +311,13 @@ class HeroBanner(QtWidgets.QFrame):
         subtitle.setObjectName('welcomeHeroSubtitle')
         subtitle.setWordWrap(True)
 
-        about_text = (
-            "It is an integrated tool built using open source softwares such as "
-            "<a href='https://www.kicad.org/'>KiCad</a>, "
-            "<a href='https://ngspice.sourceforge.io/'>Ngspice</a>, "
-            "<a href='http://ghdl.free.fr'>GHDL</a>, "
-            "<a href='https://www.veripool.org/verilator/'>Verilator</a>, "
-            "<a href='https://www.makerchip.com/'>Makerchip IDE</a>, and "
-            "<a href='https://skywater-pdk.rtfd.io/'>SkyWater SKY130 PDK</a>. "
-            "eSim source is released under GNU General Public License.<br><br>"
-            "Developed by the eSim Team at FOSSEE, IIT Bombay. "
-            "Visit: <a href='https://esim.fossee.in/'>esim.fossee.in</a> | "
-            "Discuss: <a href='https://forums.fossee.in/'>forums.fossee.in</a>"
-        )
-        about_label = QtWidgets.QLabel(about_text)
+        about_label = QtWidgets.QLabel()
         about_label.setWordWrap(True)
         about_label.setOpenExternalLinks(True)
         about_label.setContentsMargins(0, 8, 0, 0)
         about_label.setProperty("cssClass", "muted")
+        self.about_label = about_label
+        self._apply_about_text()
 
         text.addWidget(title)
         text.addWidget(subtitle)
@@ -282,16 +325,66 @@ class HeroBanner(QtWidgets.QFrame):
         text.addStretch(1)
         layout.addLayout(text, 1)
 
+    # ------------------------------------------------------------------ about
+    # {link} is filled per theme by _apply_about_text(). The colour is inlined
+    # on every <a> instead of left to QPalette.Link because the app stylesheet
+    # is what actually paints this label, and the palette link colour that
+    # reaches it in light mode renders far too pale to read against the near-
+    # white hero gradient.
+    ABOUT_HTML = (
+        "It is an integrated tool built using open source softwares such as "
+        "<a style='color:{link};' href='https://www.kicad.org/'>KiCad</a>, "
+        "<a style='color:{link};' href='https://ngspice.sourceforge.io/'>Ngspice</a>, "
+        "<a style='color:{link};' href='http://ghdl.free.fr'>GHDL</a>, "
+        "<a style='color:{link};' href='https://www.veripool.org/verilator/'>Verilator</a>, "
+        "<a style='color:{link};' href='https://www.makerchip.com/'>Makerchip IDE</a>, and "
+        "<a style='color:{link};' href='https://skywater-pdk.rtfd.io/'>SkyWater SKY130 PDK</a>. "
+        "eSim source is released under GNU General Public License.<br><br>"
+        "Developed by the eSim Team at FOSSEE, IIT Bombay. "
+        "Visit: <a style='color:{link};' href='https://esim.fossee.in/'>esim.fossee.in</a> | "
+        "Source: <a style='color:{link};' href='https://github.com/FOSSEE/eSim'>github.com/FOSSEE/eSim</a>"
+    )
+
+    # Light: 7.3:1 against the white hero, comfortably past WCAG AA.
+    # Dark: the theme's own accent, which already reads well on #050812.
+    LINK_LIGHT = "#005B80"
+    LINK_DARK = "#53D7FF"
+
+    def _apply_about_text(self):
+        link = self.LINK_DARK if _is_dark_theme() else self.LINK_LIGHT
+        self.about_label.setText(self.ABOUT_HTML.format(link=link))
+
+    def changeEvent(self, event):
+        """Re-colour the about-text links on a live light/dark toggle.
+
+        The colour is baked into the HTML at build time, so without this the
+        links keep the previous theme's colour after a toggle.
+        """
+        super().changeEvent(event)
+        # Deferred by a tick: rebuilding the rich text inside the handler
+        # re-enters the polish that delivered the event (theme_utils.defer_restyle).
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
+            try:
+                from frontEnd.theme_utils import defer_restyle
+                defer_restyle(self, self._apply_about_text)
+            except Exception:  # pragma: no cover - theme_utils always present in-app
+                self._apply_about_text()
+
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect()
-        dark = self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
-        accent = QtGui.QColor("#53D7FF" if dark else "#0077A8")
-        violet = QtGui.QColor("#9B7CFF" if dark else "#6D5DF6")
+        # The orb is deliberately theme-independent. It reads as a soft cyan
+        # glow over whichever hero gradient the stylesheet painted, and this is
+        # the pair the hero has always shown on both themes: the old
+        # palette-lightness test here could only ever answer "dark", because
+        # QFrame#welcomeHero's Window brush is a gradient (see _is_dark_theme).
+        # Only the about-text links below are theme-aware.
+        accent = QtGui.QColor("#53D7FF")
+        violet = QtGui.QColor("#9B7CFF")
         orb = QtGui.QRadialGradient(QtCore.QPointF(rect.right() - 40, rect.top() + 30), max(rect.width(), rect.height()) * 0.65)
-        accent.setAlpha(64 if dark else 34)
-        violet.setAlpha(54 if dark else 28)
+        accent.setAlpha(64)
+        violet.setAlpha(54)
         orb.setColorAt(0.0, accent)
         orb.setColorAt(0.45, violet)
         orb.setColorAt(1.0, QtCore.Qt.GlobalColor.transparent)
@@ -342,7 +435,8 @@ class Welcome(QtWidgets.QWidget):
 
         # ---- Hero ----
         hero = HeroBanner()
-        self._apply_tile_shadow(hero, blur=38, y=10, alpha=68)
+        self._apply_tile_shadow(hero, blur=38, y=10, alpha=68,
+                                radius=HeroBanner.RADIUS)
         inner_layout.addWidget(hero)
         inner_layout.addSpacing(6)
 
@@ -413,8 +507,29 @@ class Welcome(QtWidgets.QWidget):
         inner_layout.addStretch(1)
 
     @staticmethod
-    def _apply_tile_shadow(widget, blur=28, y=6, alpha=64):
-        """Apply a soft drop shadow so the tile floats above the base layer."""
+    def _apply_tile_shadow(widget, blur=28, y=6, alpha=64, radius=16):
+        """Apply a soft drop shadow so the tile floats above the base layer.
+
+        The shadow goes on an empty backdrop behind the tile rather than on the
+        tile itself. Every card here carries a name and a one-line description,
+        and a QGraphicsEffect renders its source into an offscreen ARGB pixmap
+        — a buffer Qt cannot run subpixel antialiasing against, so all of that
+        text quietly dropped to grayscale AA and read as soft on a 1x panel.
+
+        ``radius`` must match the corner the widget itself paints -- 16 for the
+        cards' QSS border-radius, 18 for the hero -- or the backdrop's own
+        corners show past the curve.
+        """
+        try:
+            from frontEnd.elevation import elevate_backdrop
+            # Tiles are shadowed before they are added to their grid, so this
+            # usually defers until the card has a parent to hang a backdrop
+            # beside. Either way it is the only shadow the tile gets.
+            elevate_backdrop(widget, radius=radius, tint=QtGui.QColor(0, 0, 0),
+                             spec=(blur, 0, y, alpha, alpha))
+            return
+        except Exception:
+            pass
         eff = QtWidgets.QGraphicsDropShadowEffect(widget)
         eff.setBlurRadius(blur)
         eff.setOffset(0, y)
