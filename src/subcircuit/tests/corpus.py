@@ -80,7 +80,8 @@ def scan_folder(path):
         legacy_stem     what pre-anchor eSim used: the folder basename
         has_legacy_cir  whether ``<folder>/<folder>.cir`` exists
         schematic       'kicad_sch' | 'sch' | None (newest generation present)
-        ports           port list from ``<stem>.sub`` when resolvable, else None
+        ports           port list from ``<stem>.sub`` when resolvable,
+                        else None
     """
     name = os.path.basename(os.path.normpath(path))
     stems = sub_stems(path)

@@ -59,9 +59,18 @@ class NewSub(QtWidgets.QWidget):
                     self, "Error Message",
                     'Unable to create subcircuit. Please make sure ' +
                     'you have write permission on ' + self.schematic_path)
+                # Selection stays where it was: pointing the builder at a
+                # folder that was never created makes the next Convert fail
+                # with a netlist error instead of the permission problem the
+                # user actually hit.
+                return
 
-            self.obj_appconfig.current_subcircuit['SubcircuitName'] \
-                = self.schematic_path
+            # A brand-new subcircuit has no .sub yet -- that file is the
+            # OUTPUT of Convert -- so the stem is the name just entered.
+            self.obj_appconfig.set_current_subcircuit(
+                self.schematic_path, self.create_schematic)
+            self.obj_appconfig.print_info(
+                'New subcircuit created : ' + self.create_schematic)
 
         elif self.reply == "CHECKEXIST":
             Dialogs.critical(

@@ -62,7 +62,13 @@ class Appconfig:
     #                  name. Use get_proj_stem() to read it.
     current_project = {"ProjectName": None, "ProjName": None}
     # Current Subcircuit detail
-    current_subcircuit = {"SubcircuitName": None}
+    #   SubcircuitName => the subcircuit *folder* path
+    #   Stem           => the subcircuit *stem* actually being worked on. A
+    #                     folder may hold several .sub files (a subcircuit
+    #                     ships the models of the ones nested inside it), so
+    #                     the folder alone does not identify the subcircuit.
+    #                     Use get_subcircuit_stem() to read it.
+    current_subcircuit = {"SubcircuitName": None, "Stem": None}
     # Workspace detail
     workspace_text = "eSim stores your project in a folder called "
     workspace_text += "eSim-Workspace. You can choose a different "
@@ -197,6 +203,48 @@ class Appconfig:
         from projManagement.projectPaths import resolve_stem
         stem, _status = resolve_stem(proj_dir, 'proj')
         self.current_project["ProjName"] = stem
+        return stem
+
+    def set_current_subcircuit(self, sub_dir, stem=None):
+        """
+        Set the subcircuit the Subcircuit Builder is working on.
+
+        Single place that updates both the folder and the stem, so Edit and
+        Convert can never disagree about which subcircuit is open (they
+        used to:
+        Edit opened the one the user picked, Convert independently re-derived a
+        different one and rebuilt the wrong model).
+
+        @params
+            :sub_dir    => the subcircuit folder path, or None to clear
+            :stem        => the already-chosen stem; resolved from the folder
+                            when omitted
+        """
+        self.current_subcircuit["SubcircuitName"] = sub_dir
+        if not sub_dir:
+            self.current_subcircuit["Stem"] = None
+            return
+        if stem is None:
+            from subcircuit.subPaths import resolve_subcircuit
+            stem, _status = resolve_subcircuit(sub_dir)
+        self.current_subcircuit["Stem"] = stem
+
+    def get_subcircuit_stem(self):
+        """
+        Return the stem of the subcircuit currently selected, or None.
+
+        Falls back to resolving from the folder so a selection made by older
+        code (which only recorded the folder) still yields an answer.
+        """
+        stem = self.current_subcircuit.get("Stem")
+        if stem:
+            return stem
+        sub_dir = self.current_subcircuit.get("SubcircuitName")
+        if not sub_dir:
+            return None
+        from subcircuit.subPaths import resolve_subcircuit
+        stem, _status = resolve_subcircuit(sub_dir)
+        self.current_subcircuit["Stem"] = stem
         return stem
 
     def _append_note(self, line):

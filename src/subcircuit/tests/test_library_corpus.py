@@ -28,32 +28,28 @@ for _p in (SRC, PKG, HERE):
         sys.path.insert(0, _p)
 
 import corpus                                                   # noqa: E402
-from projManagement.projectPaths import resolve_stem            # noqa: E402
+from subcircuit.subPaths import resolve_subcircuit               # noqa: E402
 
 
-# Folders the anchor rule cannot pin to a stem: several ``.sub`` files, none
-# named after the folder, so there is no anchor to prefer. 33 of the shipped
-# library land here.
-KNOWN_UNRESOLVED = {
-    '54LS373_test', '54act11030', '74LS299_test', '74ls169', '9348',
-    'CA3078_TEST', 'CA3240_IC_Test', 'CD74HC365', 'DM9301', 'Flip_Flops',
-    'IC_CD4037', 'IC_SN74ALS679', 'LP2951', 'Logic_Gates', 'MC1496_IC1',
-    'MPY100', 'SN54147_sub', 'SN54155', 'SN54F71', 'SN54HC148', 'SN7495A',
-    'SN74F521', 'SN74HC138', 'SN74LS148_sub', 'SN74LS74', 'TCA965',
-    'TL431_SUB', 'cdx4ac283', 'ref5010', 'sn54als133', 'sn54als573',
-    'sn54ls48', 'sn54ls72',
-}
-
-# The 25 of those that are outright regressions against the folder-name rule:
-# ``<folder>.cir`` exists, so the old code converted them and the new code
-# cannot. Restored by the netlist tie-break in subPaths (S1); the remaining 8
-# have no netlist under any rule and stay honestly ambiguous.
+# The 25 folders the bare anchor rule stranded: several ``.sub`` files, none
+# named after the folder, so it yielded no stem -- while ``<folder>.cir`` sat
+# right there and the folder-name era converted them fine. subPaths restores
+# them with a netlist tie-break; this list is the receipt for that.
 KNOWN_REGRESSIONS = {
     '54LS373_test', '54act11030', '74LS299_test', '74ls169', '9348',
     'CA3078_TEST', 'CA3240_IC_Test', 'Flip_Flops', 'IC_CD4037',
     'IC_SN74ALS679', 'LP2951', 'Logic_Gates', 'MC1496_IC1', 'MPY100',
     'SN54155', 'SN54F71', 'SN54HC148', 'SN74F521', 'SN74HC138', 'TL431_SUB',
     'cdx4ac283', 'sn54als133', 'sn54als573', 'sn54ls48', 'sn54ls72',
+}
+
+# Folders that stay unresolved on purpose: several ``.sub`` files, none named
+# after the folder, and no netlist to break the tie either. There is no honest
+# way to pick for the user here, so Edit asks and Convert says why. Guessing is
+# what produced lookups for a file literally called "None".
+KNOWN_AMBIGUOUS = {
+    'CD74HC365', 'DM9301', 'SN54147_sub', 'SN7495A', 'SN74LS148_sub',
+    'SN74LS74', 'TCA965', 'ref5010',
 }
 
 
@@ -75,7 +71,7 @@ def scanned(library):
 
 def _resolved(library, info):
     """The stem today's production code would act on for this folder."""
-    stem, _status = resolve_stem(os.path.join(library, info['name']), 'sub')
+    stem, _status = resolve_subcircuit(os.path.join(library, info['name']))
     return stem
 
 
@@ -95,9 +91,6 @@ def test_scan_is_stable(library, scanned):
 
 # -- invariants --------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason='25 multi-.sub folders resolve to no stem; fixed by subPaths (S1)')
 def test_every_folder_with_a_netlist_resolves_to_it(library, scanned):
     """INV1 -- no regression against the folder-name rule.
 
@@ -116,31 +109,33 @@ def test_every_folder_with_a_netlist_resolves_to_it(library, scanned):
         'rule: %s' % (len(broken), broken))
 
 
-def test_regressions_are_exactly_the_known_set(library, scanned):
-    """Companion to the xfail above: while INV1 is unmet, hold its blast radius
-    to the documented 25 so a refactor cannot quietly add a 26th."""
-    broken = {
-        info['name'] for info in scanned
-        if info['has_legacy_cir']
+def test_the_documented_regressions_are_all_cleared(library, scanned):
+    """The 25 folders the anchor rule stranded convert again.
+
+    Named explicitly rather than folded into INV1 so the fix has a receipt: if
+    someone later removes the netlist tie-break, this is the test that says
+    which subcircuits stopped working and why.
+    """
+    by_name = {info['name']: info for info in scanned}
+    still_broken = sorted(
+        name for name in KNOWN_REGRESSIONS
+        if name in by_name
         and not corpus.has_netlist(
-            library, info['name'], _resolved(library, info))
-    }
-    assert broken <= KNOWN_REGRESSIONS, (
-        'new folders lost a netlist they used to convert: %s'
-        % sorted(broken - KNOWN_REGRESSIONS))
+            library, name, _resolved(library, by_name[name])))
+    assert still_broken == [], still_broken
 
 
 def test_unresolved_folders_are_exactly_the_known_set(library, scanned):
-    """Pins the blast radius of INV1 so a future refactor cannot quietly grow
-    it. This test stays green across the fix -- the set becomes empty and the
-    assertion below tracks that explicitly."""
+    """Pins how many subcircuits eSim cannot identify, so a refactor cannot
+    quietly grow the number."""
     unresolved = {
         info['name'] for info in scanned
         if _resolved(library, info) is None
     }
-    assert unresolved <= KNOWN_UNRESOLVED, (
-        'new folders lost their identity: %s'
-        % sorted(unresolved - KNOWN_UNRESOLVED))
+    assert unresolved == KNOWN_AMBIGUOUS, (
+        'newly unidentifiable: %s | unexpectedly identified: %s'
+        % (sorted(unresolved - KNOWN_AMBIGUOUS),
+           sorted(KNOWN_AMBIGUOUS - unresolved)))
 
 
 def test_resolved_stem_is_never_the_string_none(library, scanned):
