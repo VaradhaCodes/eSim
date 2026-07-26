@@ -36,11 +36,7 @@ class openSub(QtWidgets.QWidget):
         selection rather than re-derived later by Convert.
         """
         if editfile is None:
-            editfile = QtCore.QDir.toNativeSeparators(
-                QtWidgets.QFileDialog.getExistingDirectory(
-                    self, "Open File", paths.library_path("SubcircuitLibrary")
-                )
-            )
+            editfile, stem = self._pick()
 
         if not editfile:
             return None
@@ -79,6 +75,38 @@ class openSub(QtWidgets.QWidget):
         self.obj_workThread.start()
         self.obj_appconfig.print_info('Editing subcircuit ' + str(stem))
         return stem
+
+    def _pick(self):
+        """Ask which subcircuit to open. Returns ``(folder, stem)``.
+
+        The library picker comes first because it can answer the question the
+        folder dialog cannot: which subcircuit a folder actually holds, whether
+        it has been converted yet, and how many ports it ended up with. Its
+        Browse button drops through to the original folder dialog, so a
+        subcircuit kept outside the library is reached exactly as before.
+        """
+        from subcircuit.subPicker import SubcircuitPicker
+
+        picker = SubcircuitPicker(
+            paths.library_path("SubcircuitLibrary"),
+            Dialogs.resolve_parent(self))
+        try:
+            if picker.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return None, None
+            if not picker.browse:
+                return picker.chosen or (None, None)
+        finally:
+            picker.deleteLater()
+
+        return self._browseForFolder(), None
+
+    def _browseForFolder(self):
+        """The folder dialog Edit has always used, unchanged."""
+        return QtCore.QDir.toNativeSeparators(
+            QtWidgets.QFileDialog.getExistingDirectory(
+                self, "Open File", paths.library_path("SubcircuitLibrary")
+            )
+        )
 
     def _chooseSubcircuit(self, stems):
         """

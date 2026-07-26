@@ -1052,11 +1052,6 @@ class MainWindow(QtWidgets.QWidget):
             except Exception as cache_err:
                 print("model_cache update skipped:", cache_err)
 
-            self.msg = "The KiCad to Ngspice conversion completed "
-            self.msg += "successfully!"
-            Dialogs.information(
-                self, "Information", self.msg, QtWidgets.QMessageBox.StandardButton.Ok
-            )
         except Exception as e:
             self._surface_conversion_failure(
                 e,
@@ -1069,9 +1064,55 @@ class MainWindow(QtWidgets.QWidget):
         # Generate .sub file from .cir.out file if it is a subcircuit
         subPath = os.path.splitext(self.kicadFile)[0]
 
-        # If sub argument passed, create subCircuit file as well
+        # If sub argument passed, create subCircuit file as well.
+        #
+        # The report comes AFTER the .sub is written, and describes it. The
+        # generic "conversion completed successfully!" used to fire first, so a
+        # subcircuit whose schematic had no PORT element announced success and
+        # then immediately raised an error about the file it had not written --
+        # and on the way through, never said where the .sub landed or what
+        # ports it ended up with, which is the entire deliverable.
         if self.clarg2 == "sub":
-            self.createSubFile(subPath)
+            if self.createSubFile(subPath):
+                self._reportSubcircuitBuilt(subPath)
+            return
+
+        self.msg = "The KiCad to Ngspice conversion completed "
+        self.msg += "successfully!"
+        Dialogs.information(
+            self, "Information", self.msg,
+            QtWidgets.QMessageBox.StandardButton.Ok
+        )
+
+    def _reportSubcircuitBuilt(self, subPath):
+        """Tell the user what Convert actually produced.
+
+        The ngspice model is the point of the whole Subcircuit Builder, and
+        until now its creation was reported only to stdout. Name the file, and
+        echo back the ``.subckt`` header so the port list can be checked
+        against the parent circuit's symbol without opening anything.
+        """
+        outfile = subPath + ".sub"
+        name = os.path.basename(outfile)
+        header = ""
+        try:
+            with open(outfile, errors='replace') as fh:
+                for line in fh:
+                    if line.strip().lower().startswith('.subckt'):
+                        header = line.strip()
+                        break
+        except OSError:
+            pass
+
+        detail = outfile
+        if header:
+            ports = header.split()[2:]
+            detail += "\n\n%s\n\n%d port%s: %s" % (
+                header, len(ports), "" if len(ports) == 1 else "s",
+                ", ".join(ports) if ports else "none")
+        Dialogs.information(
+            self, "Subcircuit built", "Created " + name,
+            informative_text=detail)
 
     def createNetlistFile(self, store_schematicInfo, plotText):
         """
@@ -1230,6 +1271,11 @@ class MainWindow(QtWidgets.QWidget):
         """
         - To create subcircuit file
         - Extract data from .cir.out file
+
+        Returns True when the ``.sub`` was written, False when it could not be
+        (missing ``.cir.out``, unreadable, or a schematic with no PORT). The
+        caller reports the result, so it must be able to tell the difference --
+        it used to announce success before this ran.
         """
         self.project = subPath
         self.projName = os.path.basename(self.project)
@@ -1239,7 +1285,7 @@ class MainWindow(QtWidgets.QWidget):
                 self, "Subcircuit creation failed",
                 self.projName + ".cir.out does not exist. "
                 "Please create a spice netlist first.")
-            return
+            return False
         try:
             with open(cirOut) as f:
                 data = f.read()
@@ -1247,7 +1293,7 @@ class MainWindow(QtWidgets.QWidget):
             Dialogs.critical(
                 self, "Subcircuit creation failed",
                 "Error opening " + self.projName + ".cir.out: " + str(e))
-            return
+            return False
 
         newNetlist = []
         subcktInfo = None
@@ -1292,7 +1338,7 @@ class MainWindow(QtWidgets.QWidget):
                 self, "Subcircuit creation failed",
                 "No PORT component found in the schematic — a subcircuit "
                 "needs a port element.")
-            return
+            return False
 
         outfile = self.project + ".sub"
         out = open(outfile, "w")
@@ -1310,3 +1356,4 @@ class MainWindow(QtWidgets.QWidget):
         out.writelines('.ends ' + self.projName)
         # print("=============================================================")
         print("The subcircuit has been written in " + self.projName + ".sub")
+        return True

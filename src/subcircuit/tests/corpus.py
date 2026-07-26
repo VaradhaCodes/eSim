@@ -28,6 +28,8 @@
 import os
 import glob
 
+from subcircuit import subPaths
+
 
 def library_root():
     """Absolute path of the shipped SubcircuitLibrary, or None if absent.
@@ -48,24 +50,9 @@ def sub_stems(folder):
                   for p in glob.glob(os.path.join(folder, '*.sub')))
 
 
-def subckt_ports(sub_file):
-    """Port names declared on the ``.subckt`` line of ``sub_file``.
-
-    Returns ``None`` when the file has no ``.subckt`` line (a malformed or
-    truncated upload), so callers can tell "no ports" from "not a subcircuit".
-    Comment lines (``*``) and blank lines are skipped, matching how ngspice
-    itself reads the file.
-    """
-    try:
-        with open(sub_file, errors='replace') as fh:
-            for line in fh:
-                words = line.strip().split()
-                if words and words[0].lower() == '.subckt':
-                    # .subckt <name> <port> <port> ...
-                    return words[2:]
-    except OSError:
-        return None
-    return None
+#: Port parsing is production code (the picker shows port counts), so the
+#: corpus measures the shipping implementation rather than a copy of it.
+subckt_ports = subPaths.subckt_ports
 
 
 def scan_folder(path):
