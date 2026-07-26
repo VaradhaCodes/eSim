@@ -260,6 +260,7 @@ class Subcircuit(QtWidgets.QWidget):
         # on screen (see showEvent).
         self._folder = None
         self._stem = None
+        self.obj_convertsubcircuit = None
         self._adopt_existing_selection()
         self._refresh_selection()
 
@@ -349,7 +350,7 @@ class Subcircuit(QtWidgets.QWidget):
         # One converter per panel, reused. Netlist generation runs on a worker
         # thread now, so the guard against a second click while the first is
         # still exporting has to live on an object that survives the click.
-        if getattr(self, 'obj_convertsubcircuit', None) is None:
+        if self.obj_convertsubcircuit is None:
             self.obj_convertsubcircuit = convertSub(self.obj_dockarea)
         self.obj_convertsubcircuit.createSub()
 
