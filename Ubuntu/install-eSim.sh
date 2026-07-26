@@ -1294,6 +1294,18 @@ case "$option" in
                         > "$HOME/eSim-install.log")) 2>&1
         set -e; set -E; trap error_exit ERR
 
+        # Ubuntu 24.04+ ships needrestart, whose apt hook opens a whiptail
+        # dialog ("Which services should be restarted?") part-way through an
+        # install and then BLOCKS on a keypress -- so an unattended install
+        # silently stalls, looking hung, for as long as nobody is watching.
+        #
+        # Mode 'l' (list) suppresses the prompt and restarts NOTHING; it only
+        # prints what would need a restart. Deliberately not 'a' (automatic):
+        # restarting a user's running services without asking is not a
+        # decision an EDA installer gets to make. Respect an existing value so
+        # anyone who has already chosen a policy keeps it.
+        export NEEDRESTART_MODE="${NEEDRESTART_MODE:-l}"
+
         ui_begin
         ui_plan "${#INSTALL_STEPS[@]}"
         ui_banner "v$ESIM_VERSION" "$PROFILE_SUMMARY"

@@ -36,6 +36,11 @@ for f in steps:
         body.append('%s() { log "starting %s"; false; }' % (f, f))
     elif f == "setupProxy":
         body.append('setupProxy() { log "Installing without proxy"; }')
+    elif f == "createConfigFile":
+        # Reports the needrestart policy the installer settled on, so the
+        # suite can assert it without inspecting the source.
+        body.append('createConfigFile() { log "Writing config"; '
+                    'echo "NRM=[${NEEDRESTART_MODE:-unset}]"; }')
     elif f == "installDependency":
         body.append('installDependency() { log "Updating apt index"; '
                     'echo "Get:1 http://archive.ubuntu.com noble InRelease"; '
@@ -127,6 +132,21 @@ printf '%s\n' "$plain" | grep -q '▄████▄' \
 printf '%s\n' "$plain" | grep -q '▀█▄▄█▀' \
     && ok "wordmark bottom row present" || bad "wordmark bottom row eaten"
 
+echo
+echo "== F. needrestart policy =="
+# Default 'l' = list only: suppresses the blocking whiptail prompt during apt
+# without restarting anything. An explicit value from the user must survive.
+trace=$(pty "cd $ROOT && ./Ubuntu/install-eSim.sh --install")
+case "$trace" in *"NRM=[l]"*) ok "defaults to NEEDRESTART_MODE=l" ;;
+                 *)           bad "did not default to l" ;; esac
+trace=$(pty "cd $ROOT && NEEDRESTART_MODE=i ./Ubuntu/install-eSim.sh --install")
+case "$trace" in *"NRM=[i]"*) ok "respects a user-set NEEDRESTART_MODE" ;;
+                 *)           bad "clobbered a user-set NEEDRESTART_MODE" ;; esac
+# 'a' would restart services unasked -- assert we never silently choose it.
+case "$(grep -c 'NEEDRESTART_MODE=a' "$SRC")" in
+    0) ok "never hard-codes the auto-restart mode" ;;
+    *) bad "script sets NEEDRESTART_MODE=a somewhere" ;;
+esac
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
