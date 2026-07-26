@@ -1073,8 +1073,13 @@ class MainWindow(QtWidgets.QWidget):
         # and on the way through, never said where the .sub landed or what
         # ports it ended up with, which is the entire deliverable.
         if self.clarg2 == "sub":
+            # Read the OUTGOING model's port count before it is replaced: a
+            # rebuild that changes it silently breaks every parent circuit
+            # already wired to this subcircuit, and that is the one outcome
+            # the user must not discover later (see _reportSubcircuitBuilt).
+            previous = self._subcktPortCount(subPath + ".sub")
             if self.createSubFile(subPath):
-                self._reportSubcircuitBuilt(subPath)
+                self._reportSubcircuitBuilt(subPath, previous)
             return
 
         self.msg = "The KiCad to Ngspice conversion completed "
@@ -1084,32 +1089,63 @@ class MainWindow(QtWidgets.QWidget):
             QtWidgets.QMessageBox.StandardButton.Ok
         )
 
-    def _reportSubcircuitBuilt(self, subPath):
+    def _subcktHeader(self, sub_file):
+        """The ``.subckt`` line of a ``.sub``, or '' when there is none."""
+        try:
+            with open(sub_file, errors='replace') as fh:
+                for line in fh:
+                    if line.strip().lower().startswith('.subckt'):
+                        return line.strip()
+        except OSError:
+            pass
+        return ""
+
+    def _subcktPortCount(self, sub_file):
+        """Number of ports an existing ``.sub`` declares, or None if there is
+        no readable model there yet."""
+        header = self._subcktHeader(sub_file)
+        return len(header.split()) - 2 if header else None
+
+    def _reportSubcircuitBuilt(self, subPath, previous_ports=None):
         """Tell the user what Convert actually produced.
 
         The ngspice model is the point of the whole Subcircuit Builder, and
         until now its creation was reported only to stdout. Name the file, and
         echo back the ``.subckt`` header so the port list can be checked
         against the parent circuit's symbol without opening anything.
+
+        ``previous_ports`` is the port count of the model that was just
+        replaced. When it changed, say so first and plainly: a subcircuit's
+        port count is its interface, so every schematic that already
+        instantiates this block is now mis-wired, and nothing else in eSim
+        would tell them. It happens for real -- a handful of subcircuits in
+        eSim's own library ship a ``.kicad_sch`` that is a different revision
+        from the ``.cir``/``.sub`` beside it, so the first honest rebuild
+        changes the interface.
         """
         outfile = subPath + ".sub"
         name = os.path.basename(outfile)
-        header = ""
-        try:
-            with open(outfile, errors='replace') as fh:
-                for line in fh:
-                    if line.strip().lower().startswith('.subckt'):
-                        header = line.strip()
-                        break
-        except OSError:
-            pass
+        header = self._subcktHeader(outfile)
 
         detail = outfile
+        ports = header.split()[2:] if header else []
         if header:
-            ports = header.split()[2:]
             detail += "\n\n%s\n\n%d port%s: %s" % (
                 header, len(ports), "" if len(ports) == 1 else "s",
                 ", ".join(ports) if ports else "none")
+
+        if header and previous_ports is not None \
+                and previous_ports != len(ports):
+            Dialogs.warning(
+                self, "Subcircuit ports changed",
+                "%s now has %d ports; it had %d."
+                % (name, len(ports), previous_ports),
+                informative_text=(
+                    "Any schematic that already uses this subcircuit is wired "
+                    "for the old interface and will need its symbol and "
+                    "connections updated.\n\n" + detail))
+            return
+
         Dialogs.information(
             self, "Subcircuit built", "Created " + name,
             informative_text=detail)
@@ -1303,10 +1339,26 @@ class MainWindow(QtWidgets.QWidget):
             if len(eachline) < 1:
                 continue
             words = eachline.split()
-            if words[0].startswith('u') and words[len(words) - 1] == "port":
+            # The PORT element defines the subcircuit's interface, and it is
+            # the ONE line here that is always commented out: PORT is not a
+            # real spice device, so Processing.convertICintoBasicBlocks
+            # rewrites every u-component it cannot expand as "* <line>" on its
+            # way into the .cir.out. Matching on words[0] therefore never
+            # fired -- it saw the "*" -- and every conversion ended in "No PORT
+            # component found in the schematic", with no .sub produced. Drop a
+            # leading comment marker before looking, so the line is recognised
+            # in either form.
+            port_words = words[1:] if words[0] == '*' else words
+            if (len(port_words) > 2 and port_words[0].startswith('u')
+                    and port_words[-1] == "port"):
+                # Ports are the nets between the reference and the PORT value.
+                # Indexing off the normalised tokens also fixes a latent
+                # off-by-one: the old slice started at 2, which was right for
+                # the commented line it never matched and would have dropped
+                # the first net on an uncommented one.
                 subcktInfo = ".subckt " + self.projName + " "
-                for i in range(2, len(words) - 1):
-                    subcktInfo += words[i] + " "
+                for word in port_words[1:-1]:
+                    subcktInfo += word + " "
                 continue
             if (
                 words[0] == ".end" or
