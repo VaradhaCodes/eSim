@@ -102,17 +102,29 @@ class OpenProjectInfo(QtWidgets.QWidget):
         # Warn (but still open) when the project is missing its schematic and
         # netlist -- this is a genuinely incomplete project, distinct from a
         # folder that simply isn't an eSim project at all.
+        #
+        # The modal is only for a folder the user just picked: on the startup
+        # restore it is a nag with no way out. createProject writes the .proj
+        # anchor and nothing else, so EVERY project is "incomplete" from the
+        # moment it is made until eeschema saves a schematic into it -- and the
+        # newest project is exactly the one startup restores. That made the
+        # warning fire on every single launch, blocking the splash behind a
+        # modal, for a state the user cannot clear without first dismissing it.
+        # Same rule the no-anchor branch above already follows: startup logs,
+        # it does not interrogate.
         schematic = main_schematic(self.projDir, stem)
         has_cir = os.path.exists(
             os.path.join(self.projDir, str(stem) + ".cir"))
         if not os.path.exists(schematic) and not has_cir:
-            Dialogs.warning(
-                self, "Incomplete Project",
-                "<b>Warning: this folder has a project (.proj) file but no "
-                "schematic ({0}.kicad_sch / {0}.sch) or netlist "
-                "({0}.cir).</b><br/>The project will open, but some operations "
-                "may be unavailable until those files exist.".format(stem)
-            )
+            if not restoring:
+                Dialogs.warning(
+                    self, "Incomplete Project",
+                    "<b>Warning: this folder has a project (.proj) file but no "
+                    "schematic ({0}.kicad_sch / {0}.sch) or netlist "
+                    "({0}.cir).</b><br/>The project will open, but some "
+                    "operations may be unavailable until those files "
+                    "exist.".format(stem)
+                )
             self.obj_Appconfig.print_warning(
                 "Project '" + str(stem) +
                 "' is missing its schematic/netlist files.")
