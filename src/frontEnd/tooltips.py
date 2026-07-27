@@ -156,14 +156,18 @@ class _ToolTipFilter(QtCore.QObject):
             self._tip.hide()
 
     @staticmethod
-    def _item_tip(global_pos):
-        """ToolTipRole of the item-view row under ``global_pos`` (or "")."""
+    def _ancestor(global_pos, cls):
+        """Nearest ``cls`` at/above the widget under ``global_pos`` (or None)."""
         w = QtWidgets.QApplication.widgetAt(global_pos)
-        view = w
-        while view is not None and not isinstance(
-                view, QtWidgets.QAbstractItemView):
-            view = view.parent()
-        if not isinstance(view, QtWidgets.QAbstractItemView):
+        while w is not None and not isinstance(w, cls):
+            w = w.parent()
+        return w if isinstance(w, cls) else None
+
+    @classmethod
+    def _item_tip(cls, global_pos):
+        """ToolTipRole of the item-view row under ``global_pos`` (or "")."""
+        view = cls._ancestor(global_pos, QtWidgets.QAbstractItemView)
+        if view is None:
             return ""
         try:
             pos = view.viewport().mapFromGlobal(global_pos)
@@ -178,17 +182,73 @@ class _ToolTipFilter(QtCore.QObject):
         data = idx.data(QtCore.Qt.ItemDataRole.ToolTipRole)
         return data or ""
 
+    @classmethod
+    def _tab_tip(cls, global_pos):
+        """Tooltip of the tab under ``global_pos`` (or "").
+
+        Tab tips are not widget tips: ``QTabBar`` stores one per tab and paints
+        the native square box from its *own* ``QEvent.ToolTip`` handler, which
+        the widget-level lookups never see. That is why the dock strip at the
+        bottom (Netlist, Simulation, …) kept the ugly box while everything else
+        got the Aurora card. Qt fills these in itself for tabified docks
+        (tabToolTip == the dock title)."""
+        bar = cls._ancestor(global_pos, QtWidgets.QTabBar)
+        if bar is None:
+            return ""
+        try:
+            idx = bar.tabAt(bar.mapFromGlobal(global_pos))
+        except RuntimeError:
+            return ""
+        if idx < 0:
+            return ""
+        return bar.tabToolTip(idx) or ""
+
+    @classmethod
+    def _header_tip(cls, global_pos):
+        """ToolTipRole of the header section under ``global_pos`` (or "").
+
+        ``QHeaderView`` is an item view whose ``indexAt`` is always invalid, so
+        it needs the section-based lookup instead of :meth:`_item_tip`."""
+        hdr = cls._ancestor(global_pos, QtWidgets.QHeaderView)
+        if hdr is None:
+            return ""
+        model = hdr.model()
+        if model is None:
+            return ""
+        try:
+            pos = hdr.viewport().mapFromGlobal(global_pos)
+            sec = hdr.logicalIndexAt(pos)
+        except RuntimeError:
+            return ""
+        if sec < 0:
+            return ""
+        data = model.headerData(sec, hdr.orientation(),
+                                QtCore.Qt.ItemDataRole.ToolTipRole)
+        return data or ""
+
+    @classmethod
+    def _menu_tip(cls, global_pos):
+        """Active menu action's tooltip, but only where Qt would show one."""
+        menu = cls._ancestor(global_pos, QtWidgets.QMenu)
+        if menu is None or not menu.toolTipsVisible():
+            return ""
+        act = menu.activeAction()
+        return (act.toolTip() or "") if act is not None else ""
+
     def eventFilter(self, obj, event):
         et = event.type()
         if et == QtCore.QEvent.Type.ToolTip:
-            text = ""
-            if isinstance(obj, QtWidgets.QWidget):
+            gpos = event.globalPos()
+            # Sub-widget tips first: these live on a tab / row / section, not on
+            # the widget, and each one is painted by its own Qt handler as the
+            # native square box unless we claim the event here. They are more
+            # specific than any widget-level tip on the same widget.
+            text = (self._tab_tip(gpos)
+                    or self._item_tip(gpos)
+                    or self._header_tip(gpos)
+                    or self._menu_tip(gpos))
+            if not text and isinstance(obj, QtWidgets.QWidget):
                 text = obj.toolTip()
-            if not text:
-                # Item-view tips (e.g. the project tree) live on the item, not
-                # the widget: read the hovered index's ToolTipRole so those get
-                # the Aurora card too instead of the native square box.
-                text = self._item_tip(event.globalPos())
             if not text:
                 # Fall back to whatever bare widget sits under the cursor.
                 w = QtWidgets.QApplication.widgetAt(event.globalPos())
