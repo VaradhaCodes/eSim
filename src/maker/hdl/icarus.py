@@ -10,6 +10,7 @@ responsive run these functions on a worker thread (see hdl.jobs), and the pure
 shape makes them unit-testable (integration tests skip when iverilog is absent).
 """
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
@@ -31,6 +32,77 @@ def vpi_load_failed(output: str) -> bool:
     again inside ngspice at d_cosim time, so eSim must treat it as a hard
     toolchain failure instead of reporting a bogus success."""
     return 'Failed to open' in output and '.vpi' in output
+
+
+_UNKNOWN_MODULE_RE = re.compile(r'Unknown module type:\s*([\w$]+)')
+
+#: ``file.v:12: error: message``, and the same shape with the severity token
+#: absent -- iverilog's own parse errors read ``file.v:2: syntax error``, with
+#: no ``error:`` at all, so requiring one would miss the single most common
+#: failure. The filename stops at a path separator, so a diagnostic that did
+#: come back with a full path still yields the bare source name.
+_DIAG_RE = re.compile(
+    r'([^\s:\\/]+\.s?v):(\d+):\s*(?:(error|warning|sorry)\s*:\s*)?(.*)',
+    re.IGNORECASE)
+
+
+def missing_modules(output: str) -> List[str]:
+    """Module names iverilog could not resolve, in first-seen order -- e.g.
+    ``["counter"]`` for ``error: Unknown module type: counter``.
+
+    This is an *elaboration* failure, not a syntax one: every source parsed
+    fine, some instantiated module simply is not among the compiled sources.
+    Callers use it to tell "your code is broken" apart from "the module this
+    instance needs was never loaded"."""
+    seen: List[str] = []
+    for m in _UNKNOWN_MODULE_RE.finditer(output or ""):
+        if m.group(1) not in seen:
+            seen.append(m.group(1))
+    return seen
+
+
+def unknown_module_sites(output: str) -> List[Tuple[str, int, str]]:
+    """``(filename, line, module)`` for every unresolved instantiation that
+    iverilog located, so a caller can tell *which source* asked for the missing
+    module -- a testbench left over from another design reads very differently
+    from a design that instantiates a submodule nobody loaded."""
+    sites = []
+    for fname, line, _sev, msg in diagnostics(output):
+        m = _UNKNOWN_MODULE_RE.search(msg)
+        if m:
+            sites.append((fname, line, m.group(1)))
+    return sites
+
+
+def diagnostics(output: str) -> List[Tuple[str, int, str, str]]:
+    """Every located diagnostic in ``output`` as
+    ``(filename, line, severity, message)``, in emission order.
+
+    Severity is lower-cased, and defaults to ``'error'`` when the line carried
+    no severity token -- iverilog only omits it on hard parse failures
+    (``file.v:2: syntax error``). Lets a UI say *where* a run failed without the
+    reader having to spot a ``:8:`` inside a long compiler line."""
+    return [(m.group(1), int(m.group(2)),
+             (m.group(3) or 'error').lower(), m.group(4).strip())
+            for m in _DIAG_RE.finditer(output or "")]
+
+
+def error_locations(output: str) -> List[str]:
+    """De-duplicated ``file.v:line`` strings for the *errors* in ``output``, in
+    emission order. Empty when the failure carried no location (e.g. a
+    link-stage summary), which callers should treat as "nothing to point at".
+
+    Intended for output already known to be a failure: an untagged located line
+    counts as an error there (see :func:`diagnostics`), which is right for a
+    run that failed and would over-report on one that did not."""
+    seen: List[str] = []
+    for fname, line, sev, _ in diagnostics(output):
+        if sev == 'warning':
+            continue
+        loc = f"{fname}:{line}"
+        if loc not in seen:
+            seen.append(loc)
+    return seen
 
 
 @dataclass
@@ -169,6 +241,13 @@ def compile_design(
     reference the caller's filenames (the IDE relies on this to map an error
     back to the right editor tab). Returns a :class:`CompileResult`; never
     raises for an ordinary compile failure (only a timeout/OS error surfaces).
+
+    iverilog is handed the *bare* names and run with ``cwd=workdir``, because it
+    echoes back whatever it was given: absolute paths turned every diagnostic
+    into ``C:\\Users\\...\\AppData\\Local\\Temp\\tmp8f3k\\tb_design.v:8: error:``,
+    which buries the one thing the reader needs -- the line number -- behind a
+    temp path they can neither read nor act on. ``written`` still carries the
+    absolute paths for callers that need the files on disk.
     """
     written: List[str] = []
     for fname, content in sources:
@@ -177,10 +256,13 @@ def compile_design(
             fh.write(content)
         written.append(path)
 
-    return run_iverilog(
-        iverilog_bin, written, os.path.join(workdir, out_name),
+    res = run_iverilog(
+        iverilog_bin, [fname for fname, _ in sources],
+        os.path.join(workdir, out_name),
         cwd=workdir, std=std, warnings=warnings, extra_flags=extra_flags,
         timeout=timeout, cancel=cancel)
+    res.written = written
+    return res
 
 
 def simulate(

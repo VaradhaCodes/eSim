@@ -129,6 +129,132 @@ def test_cancelled_run_renders_nothing(verifier):
     assert not plotted
 
 
+# --- design / testbench scoping ------------------------------------------ #
+# Check Syntax compiles the design on its own first, so a testbench the user
+# never wrote cannot make their design look broken. These pin the reporting
+# either side of that split; the two-phase run itself needs iverilog and is
+# covered by test_verifier_sim.
+
+_STALE = ("tb_design.v:8: error: Unknown module type: counter\n"
+          "2 error(s) during elaboration.\n")
+
+
+def _compile_failure(stderr):
+    from maker.hdl.icarus import CompileResult
+    return CompileResult(ok=False, returncode=1, stdout="", stderr=stderr,
+                         out_path=None)
+
+
+def test_stale_testbench_is_named_not_blamed_on_the_design(verifier):
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    named = verifier._stale_testbench_note(
+        _compile_failure(_STALE), [("or_gate.v", "module or_gate; endmodule")])
+    assert named is True
+    msg = " ".join(logged)
+    assert "'counter'" in msg and "no design tab defines" in msg
+    assert "Auto-Generate Testbench" in msg
+
+
+def test_module_defined_by_a_design_tab_is_not_called_stale(verifier):
+    # Same diagnostic, but the module DOES exist in a design tab (e.g. the tab
+    # failed to compile for its own reasons). Not a testbench mismatch.
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    assert verifier._stale_testbench_note(
+        _compile_failure(_STALE),
+        [("counter.v", "module counter; endmodule")]) is False
+    assert not logged
+
+
+def test_design_side_missing_module_is_not_called_stale(verifier):
+    # The unresolved instantiation is in a design file, so the testbench is not
+    # the story -- the user is missing a submodule.
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    assert verifier._stale_testbench_note(
+        _compile_failure("top.v:12: error: Unknown module type: alu\n"),
+        [("top.v", "module top; endmodule")]) is False
+    assert not logged
+
+
+def test_compile_errors_report_where_to_look(verifier):
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    verifier.log_sim = lambda text: None
+    verifier._report_compile_errors(_compile_failure("or_gate.v:2: syntax error\n"))
+    assert any("or_gate.v:2" in m for m in logged)
+    assert any("double-click" in m for m in logged)
+
+
+def test_locator_is_silent_when_the_failure_has_no_location(verifier):
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    verifier.log_sim = lambda text: None
+    verifier._report_compile_errors(_compile_failure("I give up.\n"))
+    assert not any("error line(s)" in m for m in logged)
+
+
+def test_hints_can_be_suppressed(verifier):
+    # The generic "module instantiated but not defined" hint is noise once the
+    # stale-testbench note has said the same thing more precisely.
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    verifier.highlight_errors_from_log(_STALE, hints=False)
+    assert not logged
+    verifier.highlight_errors_from_log(_STALE, hints=True)
+    assert any("not defined" in m for m in logged)
+
+
+def test_default_testbench_is_dropped_with_the_default_design(
+        verifier, tmp_path, monkeypatch):
+    # DEFAULT_DESIGN and DEFAULT_TB are a matched pair. Opening a source file
+    # closes the default design; keeping its testbench leaves one instantiating
+    # a module nothing defines -- the reported "Check Syntax is broken" bug.
+    from PyQt6 import QtWidgets
+    from maker.VerilogVerifier import DEFAULT_TB
+    src = tmp_path / "or_gate.v"
+    src.write_text("module or_gate(input a, input b, output y);\n"
+                   "  assign y = a | b;\nendmodule\n")
+    assert verifier.tb_view.toPlainText().strip() == DEFAULT_TB.strip()
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileNames",
+                        staticmethod(lambda *a, **k: ([str(src)], "")))
+    verifier.load_source_files()
+
+    assert verifier.tb_view.toPlainText().strip() == ""
+    assert [e.toPlainText() for e in verifier.design_views][0].startswith(
+        "module or_gate")
+
+
+def test_user_written_testbench_is_never_cleared(verifier, tmp_path, monkeypatch):
+    from PyQt6 import QtWidgets
+    mine = "`timescale 1ns/1ps\nmodule tb_mine; endmodule\n"
+    verifier.tb_view.setPlainText(mine)
+    src = tmp_path / "alu.v"
+    src.write_text("module alu; endmodule\n")
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileNames",
+                        staticmethod(lambda *a, **k: ([str(src)], "")))
+    verifier.load_source_files()
+
+    assert verifier.tb_view.toPlainText() == mine
+
+
+def test_bus_render_also_drops_the_paired_default_testbench(verifier):
+    # The flow-navigator path replaces every design tab too, and the pinned
+    # testbench survives it -- same mismatch, different door.
+    class _Bus:
+        path = None
+
+        def get_content(self):
+            return "module or_gate(input a, output y);\n  assign y = a;\nendmodule\n"
+
+    verifier.set_design_bus(_Bus())
+    verifier.render_from_bus()
+    assert verifier.tb_view.toPlainText().strip() == ""
+
+
 # --- temp dir hygiene ---------------------------------------------------- #
 
 def test_cleanup_tmpdir_is_idempotent(verifier, tmp_path):

@@ -29,14 +29,16 @@ try:
     from . import CosimConfig
     from .hdl import icarus, jobs
     from .hdl.vcd import parse_vcd_for_plot, to_csv
-    from .hdl.ports import (extract_ports, generate_stub_testbench,
-                            order_modules, strip_comments)
+    from .hdl.ports import (extract_ports, find_modules,
+                            generate_stub_testbench, order_modules,
+                            strip_comments)
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
     from maker.hdl import icarus, jobs
     from maker.hdl.vcd import parse_vcd_for_plot, to_csv
-    from maker.hdl.ports import (extract_ports, generate_stub_testbench,
-                                 order_modules, strip_comments)
+    from maker.hdl.ports import (extract_ports, find_modules,
+                                 generate_stub_testbench, order_modules,
+                                 strip_comments)
 
 # Wall-clock caps for the toolchain so a runaway testbench (e.g. a clock with
 # no $finish) can't hang the worker thread indefinitely. Generous: this tool's
@@ -1243,8 +1245,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         editor.mark_error_line(line_num)
         editor.goto_line(line_num)
 
-    def highlight_errors_from_log(self, log_text):
-        """Squiggle the error lines in every tab, matched by filename in the log."""
+    def highlight_errors_from_log(self, log_text, hints=True):
+        """Squiggle the error lines in every tab, matched by filename in the log.
+
+        ``hints=False`` suppresses the generic :meth:`analyze_syntax_error`
+        advice for callers that have already said something more specific about
+        this failure."""
         # Clear all existing error highlights first
         for v in getattr(self, 'design_views', []):
             v.clear_error_highlights()
@@ -1273,7 +1279,8 @@ class VerilogVerifier(QtWidgets.QWidget):
                 continue
             editor.mark_error_line(line_num)
 
-        self.analyze_syntax_error(log_text)
+        if hints:
+            self.analyze_syntax_error(log_text)
 
     def analyze_syntax_error(self, log_text):
         hints = []
@@ -1320,6 +1327,15 @@ class VerilogVerifier(QtWidgets.QWidget):
                 first_editor = self.design_views[0]
                 if first_editor.toPlainText().strip() == DEFAULT_DESIGN.strip():
                     self.close_tab(0)
+                    # DEFAULT_DESIGN and DEFAULT_TB are a matched pair: the stub
+                    # testbench instantiates the counter this tab defined. Drop
+                    # the design and keep the testbench and it now instantiates
+                    # a module nothing defines -- an error against a file the
+                    # user never wrote. Only the untouched default is cleared;
+                    # anything the user typed or opened is theirs to keep.
+                    if self.tb_view.toPlainText().strip() == DEFAULT_TB.strip():
+                        self.tb_view.setPlainText("")
+                        self.tb_view.filepath = None
 
             for filepath in filepaths:
                 try:
@@ -1599,33 +1615,57 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         sources = self._design_sources()
         tb_code = self.get_tb_code()
-        if tb_code and tb_code.strip():
-            sources.append(("tb_design.v", tb_code))
+        has_tb = bool(tb_code and tb_code.strip())
 
         tmpdir = tempfile.mkdtemp()
         self._active_tmpdir = tmpdir
         self._teardown_state["tmpdir"] = tmpdir
         cancel = icarus.CancelToken()
 
-        def work():
+        def compile_unit(unit_sources, out_name):
             try:
                 return icarus.compile_design(
-                    iverilog, sources, tmpdir, std="-g2012", warnings=True,
-                    timeout=COMPILE_TIMEOUT_S, cancel=cancel)
+                    iverilog, unit_sources, tmpdir, std="-g2012", warnings=True,
+                    out_name=out_name, timeout=COMPILE_TIMEOUT_S, cancel=cancel)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(
                     f"Compilation exceeded {COMPILE_TIMEOUT_S}s and was stopped.")
 
+        def work():
+            # Phase A -- the design on its own, which is the question this
+            # button actually asks. iverilog roots at the user's own module, so
+            # nothing the testbench tab happens to contain can colour the
+            # verdict on their design.
+            design = compile_unit(sources, "design.bin")
+            if not design.ok or not has_tb or cancel.cancelled:
+                return design, None
+            # Phase B -- design + testbench: the unit Simulate will build. Only
+            # reached once the design is known good, so a failure here belongs
+            # to the testbench or to a design/testbench mismatch, and is
+            # reported as such instead of as "your code has errors".
+            return design, compile_unit(
+                sources + [("tb_design.v", tb_code)], "tb.bin")
+
         def done(res):
             try:
+                design, tb = res
                 if cancel.cancelled:
                     self.log("Syntax check cancelled.")
-                elif res.ok:
+                elif not design.ok:
+                    self.log("Design errors:")
+                    self._report_compile_errors(design)
+                elif tb is None:
                     self.log("Syntax OK.")
+                    if not has_tb:
+                        self.log("note: testbench is empty, so it was not "
+                                 "checked. Use Auto-Generate Testbench before "
+                                 "simulating.")
+                elif tb.ok:
+                    self.log("Syntax OK (design and testbench).")
                 else:
-                    self.log("Compilation errors:")
-                    self.log_sim(res.stderr)
-                    self.highlight_errors_from_log(res.stderr)
+                    self.log("Design syntax OK — testbench errors:")
+                    stale = self._stale_testbench_note(tb, sources)
+                    self._report_compile_errors(tb, hints=not stale)
             finally:
                 self._cleanup_tmpdir()
 
@@ -1635,6 +1675,54 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         self._start_job(work, done, fail, cancel,
                         busy=[self.btn_syntax, self.btn_simulate])
+
+    def _report_compile_errors(self, res, hints=True):
+        """Log a failed compile: raw tool output, squiggles in the owning tabs,
+        then a one-line locator.
+
+        The locator exists because the line number is the single most useful
+        token in a compiler run and it sits mid-line inside a message people
+        skim past. Restating it as ``tb_design.v:8`` -- and saying the console
+        is double-clickable -- turns 'it says something failed' into 'go here'.
+        """
+        self.log_sim(res.stderr)
+        self.highlight_errors_from_log(res.stderr, hints=hints)
+        locations = icarus.error_locations(res.output)
+        if locations:
+            where = ", ".join(locations[:5])
+            if len(locations) > 5:
+                where += f" (+{len(locations) - 5} more)"
+            self.log(f"note: error line(s) at {where} — double-click an error "
+                     f"in this console to jump there.")
+
+    def _stale_testbench_note(self, res, design_sources):
+        """Name the stale-testbench case outright, and report whether it did.
+
+        The pattern: the testbench instantiates a module no design tab defines,
+        because it was generated for -- or shipped with -- a different design.
+        iverilog reports that against ``tb_design.v``, a file the user never
+        wrote, in wording that reads like their own code is broken. That is how
+        a mismatched testbench gets reported as "Check Syntax doesn't work".
+
+        Returns True when a note was logged, so the caller can suppress the
+        generic 'module instantiated but not defined' hint, which says the same
+        thing less precisely."""
+        defined = set()
+        for _, code in design_sources:
+            defined.update(find_modules(code))
+        stale = []
+        for fname, _line, module in icarus.unknown_module_sites(res.output):
+            if (os.path.basename(fname) == "tb_design.v"
+                    and module not in defined and module not in stale):
+                stale.append(module)
+        if not stale:
+            return False
+        names = ", ".join(f"'{m}'" for m in stale)
+        self.log(f"note: the testbench instantiates {names}, which no design "
+                 f"tab defines — it does not match this design. Use "
+                 f"Auto-Generate Testbench to build one for the current "
+                 f"module, or open your own with Open Testbench.")
+        return True
 
     def auto_generate_tb(self):
         """Generate a testbench stub for the last-active design tab.
@@ -1711,7 +1799,8 @@ class VerilogVerifier(QtWidgets.QWidget):
         # Each design tab is written under its own tab-label filename (via
         # _design_sources) so iverilog error output references the tab the user
         # sees and highlight_errors_from_log can find it.
-        sources = self._design_sources() + [("tb_design.v", tb_code)]
+        design_sources = self._design_sources()
+        sources = design_sources + [("tb_design.v", tb_code)]
         self.log(f"Compiling {len(sources) - 1} module(s) + testbench...")
 
         tmpdir = tempfile.mkdtemp()
@@ -1733,7 +1822,8 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         def done(run):
             try:
-                self._render_sim_result(run, cancelled=cancel.cancelled)
+                self._render_sim_result(run, cancelled=cancel.cancelled,
+                                        design_sources=design_sources)
             finally:
                 self._cleanup_tmpdir()
 
@@ -1744,17 +1834,20 @@ class VerilogVerifier(QtWidgets.QWidget):
         self._start_job(work, done, fail, cancel,
                         busy=[self.btn_simulate, self.btn_syntax])
 
-    def _render_sim_result(self, run, cancelled=False):
+    def _render_sim_result(self, run, cancelled=False, design_sources=()):
         """Log/highlight/plot the outcome of build_and_simulate, on the GUI
-        thread. Mirrors the old inline simulate_and_wave reporting exactly."""
+        thread. ``design_sources`` is the design half of what was compiled, used
+        only to recognise a testbench that does not match it."""
         if cancelled:
             self.log("Simulation cancelled.")
             return
 
         if not run.compile.ok:
+            # Simulate always builds design+testbench as one unit, so the same
+            # mismatch Check Syntax now isolates can land here too.
             self.log("Compilation failed:")
-            self.log_sim(run.compile.stderr)
-            self.highlight_errors_from_log(run.compile.stderr)
+            stale = self._stale_testbench_note(run.compile, design_sources)
+            self._report_compile_errors(run.compile, hints=not stale)
             return
 
         sim = run.sim
@@ -1809,6 +1902,13 @@ class VerilogVerifier(QtWidgets.QWidget):
             idx = self.editor_tabs.indexOf(editor)
             if idx != -1:
                 self.close_tab(idx)
+        # Same pairing as load_source_files: the default testbench only makes
+        # sense next to the default design, and the design it drives is being
+        # replaced right here. Clear it so the incoming design isn't checked
+        # against a testbench for someone else's module.
+        if self.tb_view.toPlainText().strip() == DEFAULT_TB.strip():
+            self.tb_view.setPlainText("")
+            self.tb_view.filepath = None
         name = os.path.basename(self.bus.path) if self.bus.path else "design.v"
         self.add_module_tab(name, code, filepath=self.bus.path or None)
         self._rendered_content = code

@@ -62,6 +62,94 @@ def test_compile_writes_named_sources(tmp_path):
     assert res.out_path is None
 
 
+def test_compile_passes_bare_names_so_diagnostics_stay_readable(
+        tmp_path, monkeypatch):
+    # iverilog echoes back whatever path it was handed. Handing it absolute
+    # paths turned every error into
+    #   C:\...\AppData\Local\Temp\tmp8f3k\tb_design.v:8: error: ...
+    # which buries the line number -- the one actionable token -- behind a temp
+    # path. Run from workdir with bare names instead; `written` stays absolute
+    # for callers that need the files themselves.
+    seen = {}
+
+    def fake_run(cmd, cwd, timeout, cancel, env=None):
+        seen['cmd'], seen['cwd'] = cmd, cwd
+        return 1, "", ""
+
+    monkeypatch.setattr(icarus, "_run_cmd", fake_run)
+    res = icarus.compile_design(
+        "iverilog", [("alu.v", "x"), ("tb_design.v", "y")], str(tmp_path))
+
+    assert seen['cwd'] == str(tmp_path)
+    assert seen['cmd'][-2:] == ["alu.v", "tb_design.v"]
+    assert all(os.path.isabs(p) for p in res.written)
+
+
+# --- diagnostic parsing --------------------------------------------------- #
+
+_ELAB_LOG = """\
+tb_design.v:8: error: Unknown module type: counter
+2 error(s) during elaboration.
+*** These modules were missing:
+        counter referenced 1 times.
+***
+"""
+
+
+def test_missing_modules_reads_unknown_module_errors():
+    assert icarus.missing_modules(_ELAB_LOG) == ["counter"]
+    assert icarus.missing_modules("") == []
+    assert icarus.missing_modules("alu.v:3: error: syntax error") == []
+
+
+def test_missing_modules_deduplicates_in_first_seen_order():
+    log = ("tb.v:4: error: Unknown module type: alu\n"
+           "tb.v:9: error: Unknown module type: mux\n"
+           "tb.v:12: error: Unknown module type: alu\n")
+    assert icarus.missing_modules(log) == ["alu", "mux"]
+
+
+def test_unknown_module_sites_carry_the_file_that_asked():
+    # Which file instantiated the missing module decides the wording: a stale
+    # testbench is a different problem from a design missing a submodule.
+    assert icarus.unknown_module_sites(_ELAB_LOG) == [
+        ("tb_design.v", 8, "counter")]
+
+
+def test_diagnostics_defaults_severity_for_bare_parse_errors():
+    # iverilog's own parse errors carry no "error:" token at all. Requiring one
+    # would silently drop the single most common failure.
+    log = "or_gate.v:2: syntax error\nI give up.\n"
+    assert icarus.diagnostics(log) == [("or_gate.v", 2, "error", "syntax error")]
+    assert icarus.error_locations(log) == ["or_gate.v:2"]
+
+
+def test_error_locations_skips_warnings_and_dedups():
+    log = ("alu.v:3: warning: implicit definition of wire 'q'\n"
+           "alu.v:7: error: unable to bind wire\n"
+           "alu.v:7: error: another one on the same line\n")
+    assert icarus.error_locations(log) == ["alu.v:7"]
+
+
+def test_diagnostics_survive_an_absolute_windows_path():
+    # Defence in depth: even if a diagnostic does come back fully qualified
+    # (an include, a toolchain that ignores cwd), the bare name is recovered.
+    log = (r"C:\Users\x\AppData\Local\Temp\tmpe4k\tb_design.v"
+           ":8: error: Unknown module type: counter")
+    assert icarus.unknown_module_sites(log) == [("tb_design.v", 8, "counter")]
+    assert icarus.error_locations(log) == ["tb_design.v:8"]
+
+
+@needs_iverilog
+def test_real_diagnostics_are_not_prefixed_with_the_temp_path(tmp_path):
+    res = icarus.compile_design(
+        _IVERILOG, [("or_gate.v", "module or_gate(input a); endmodule"),
+                    ("tb_design.v", TB)], str(tmp_path))
+    assert res.ok is False
+    assert str(tmp_path) not in res.stderr
+    assert icarus.error_locations(res.output), res.stderr
+
+
 @needs_iverilog
 def test_compile_error_is_reported(tmp_path):
     res = icarus.compile_design(
