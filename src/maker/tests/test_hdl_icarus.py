@@ -278,3 +278,130 @@ def test_run_cmd_times_out_with_cancel_and_reaps_proc():
     tok = icarus.CancelToken()
     with pytest.raises(subprocess.TimeoutExpired):
         icarus._run_cmd(['sleep', '5'], None, 0.2, tok)
+
+
+# --- waveform discovery --------------------------------------------------- #
+# Insisting on the one hard-coded name is why a perfectly good run reported
+# "No VCD output" for every testbench not written against eSim's default.
+
+def test_find_dump_prefers_the_expected_name(tmp_path):
+    (tmp_path / "sim_out.vcd").write_text("a")
+    (tmp_path / "other.vcd").write_text("b")
+    assert os.path.basename(
+        icarus.find_dump(str(tmp_path))) == "sim_out.vcd"
+
+
+def test_find_dump_falls_back_to_any_vcd(tmp_path):
+    (tmp_path / "wave.vcd").write_text("a")
+    assert os.path.basename(icarus.find_dump(str(tmp_path))) == "wave.vcd"
+
+
+def test_find_dump_returns_none_when_nothing_was_dumped(tmp_path):
+    (tmp_path / "sim.out").write_text("not a waveform")
+    assert icarus.find_dump(str(tmp_path)) is None
+
+
+# --- language-standard fallback ------------------------------------------- #
+# -g2012 reserves words older Verilog used as identifiers ('bit', 'logic').
+# Rejecting such a file with a bare "syntax error" reads as if the user's code
+# were broken, when it is simply written to an older standard.
+
+_USES_BIT = ("module m(output [15:0] y);\n"
+             "  reg [4:0] n;\n  wire [15:0] bit = 1 << n;\n"
+             "  assign y = bit;\nendmodule\n")
+
+
+@needs_iverilog
+def test_compile_falls_back_to_an_older_standard(tmp_path):
+    res, std = icarus.compile_with_fallback(
+        _IVERILOG, [("m.v", _USES_BIT)], str(tmp_path), out_name="a.out")
+    assert res.ok, res.output
+    assert std != "-g2012"          # 2012 reserves 'bit'
+
+
+@needs_iverilog
+def test_a_real_error_is_reported_against_the_primary_standard(tmp_path):
+    res, std = icarus.compile_with_fallback(
+        _IVERILOG, [("m.v", "module m; wire w = ;\nendmodule\n")],
+        str(tmp_path), out_name="a.out")
+    assert not res.ok
+    assert std == "-g2012"
+
+
+@needs_iverilog
+def test_fallback_stops_on_a_non_syntax_failure(tmp_path, monkeypatch):
+    # An unresolved module fails identically under every standard; retrying it
+    # twice more just triples the wait before the same error.
+    calls = []
+    real = icarus.compile_design
+
+    def counted(*a, **kw):
+        calls.append(kw.get('std'))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(icarus, "compile_design", counted)
+    icarus.compile_with_fallback(
+        _IVERILOG, [("m.v", "module m; missing u0(); endmodule\n")],
+        str(tmp_path), out_name="a.out")
+    assert calls == ["-g2012"]
+
+
+@needs_sim
+def test_simulate_reads_back_a_differently_named_dump(tmp_path):
+    design = "module m; initial begin\n" \
+             '  $dumpfile("my_wave.vcd");\n  $dumpvars;\n' \
+             "  #10 $finish;\nend\nendmodule\n"
+    run = icarus.build_and_simulate(
+        _IVERILOG, _VVP, [("m.v", design)], str(tmp_path), libdir=_LIBDIR,
+        compile_timeout=60, sim_timeout=60)
+    assert run.ok, run.compile.output
+    assert run.vcd_name == "my_wave.vcd"
+    assert run.vcd_content
+
+
+@needs_sim
+def test_output_is_streamed_line_by_line_while_running(tmp_path):
+    design = ("module m; integer i; initial begin\n"
+              "  for (i = 0; i < 5; i = i + 1) $display(\"line %0d\", i);\n"
+              "  $finish;\nend\nendmodule\n")
+    seen = []
+    run = icarus.build_and_simulate(
+        _IVERILOG, _VVP, [("m.v", design)], str(tmp_path), libdir=_LIBDIR,
+        compile_timeout=60, sim_timeout=60,
+        on_line=lambda stream, line: seen.append(line))
+    assert run.sim.ok
+    assert sum("line" in s for s in seen) == 5
+    # ...and the buffered copy still holds everything, for callers that want it
+    assert run.sim.stdout.count("line") == 5
+
+
+@needs_sim
+def test_phase_callback_reports_compile_then_simulate(tmp_path):
+    phases = []
+    icarus.build_and_simulate(
+        _IVERILOG, _VVP, [("m.v", "module m; initial #1 $finish; endmodule\n")],
+        str(tmp_path), libdir=_LIBDIR, compile_timeout=60, sim_timeout=60,
+        on_phase=phases.append)
+    assert phases == ["compile", "simulate"]
+
+
+# --- BackgroundJob progress opt-in ---------------------------------------- #
+
+def test_job_reports_only_to_a_worker_that_asked(qapp):
+    """The reporter is passed by parameter NAME, not arity.
+
+    A bound method with one defaulted argument -- ModelGeneration's
+    ``build_cosim(self, engine="icarus")`` -- looks identical to an opt-in
+    worker under an arity test, and would silently receive a callable where it
+    expected a string."""
+    from maker.hdl.jobs import BackgroundJob
+
+    def wants(report):
+        return "opted in"
+
+    def looks_similar(engine="icarus"):
+        return engine
+
+    assert BackgroundJob(wants)._wants_report() is True
+    assert BackgroundJob(looks_similar)._wants_report() is False
+    assert BackgroundJob(lambda: None)._wants_report() is False

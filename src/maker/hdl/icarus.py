@@ -166,13 +166,63 @@ class CancelToken:
         return self._cancelled
 
 
-def _run_cmd(cmd, cwd, timeout, cancel, env=None):
+def _stream(proc, timeout, on_line):
+    """Drain a live process's pipes, forwarding each line to ``on_line``.
+
+    One reader thread per pipe: reading them in sequence would deadlock as soon
+    as the other pipe's OS buffer filled -- which a chatty ``$display`` loop
+    does in well under a second. Returns ``(stdout, stderr)`` and raises
+    ``subprocess.TimeoutExpired`` if the process outlives ``timeout``."""
+    import threading
+    import time
+
+    collected = {'stdout': [], 'stderr': []}
+
+    def pump(pipe, key):
+        try:
+            for line in iter(pipe.readline, ''):
+                collected[key].append(line)
+                if on_line is not None:
+                    try:
+                        on_line(key, line.rstrip('\n'))
+                    except Exception:
+                        pass        # a broken sink must not kill the run
+        except (ValueError, OSError):
+            pass                    # pipe closed under us (cancel / kill)
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    threads = [threading.Thread(target=pump, args=(proc.stdout, 'stdout'),
+                                daemon=True),
+               threading.Thread(target=pump, args=(proc.stderr, 'stderr'),
+                                daemon=True)]
+    for t in threads:
+        t.start()
+
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while proc.poll() is None:
+        if deadline is not None and time.monotonic() > deadline:
+            kill_process_tree(proc)
+            for t in threads:
+                t.join(1.0)
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        time.sleep(0.05)
+    for t in threads:
+        t.join(2.0)
+    return ''.join(collected['stdout']), ''.join(collected['stderr'])
+
+
+def _run_cmd(cmd, cwd, timeout, cancel, env=None, on_line=None):
     """Run ``cmd`` and return (returncode, stdout, stderr).
 
-    Uses subprocess.run when no cancel token is given (simplest, fully
-    buffered); otherwise a Popen the token can kill. Raises
-    subprocess.TimeoutExpired on timeout in both modes."""
-    if cancel is None:
+    Uses subprocess.run when nothing needs a live handle (simplest, fully
+    buffered); otherwise a Popen the cancel token can kill and, with
+    ``on_line``, whose output is forwarded as it arrives. Raises
+    subprocess.TimeoutExpired on timeout in every mode."""
+    if cancel is None and on_line is None:
         proc = subprocess.run(
             cmd, cwd=cwd, env=env, capture_output=True, text=True,
             timeout=timeout, creationflags=NO_WINDOW)
@@ -181,7 +231,11 @@ def _run_cmd(cmd, cwd, timeout, cancel, env=None):
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, creationflags=NO_WINDOW)
-    cancel.bind(proc)
+    if cancel is not None:
+        cancel.bind(proc)
+    if on_line is not None:
+        out, err = _stream(proc, timeout, on_line)
+        return proc.returncode, out, err
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -265,6 +319,66 @@ def compile_design(
     return res
 
 
+def find_dump(workdir: str, preferred: str = "sim_out.vcd") -> Optional[str]:
+    """Path to the waveform a run produced, whatever the testbench called it.
+
+    ``preferred`` is checked first; otherwise the newest ``*.vcd`` in
+    ``workdir`` wins. Insisting on one hard-coded name is why a perfectly good
+    run used to report "No VCD output" for every testbench that dumped to
+    ``dump.vcd`` / ``wave.vcd`` / anything else -- which is most testbenches
+    written by anyone other than eSim."""
+    direct = os.path.join(workdir, preferred)
+    if os.path.isfile(direct):
+        return direct
+    try:
+        found = [os.path.join(workdir, n) for n in os.listdir(workdir)
+                 if n.lower().endswith('.vcd')]
+    except OSError:
+        return None
+    found = [p for p in found if os.path.isfile(p)]
+    if not found:
+        return None
+    return max(found, key=os.path.getmtime)
+
+
+#: Language standards tried in order. ``-g2012`` (SystemVerilog) is the most
+#: permissive for modern code, but it also *reserves* words that older Verilog
+#: used freely as identifiers -- ``bit``, ``logic``, ``do``, ``final``. A
+#: perfectly good 2001-era file then dies on "syntax error" at the line that
+#: declares ``wire [15:0] bit``, which reads as if the user's code were broken.
+#: Falling back to the older standards fixes those without the user having to
+#: know what a language standard is.
+STD_FALLBACKS = ("-g2012", "-g2005", "-g2001")
+
+
+def compile_with_fallback(
+    iverilog_bin: str,
+    sources: Sequence[Tuple[str, str]],
+    workdir: str,
+    *,
+    stds: Sequence[str] = STD_FALLBACKS,
+    **kwargs,
+) -> Tuple[CompileResult, str]:
+    """Compile ``sources``, retrying under older language standards.
+
+    Returns ``(result, std_used)``. On success ``result`` is the run that
+    worked; when every standard fails, the FIRST failure is returned -- its
+    diagnostics are against the standard eSim actually targets, so they are the
+    ones worth showing."""
+    first = None
+    for std in stds:
+        res = compile_design(iverilog_bin, sources, workdir, std=std, **kwargs)
+        if res.ok:
+            return res, std
+        if first is None:
+            first = res
+        # Only a parse-level rejection can be a standard mismatch; a missing
+        # module or a bad port map fails identically everywhere, so stop.
+        if 'syntax error' not in res.output.lower():
+            break
+    return first, stds[0]
+
+
 def simulate(
     vvp_bin: str,
     out_path: str,
@@ -274,20 +388,23 @@ def simulate(
     vcd_name: str = "sim_out.vcd",
     timeout: Optional[float] = None,
     cancel: Optional[CancelToken] = None,
+    on_line=None,
 ) -> SimResult:
     """Run a compiled design under ``vvp`` in ``workdir``.
 
-    Returns a :class:`SimResult`; ``vcd_path`` is set only when the run
-    produced ``vcd_name`` (so the caller can tell "no $dumpfile" apart from a
-    crash). ``env`` lets the caller fix up the loader path (e.g. prepend the
-    vvp dir to PATH on Windows for its DLLs)."""
+    Returns a :class:`SimResult`; ``vcd_path`` is whatever waveform the run
+    left behind (``vcd_name`` first, else any ``*.vcd``), so the caller can
+    tell "no $dumpfile at all" apart from a crash. ``env`` lets the caller fix
+    up the loader path (e.g. prepend the vvp dir to PATH on Windows for its
+    DLLs). ``on_line`` receives output as it is produced, so a long run can
+    show progress instead of looking hung."""
     rc, out, err = _run_cmd(
-        [vvp_bin, out_path], workdir, timeout, cancel, env=env)
-    vcd = os.path.join(workdir, vcd_name)
+        [vvp_bin, out_path], workdir, timeout, cancel, env=env,
+        on_line=on_line)
     ok = rc == 0 and not vpi_load_failed((out or "") + (err or ""))
     return SimResult(
         ok=ok, returncode=rc, stdout=out, stderr=err,
-        vcd_path=vcd if os.path.isfile(vcd) else None)
+        vcd_path=find_dump(workdir, vcd_name))
 
 
 def vvp_env(vvp_bin: str, base_env: Optional[dict] = None,
@@ -321,6 +438,10 @@ class RunResult:
     compile: CompileResult
     sim: Optional[SimResult] = None
     vcd_content: Optional[str] = None
+    #: language standard the compile actually used (see STD_FALLBACKS)
+    std: str = STD_FALLBACKS[0]
+    #: name of the waveform file found, when it was not the expected one
+    vcd_name: Optional[str] = None
 
     @property
     def ok(self):
@@ -334,30 +455,44 @@ def build_and_simulate(
     workdir: str,
     *,
     libdir: Optional[str] = None,
-    std: str = "-g2012",
+    std: Optional[str] = None,
     out_name: str = "sim.out",
     vcd_name: str = "sim_out.vcd",
     compile_timeout: Optional[float] = None,
     sim_timeout: Optional[float] = None,
     cancel: Optional[CancelToken] = None,
+    on_line=None,
+    on_phase=None,
 ) -> RunResult:
     """Compile ``sources`` then run the result under vvp, reading back any VCD.
 
     The single blocking unit of work the IDE runs on a worker thread: it does no
     Qt and no logging, so the GUI thread can drive it and render the result.
-    Stops early (sim=None) if compilation fails."""
-    cres = compile_design(
-        iverilog_bin, sources, workdir, std=std, out_name=out_name,
+    Stops early (sim=None) if compilation fails. With ``std`` unset the
+    language standard falls back through :data:`STD_FALLBACKS`; ``on_line``
+    receives simulator output live and ``on_phase`` is told when the run moves
+    from compiling to simulating."""
+    stds = (std,) if std else STD_FALLBACKS
+    if on_phase:
+        on_phase('compile')
+    cres, used = compile_with_fallback(
+        iverilog_bin, sources, workdir, stds=stds, out_name=out_name,
         timeout=compile_timeout, cancel=cancel)
     if not cres.ok:
-        return RunResult(compile=cres)
+        return RunResult(compile=cres, std=used)
 
+    if on_phase:
+        on_phase('simulate')
     sres = simulate(
         vvp_bin, cres.out_path, workdir,
         env=vvp_env(vvp_bin, libdir=libdir), vcd_name=vcd_name,
-        timeout=sim_timeout, cancel=cancel)
+        timeout=sim_timeout, cancel=cancel, on_line=on_line)
     vcd_content = None
+    found_name = None
     if sres.vcd_path:
-        with open(sres.vcd_path, "r", encoding="utf-8") as fh:
+        found_name = os.path.basename(sres.vcd_path)
+        with open(sres.vcd_path, "r", encoding="utf-8",
+                  errors="replace") as fh:
             vcd_content = fh.read()
-    return RunResult(compile=cres, sim=sres, vcd_content=vcd_content)
+    return RunResult(compile=cres, sim=sres, vcd_content=vcd_content,
+                     std=used, vcd_name=found_name)

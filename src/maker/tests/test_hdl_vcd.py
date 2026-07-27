@@ -137,3 +137,102 @@ def test_to_csv_collapses_unchanged_rows_but_keeps_first_and_last():
 def test_to_csv_orders_clk_and_reset_first():
     csv = to_csv([0], {'z': ['0'], 'clk': ['1'], 'rst': ['0']}, '1ns')
     assert csv.splitlines()[0] == "Time (1ns),clk,rst,z"
+
+
+# --- name collisions across scopes --------------------------------------- #
+# $dumpvars(0, tb) dumps the testbench AND everything under it, so the same
+# signal name appears in several scopes. Keying the result by bare name meant
+# one trace silently overwrote the other -- signals vanished from the waveform
+# list for no visible reason.
+
+SCOPED_VCD = """\
+$timescale 1ns $end
+$scope module tb_counter $end
+$var wire 1 ! clk $end
+$var wire 1 " done $end
+$scope module uut $end
+$var wire 1 # clk $end
+$var wire 4 $ count $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+0"
+1#
+b0001 $
+#5
+1!
+0#
+"""
+
+
+def test_duplicate_names_are_scope_qualified_not_dropped():
+    ts, signals, _types, _raw, _ = parse_vcd_for_plot(SCOPED_VCD)
+    # Both 'clk' records survive: the testbench's keeps the bare name, the
+    # instance's is qualified by its scope.
+    assert 'clk' in signals and 'uut.clk' in signals
+    assert signals['clk'] == [0, 1]          # tb clk: 0 then 1
+    assert signals['uut.clk'] == [1, 0]      # instance clk: the other one
+    # Unique names are left alone.
+    assert 'done' in signals and 'count' in signals
+    assert ts == [0, 5]
+
+
+def test_aliased_symbol_yields_one_trace_named_at_the_shallowest_scope():
+    # A net dumped in two scopes shares one VCD symbol. It is one signal, so it
+    # gets one trace, named where the user declared it (not in the instance).
+    vcd = ("$scope module tb $end\n$var wire 1 ! a $end\n"
+           "$scope module uut $end\n$var wire 1 ! a_internal $end\n"
+           "$upscope $end\n$upscope $end\n$enddefinitions $end\n"
+           "#0\n0!\n#5\n1!\n")
+    _, signals, _, _, _ = parse_vcd_for_plot(vcd)
+    assert list(signals) == ['a']
+    assert signals['a'] == [0, 1]
+
+
+def test_parse_cost_is_linear_not_quadratic():
+    """The freeze this parser used to cause was algorithmic, not incidental.
+
+    Every sample searched the entire change history for its most recent
+    snapshot, so doubling the run quadrupled the work -- a few thousand clock
+    edges took minutes, on the GUI thread. Doubling the input here must not
+    much more than double the time; a quadratic parser fails this by a mile.
+    """
+    import time
+
+    def bench(n_times, n_sig=12):
+        syms = [chr(33 + i) for i in range(n_sig)]
+        out = ["$timescale 1ns $end", "$scope module tb $end"]
+        out += [f"$var wire 1 {s} sig{i} $end" for i, s in enumerate(syms)]
+        out += ["$upscope $end", "$enddefinitions $end"]
+        for t in range(n_times):
+            out.append(f"#{t * 10}")
+            out += [f"{t % 2}{s}" for s in syms[:3]]
+        text = "\n".join(out)
+        start = time.perf_counter()
+        parse_vcd_for_plot(text)
+        return time.perf_counter() - start
+
+    bench(200)                       # warm up the interpreter
+    small = bench(1000)
+    large = bench(4000)              # 4x the timestamps
+    # Linear would be ~4x; quadratic ~16x. Allow generous headroom for a loaded
+    # machine and still catch a return to quadratic behaviour.
+    assert large < max(small, 0.01) * 8
+
+
+def test_vector_range_is_dropped_from_the_label_but_a_bit_select_is_kept():
+    # Icarus writes '$var wire 4 ! count [3:0] $end' for every vector. Carrying
+    # that range into the label ('count[3:0]') breaks every lookup by name --
+    # including the "did this output ever move?" check -- for no benefit; the
+    # width is already known. A genuine 1-bit select IS part of the identity.
+    vcd = ("$scope module tb $end\n"
+           "$var wire 4 ! count [3:0] $end\n"
+           "$var wire 1 \" q [2] $end\n"
+           "$upscope $end\n$enddefinitions $end\n"
+           "#0\nb0000 !\n0\"\n#5\nb0011 !\n1\"\n")
+    _, signals, _, _, _ = parse_vcd_for_plot(vcd)
+    assert 'count' in signals and 'count[3:0]' not in signals
+    assert 'q[2]' in signals
+    assert signals['count'] == [0, 3]

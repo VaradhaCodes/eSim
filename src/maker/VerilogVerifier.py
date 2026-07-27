@@ -29,16 +29,19 @@ try:
     from . import CosimConfig
     from .hdl import icarus, jobs
     from .hdl.vcd import parse_vcd_for_plot, to_csv
-    from .hdl.ports import (extract_ports, find_modules,
-                            generate_stub_testbench, order_modules,
-                            strip_comments)
+    from .hdl.ports import (autodump_source, dump_file_name, extract_ports,
+                            find_modules, generate_stub_testbench, has_dump,
+                            has_finish, is_self_contained_testbench,
+                            order_modules, strip_comments, testbench_matches)
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
     from maker.hdl import icarus, jobs
     from maker.hdl.vcd import parse_vcd_for_plot, to_csv
-    from maker.hdl.ports import (extract_ports, find_modules,
-                                 generate_stub_testbench, order_modules,
-                                 strip_comments)
+    from maker.hdl.ports import (autodump_source, dump_file_name,
+                                 extract_ports, find_modules,
+                                 generate_stub_testbench, has_dump, has_finish,
+                                 is_self_contained_testbench, order_modules,
+                                 strip_comments, testbench_matches)
 
 # Wall-clock caps for the toolchain so a runaway testbench (e.g. a clock with
 # no $finish) can't hang the worker thread indefinitely. Generous: this tool's
@@ -46,6 +49,17 @@ except ImportError:  # launched with src/ on sys.path (absolute-import style)
 # run, not a slow one. The user can still Cancel sooner.
 COMPILE_TIMEOUT_S = 60
 SIM_TIMEOUT_S = 120
+
+# Simulated nanoseconds a generated watchdog lets a testbench with no $finish
+# run before stopping it. Long enough for a real design to do something, short
+# enough that the user gets a waveform instead of hitting SIM_TIMEOUT_S with
+# nothing to show.
+NO_FINISH_GUARD_NS = 200000
+
+# Console lines streamed live from a running simulation before the rest is
+# summarised. A $display in a clocked loop can emit hundreds of thousands of
+# lines; inserting each into a QTextEdit is itself a way to freeze the GUI.
+MAX_STREAMED_LINES = 2000
 
 
 def _no_glow(btn):
@@ -166,9 +180,37 @@ def make_vcd_plot_window(timestamps, signals_data, signal_types,
                 self.analysis_label.setText("Verilog Transient Analysis")
                 self.populate_waveform_list()
                 self._apply_persisted_layout()
+                self._show_default_traces()
 
                 self.radio_timing.setEnabled(True)
                 self.radio_timing.setChecked(True)
+
+            def _show_default_traces(self):
+                """Draw something the moment the waveform opens.
+
+                Traces default to hidden, which suits the ngspice flow (you
+                pick nodes off a schematic you drew). Here it means the tab a
+                simulation just opened is an EMPTY plot beside a list of 48
+                signals -- ``$dumpvars`` captures every internal reg too -- and
+                the user has to guess which ones they wanted. So preselect the
+                testbench's own top-level signals: for a generated testbench
+                those are exactly the design's ports, which is what the user
+                pressed Simulate to look at. A persisted layout wins; this only
+                fills an otherwise blank plot."""
+                if any(t.visible for t in self.traces.values()):
+                    return              # restored from a previous session
+                top = [i for i, t in sorted(self.traces.items())
+                       if '.' not in t.name and not t.name.startswith('esim_')]
+                chosen = (top or sorted(self.traces))[:12]
+                for i in chosen:
+                    self.traces[i].visible = True
+                for row in range(self.waveform_list.count()):
+                    item = self.waveform_list.item(row)
+                    idx = item.data(QtCore.Qt.ItemDataRole.UserRole)
+                    if isinstance(idx, int) and idx in self.traces:
+                        self.update_list_item_appearance(item, idx)
+                self._refresh_select_all_btn()
+                self._schedule_refresh()
 
         _VcdPlotWindow = VcdPlotWindow
     return _VcdPlotWindow(timestamps, signals_data, signal_types,
@@ -354,6 +396,426 @@ class ConsoleEdit(QtWidgets.QTextEdit):
         super().mouseDoubleClickEvent(e)
 
 
+class PinnedTabBar(QtWidgets.QTabBar):
+    """Chrome-style drag-to-reorder tab bar whose LAST tab is pinned in place.
+
+    The design tabs are the compile order (``_design_sources`` walks the bar), so
+    dragging them is a real edit, not decoration. The testbench tab is different:
+    this file addresses it as ``count() - 1`` everywhere (close_tab, rename_tab,
+    the TB label sync, the missing close button), so it has to stay last -- a
+    press on it never starts a drag, and a carried tab stops at its left edge.
+
+    The drag is painted by hand rather than through ``setMovable(True)``. Qt
+    turns off ``paintWithOffsets`` as soon as an application stylesheet is
+    installed (it cannot know where a styled tab is drawn), so with the Aurora
+    sheet the built-in drag offsets only the tab's *child widgets*: the close
+    button slides away while the tab body and its label stay frozen in the slot.
+    Here the carried tab is a pixmap the bar draws under the cursor, its vacated
+    slot is filled with the strip background (the gap), and the tab it displaces
+    slides into the freed slot instead of teleporting.
+    """
+
+    #: displaced neighbour slide, and the carried tab settling on drop
+    _SLIDE_MS = 150
+    _SETTLE_MS = 130
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMovable(False)
+        self._drag_locked = False
+        self._press_pos = None
+        self._press_index = -1
+        # Live drag: the carried tab's index, its pixmap, the grab offset inside
+        # it, and where its left edge currently sits.
+        self._drag_index = -1
+        self._drag_pix = None
+        self._drag_size = None
+        self._grab_dx = 0
+        self._ghost_x = 0
+        # One in-flight slide at a time: {"index", "pix", "size", "from", "to",
+        # "t"}. A second swap ends the first slide rather than stacking.
+        self._flight = None
+        self._flight_anim = None
+        self._gap_color = QtGui.QColor(0, 0, 0, 0)
+        # Set while grabbing a tab: see _clean_grab.
+        self._suspend_overlay = False
+
+    # ------------------------------------------------------------------ #
+    #  Geometry helpers
+    # ------------------------------------------------------------------ #
+    def _pinned(self):
+        return self.count() - 1
+
+    def _drag_rect(self):
+        rect = self.tabRect(self._drag_index)
+        return QtCore.QRect(self._ghost_x, rect.y(),
+                            self._drag_size.width(), self._drag_size.height())
+
+    def _flight_rect(self):
+        f = self._flight
+        start, end, t = f["from"], f["to"], f["t"]
+        x = start.x() + (end.x() - start.x()) * t
+        y = start.y() + (end.y() - start.y()) * t
+        return QtCore.QRect(int(round(x)), int(round(y)),
+                            f["size"].width(), f["size"].height())
+
+    def _moving_indexes(self):
+        """Tabs this bar paints itself, whose real slots must read as empty."""
+        moving = []
+        if self._drag_index >= 0:
+            moving.append(self._drag_index)
+        if self._flight is not None:
+            moving.append(self._flight["index"])
+        return moving
+
+    def _sample_gap_color(self):
+        """The strip colour behind the tabs -- what a vacated slot must show.
+
+        Rendered, not guessed: the bar itself is transparent (grabbing it yields
+        alpha-0 pixels that fill nothing), and the colour lives in the
+        stylesheet, not the palette, so #verilogRoot is asked to paint one pixel
+        of its own background with children excluded. Exact in either theme, and
+        it follows a re-theme without a token to keep in sync."""
+        fallback = self.palette().color(QtGui.QPalette.ColorRole.Window)
+        root = self
+        while root is not None and root.objectName() != "verilogRoot":
+            root = root.parentWidget()
+        if root is None:
+            return fallback
+        pixel = QtGui.QPixmap(1, 1)
+        pixel.fill(QtCore.Qt.GlobalColor.transparent)
+        # Via global coords: mapFrom() warns (and returns nonsense) unless the
+        # two widgets sit in the same parent chain, which a re-parented dock
+        # cannot promise.
+        origin = root.mapFromGlobal(self.mapToGlobal(QtCore.QPoint(0, 0)))
+        root.render(pixel, QtCore.QPoint(0, 0),
+                    QtGui.QRegion(QtCore.QRect(origin, QtCore.QSize(1, 1))),
+                    QtWidgets.QWidget.RenderFlag.DrawWindowBackground)
+        color = pixel.toImage().pixelColor(0, 0)
+        if color.alpha() == 0:
+            return fallback
+        color.setAlpha(255)
+        return color
+
+    def _clean_grab(self, rect):
+        """Grab a tab as the stylesheet draws it, with this bar's own overlay
+        suppressed. ``grab`` runs paintEvent, so a plain grab taken mid-drag
+        bakes whatever is floating over that tab into the copy -- which is how
+        the displaced neighbour ended up carrying a slice of the dragged tab."""
+        self._suspend_overlay = True
+        try:
+            return self.grab(rect)
+        finally:
+            self._suspend_overlay = False
+
+    def _tab_button(self, index):
+        return self.tabButton(index, TAB_RIGHT)
+
+    def _hide_moving_buttons(self):
+        """Close buttons are real child widgets: they paint at the tab's layout
+        position no matter what this bar draws. While a tab is carried (or
+        sliding) its button rides along inside the pixmap, so the live one is
+        hidden -- otherwise it stays behind in the empty slot."""
+        for index in self._moving_indexes():
+            button = self._tab_button(index)
+            if button is not None:
+                button.hide()
+
+    def _show_button(self, index):
+        button = self._tab_button(index)
+        if button is not None:
+            button.show()
+
+    # ------------------------------------------------------------------ #
+    #  Drag lifecycle
+    # ------------------------------------------------------------------ #
+    def _start_drag(self, index, press_x):
+        rect = self.tabRect(index)
+        self._gap_color = self._sample_gap_color()
+        self._drag_pix = self._clean_grab(rect)
+        self._drag_size = rect.size()
+        self._grab_dx = press_x - rect.x()
+        self._ghost_x = rect.x()
+        self._drag_index = index
+        self._hide_moving_buttons()
+        self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+        self.update()
+
+    def _track_drag(self, cursor_x):
+        width = self._drag_size.width()
+        # The carried tab stays inside the strip, and stops at the pinned tab:
+        # clamping the ghost is what keeps the testbench last without any
+        # snap-back.
+        limit = self.tabRect(self._pinned()).left() - width
+        self._ghost_x = max(0, min(cursor_x - self._grab_dx, max(0, limit)))
+        # Swap on centre-crosses-centre, against the immediate neighbour only.
+        # Hit-testing the cursor instead (tabAt) thrashes: right after a swap
+        # the pointer is still inside the tab it just displaced, so the pair
+        # would trade places again on the very next mouse move.
+        centre = self._ghost_x + width // 2
+        current = self._drag_index
+        if (current + 1 < self._pinned()
+                and centre > self.tabRect(current + 1).center().x()):
+            self._swap_with(current + 1)
+        elif (current > 0
+                and centre < self.tabRect(current - 1).center().x()):
+            self._swap_with(current - 1)
+        self.update()
+
+    def _swap_with(self, target):
+        """Reorder live, and slide the tab that was pushed out of the way."""
+        self._end_flight()
+        rect = self.tabRect(target)
+        pix = self._clean_grab(rect)
+        source = self._drag_index
+        self.moveTab(source, target)
+        self._drag_index = target
+        # moveTab shifts everything between the two slots by one; the tab that
+        # was at `target` is now one step back towards where the carried tab
+        # came from.
+        landed = target - 1 if target > source else target + 1
+        if not 0 <= landed < self.count():
+            self._hide_moving_buttons()
+            return
+        self._begin_flight(landed, pix, rect.size(), rect, self.tabRect(landed),
+                           self._SLIDE_MS)
+
+    def _begin_flight(self, index, pix, size, start, end, duration):
+        self._flight = {"index": index, "pix": pix, "size": size,
+                        "from": start, "to": end, "t": 0.0}
+        self._hide_moving_buttons()
+        anim = QtCore.QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(duration)
+        anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(self._on_flight_value)
+        anim.finished.connect(self._end_flight)
+        self._flight_anim = anim
+        anim.start(QtCore.QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _on_flight_value(self, value):
+        if self._flight is not None:
+            self._flight["t"] = float(value)
+            self.update()
+
+    def _end_flight(self):
+        anim, self._flight_anim = self._flight_anim, None
+        if anim is not None:
+            try:
+                anim.valueChanged.disconnect(self._on_flight_value)
+                anim.finished.disconnect(self._end_flight)
+                anim.stop()
+            except (RuntimeError, TypeError):
+                pass
+        flight, self._flight = self._flight, None
+        if flight is not None:
+            self._show_button(flight["index"])
+            self.update()
+
+    def _end_drag(self):
+        """Settle the carried tab into the slot it ended up in."""
+        if self._drag_index < 0:
+            return
+        index, pix, size = self._drag_index, self._drag_pix, self._drag_size
+        start = self._drag_rect()
+        self._drag_index = -1
+        self._drag_pix = None
+        self._drag_size = None
+        end = self.tabRect(index)
+        self._end_flight()
+        self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+        if start == end or pix is None:
+            self._show_button(index)
+            self.update()
+            return
+        self._begin_flight(index, pix, size, start, end, self._SETTLE_MS)
+
+    # ------------------------------------------------------------------ #
+    #  Events
+    # ------------------------------------------------------------------ #
+    def mousePressEvent(self, event):
+        pos = event.position().toPoint()
+        self._press_index = self.tabAt(pos)
+        self._press_pos = pos
+        self._drag_locked = self._press_index == self._pinned()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        pos = event.position().toPoint()
+        if event.buttons() == QtCore.Qt.MouseButton.NoButton:
+            # Hover: the cursor is the affordance. Open hand over a tab that can
+            # actually be carried, plain arrow over the pinned testbench so the
+            # user is not invited to drag something that will not move.
+            over = self.tabAt(pos)
+            self.setCursor(
+                QtCore.Qt.CursorShape.ArrowCursor if over == self._pinned()
+                else QtCore.Qt.CursorShape.OpenHandCursor)
+            super().mouseMoveEvent(event)
+            return
+        if self._drag_locked:
+            # Pinned tab: swallow the move so no drag can start from it.
+            return
+        if self._drag_index < 0:
+            if (self._press_index < 0 or self._press_pos is None
+                    or self._press_index >= self._pinned()):
+                super().mouseMoveEvent(event)
+                return
+            if abs(pos.x() - self._press_pos.x()) < QtWidgets.QApplication.startDragDistance():
+                super().mouseMoveEvent(event)
+                return
+            self._start_drag(self._press_index, self._press_pos.x())
+        self._track_drag(pos.x())
+
+    def mouseReleaseEvent(self, event):
+        was_dragging = self._drag_index >= 0
+        self._end_drag()
+        self._drag_locked = False
+        self._press_index = -1
+        self._press_pos = None
+        super().mouseReleaseEvent(event)
+        if was_dragging:
+            # A drag is not a click: keep the tab the user carried selected.
+            self.update()
+
+    def leaveEvent(self, event):
+        self.unsetCursor()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._suspend_overlay:
+            return
+        if self._drag_index < 0 and self._flight is None:
+            return
+        painter = QtGui.QPainter(self)
+        # Blank the slots of the tabs drawn by hand first, so the styled
+        # originals never double up with the moving copies.
+        for index in self._moving_indexes():
+            painter.fillRect(self.tabRect(index), self._gap_color)
+        if self._flight is not None:
+            painter.drawPixmap(self._flight_rect(), self._flight["pix"])
+        if self._drag_index >= 0 and self._drag_pix is not None:
+            # The carried tab rides on top of everything, including a slide.
+            painter.drawPixmap(self._drag_rect(), self._drag_pix)
+        painter.end()
+
+
+class HierarchyList(QtWidgets.QListWidget):
+    """Compile-order list whose rows can be dragged up and down.
+
+    Every row carries an item *widget* (name + move arrows). Qt's built-in
+    ``InternalMove`` drop takes the row out of the model and re-creates it, which
+    destroys that widget and leaves a blank row behind -- so the drop is
+    intercepted instead: this view never mutates its own model. It reports the
+    order the user asked for and the verifier rebuilds (and animates) the rows.
+    """
+
+    #: (ordered names, row the dragged/moved item landed on)
+    orderChanged = QtCore.pyqtSignal(list, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
+        self.viewport().setAcceptDrops(True)
+        self.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+
+    def names(self):
+        return [self.item(i).data(QtCore.Qt.ItemDataRole.UserRole)
+                for i in range(self.count())]
+
+    def startDrag(self, actions):
+        item = self.currentItem()
+        widget = self.itemWidget(item) if item is not None else None
+        if widget is None:
+            super().startDrag(actions)
+            return
+        # The delegate paints nothing (all the content lives in the item widget),
+        # so Qt's default drag pixmap would be an empty rectangle. Carry a grab
+        # of the real row instead, picked up under the cursor where it was held.
+        rect = self.visualItemRect(item)
+        drag = QtGui.QDrag(self)
+        drag.setMimeData(self.model().mimeData([self.indexFromItem(item)]))
+        drag.setPixmap(widget.grab())
+        drag.setHotSpot(
+            self.viewport().mapFromGlobal(QtGui.QCursor.pos()) - rect.topLeft())
+        # Ghost the row while it is in flight so the list shows where it came
+        # from without duplicating it under the drag pixmap.
+        effect = QtWidgets.QGraphicsOpacityEffect(widget)
+        effect.setOpacity(0.35)
+        widget.setGraphicsEffect(effect)
+        try:
+            drag.exec(QtCore.Qt.DropAction.MoveAction)
+        finally:
+            try:
+                widget.setGraphicsEffect(None)
+            except RuntimeError:
+                # Dropped: the row was rebuilt during exec() and this widget is
+                # already gone on the C++ side. Nothing to un-ghost.
+                pass
+
+    def dropEvent(self, event):
+        if event.source() is not self:
+            event.ignore()
+            return
+        names = self.names()
+        src = self.currentRow()
+        if src < 0 or not names:
+            event.ignore()
+            return
+        pos = event.position().toPoint()
+        index = self.indexAt(pos)
+        below = QtWidgets.QAbstractItemView.DropIndicatorPosition.BelowItem
+        if index.isValid():
+            slot = index.row() + (1 if self.dropIndicatorPosition() == below else 0)
+        else:
+            slot = len(names)          # dropped on the empty space under the rows
+        dest = self.drop_row(src, slot, len(names))
+        # IgnoreAction, not MoveAction: an accepted move would have the view
+        # delete and re-insert the row (and its item widget) behind our back.
+        event.setDropAction(QtCore.Qt.DropAction.IgnoreAction)
+        event.accept()
+        if dest != src:
+            names.insert(dest, names.pop(src))
+            # Next tick, not now: this runs inside QDrag.exec()'s nested loop,
+            # and the rebuild deletes the very item widget the drag is still
+            # holding (its grab is the drag pixmap). Let the drag unwind first.
+            QtCore.QTimer.singleShot(
+                0, lambda n=names, d=dest: self.orderChanged.emit(n, d))
+
+    @staticmethod
+    def drop_row(src, slot, count):
+        """Row ``src`` lands on, for a drop between rows at gap ``slot``.
+
+        ``slot`` counts gaps (0 == above the first row, ``count`` == past the
+        last). A gap below the source is one row further left once the source
+        has left its own slot, hence the decrement."""
+        dest = slot - 1 if slot > src else slot
+        return max(0, min(dest, count - 1))
+
+    def keyPressEvent(self, event):
+        # Ctrl+Up / Ctrl+Down: the same reorder from the keyboard, so the order
+        # is not mouse-only (and matches the arrow buttons' tooltips).
+        ctrl = event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier
+        keys = (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_Down)
+        if ctrl and event.key() in keys:
+            names = self.names()
+            src = self.currentRow()
+            step = -1 if event.key() == QtCore.Qt.Key.Key_Up else 1
+            dest = src + step
+            if 0 <= src < len(names) and 0 <= dest < len(names):
+                names.insert(dest, names.pop(src))
+                self.orderChanged.emit(names, dest)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class VerilogVerifier(QtWidgets.QWidget):
     #: emitted after a compile+simulate run finishes cleanly, so the host
     #: (Flow Navigator) can mark Verify complete and nudge toward Convert.
@@ -383,6 +845,8 @@ class VerilogVerifier(QtWidgets.QWidget):
         self._active_job = None
         self._active_cancel = None
         self._busy_buttons = []
+        # Console lines streamed from the run in flight (see _stream_line).
+        self._streamed = 0
         # Temp dir of the in-flight run, tracked so it can be reaped even if the
         # stage is torn down mid-run (the done/fail closures may never fire).
         self._active_tmpdir = None
@@ -586,7 +1050,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_auto_detect.clicked.connect(self.auto_detect_hierarchy)
         sidebar_layout.addWidget(self.btn_auto_detect)
         
-        self.hierarchy_list = QtWidgets.QListWidget()
+        self.hierarchy_list = HierarchyList()
         self.hierarchy_list.setObjectName("verilogHierarchyList")
         # The QSS white+border-radius styles the frame, but a QListWidget's
         # opaque viewport paints a square white rect over the frame's rounded
@@ -600,12 +1064,22 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.hierarchy_list.itemDoubleClicked.connect(self.hierarchy_double_clicked)
         self.hierarchy_list.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.hierarchy_list.customContextMenuRequested.connect(self.show_hierarchy_context_menu)
+        # Drag a row (or Ctrl+Up/Down) -> new compile order, rebuilt + animated.
+        self.hierarchy_list.orderChanged.connect(self.apply_hierarchy_order)
+        # Live refs for the row-slide animation (see _finish_hierarchy_anim).
+        self._hierarchy_anim = None
+        self._hierarchy_ghosts = []
         sidebar_layout.addWidget(self.hierarchy_list)
         
         top_h_splitter.addWidget(sidebar_widget)
 
         self.editor_tabs = QtWidgets.QTabWidget()
         self.editor_tabs.setObjectName("verilogEditorTabs")
+        # Chrome-style reorder: design tabs drag left/right (Qt slides the
+        # displaced tabs), the testbench stays pinned last. setTabBar must
+        # happen before any tab is added.
+        self.editor_tabs.setTabBar(PinnedTabBar())
+        self.editor_tabs.tabBar().tabMoved.connect(self._on_tab_moved)
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.tabCloseRequested.connect(self.close_tab)
         self.editor_tabs.tabBarDoubleClicked.connect(self.rename_tab)
@@ -763,6 +1237,31 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.btn_unlock.setVisible(False)
         controls_layout.addWidget(self.btn_unlock)
 
+        # Live run status. A compile+simulate can legitimately take minutes on
+        # a big design, and with only a greyed-out button to look at, "running"
+        # and "hung" are indistinguishable -- which is what the freeze reports
+        # were really about. A moving bar plus a phase label and an elapsed
+        # clock says which of the two it is, every second.
+        self.lbl_progress = QtWidgets.QLabel("")
+        self.lbl_progress.setObjectName("verifierRunStatus")
+        self.lbl_progress.setVisible(False)
+        controls_layout.addWidget(self.lbl_progress)
+
+        self.bar_progress = QtWidgets.QProgressBar()
+        self.bar_progress.setObjectName("verifierRunBar")
+        self.bar_progress.setRange(0, 0)        # indeterminate: it is running
+        self.bar_progress.setTextVisible(False)
+        self.bar_progress.setFixedWidth(zoom_px(110))
+        self.bar_progress.setVisible(False)
+        controls_layout.addWidget(self.bar_progress)
+
+        # Drives the elapsed clock in lbl_progress while a job is in flight.
+        self._run_timer = QtCore.QTimer(self)
+        self._run_timer.setInterval(1000)
+        self._run_timer.timeout.connect(self._tick_progress)
+        self._run_started = None
+        self._run_phase = ""
+
         # Shown only while a compile/sim runs on the worker thread; clicking it
         # kills the underlying iverilog/vvp process via the active CancelToken.
         self.btn_cancel = QtWidgets.QPushButton("Cancel")
@@ -887,12 +1386,25 @@ class VerilogVerifier(QtWidgets.QWidget):
                 install_tab_kinetics, install_context_menu_motion)
             # Static panel depth is always on (matches the design: only the
             # animated glow / kinetics are perf-gated behind the motion pref).
-            for w in (self.hierarchy_list, self.editor_tabs, self.console_tabs):
-                apply_panel_depth(w, blur=28, y=8, alpha=82)
+            # NOT on the tab widgets: a QTabBar is transparent between the tabs'
+            # rounded top corners, so the shadow rendered behind the widget
+            # showed *through* those notches as a hard tick above every tab
+            # boundary -- dark on the light theme, pale on the dark one. The
+            # tab cards get their depth from their border + pane instead.
+            apply_panel_depth(self.hierarchy_list, blur=28, y=8, alpha=82)
             if motion_enabled():
                 install_button_motion(self)
                 install_tab_kinetics(self)
                 install_context_menu_motion(self)
+                # ...except on the editor tab bar. The kinetic filter puts an
+                # accent drop-shadow on the whole bar while the mouse is down,
+                # which is exactly the shadow-through-the-notches tick again --
+                # now flashing on every press and behind every drag frame. This
+                # bar paints its own drag feedback and sets its own cursors, so
+                # it needs nothing from the filter.
+                kinetics = getattr(self, "_esim_tab_kinetic_filter", None)
+                if kinetics is not None:
+                    self.editor_tabs.tabBar().removeEventFilter(kinetics)
         except Exception:
             pass
 
@@ -932,6 +1444,34 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.editor_tabs.setCurrentWidget(editor)
 
         self.update_hierarchy_list()
+
+    def _on_tab_moved(self, _from, _to):
+        """Keep the model in step after a tab was dragged to a new slot.
+
+        Two jobs. Re-pin the testbench last if a drag somehow got past
+        PinnedTabBar's clamp (every ``count() - 1`` test in this file depends on
+        it). Then mirror the new on-screen order into ``design_views``, which is
+        what ``design_views[-1]`` and the get_design_code fallback read -- the
+        compile order itself comes from the bar, so it already followed."""
+        if getattr(self, '_repinning', False):
+            return
+        bar = self.editor_tabs.tabBar()
+        last = self.editor_tabs.count() - 1
+        tb_view = getattr(self, 'tb_view', None)
+        tb = self.editor_tabs.indexOf(tb_view) if tb_view is not None else -1
+        if 0 <= tb < last:
+            self._repinning = True
+            try:
+                bar.moveTab(tb, last)
+            finally:
+                self._repinning = False
+        views = set(getattr(self, 'design_views', []))
+        self.design_views = [self.editor_tabs.widget(i)
+                             for i in range(self.editor_tabs.count())
+                             if self.editor_tabs.widget(i) in views]
+        current = self.editor_tabs.currentIndex()
+        if self.editor_tabs.widget(current) in views:
+            self._last_active_design_idx = current
 
     def close_tab(self, index):
         # Prevent closing Testbench
@@ -1010,16 +1550,119 @@ class VerilogVerifier(QtWidgets.QWidget):
 
     def move_hierarchy_item(self, item, direction):
         row = self.hierarchy_list.row(item)
-        names = [self.hierarchy_list.item(i).data(QtCore.Qt.ItemDataRole.UserRole) for i in range(self.hierarchy_list.count())]
-        
-        if direction == "up" and row > 0:
-            names[row], names[row-1] = names[row-1], names[row]
-            self.update_hierarchy_list(names)
-            self.hierarchy_list.setCurrentRow(row - 1)
-        elif direction == "down" and row < len(names) - 1:
-            names[row], names[row+1] = names[row+1], names[row]
-            self.update_hierarchy_list(names)
-            self.hierarchy_list.setCurrentRow(row + 1)
+        names = self.hierarchy_list.names()
+        dest = row - 1 if direction == "up" else row + 1
+        if row < 0 or not (0 <= dest < len(names)):
+            return
+        names.insert(dest, names.pop(row))
+        self.apply_hierarchy_order(names, dest)
+
+    def apply_hierarchy_order(self, names, focus_row=None):
+        """Re-render the hierarchy in ``names`` order and slide the rows there.
+
+        The single entry point for every reorder -- move arrows, row drag,
+        Ctrl+Up/Down. The list itself is rebuilt outright (item widgets cannot
+        survive a model move), so without the slide a reorder is a silent
+        repaint: the row lands in its new place with nothing to say it moved.
+        Each row that changed position is covered by a snapshot of where it used
+        to be, and that snapshot is animated to where the row now is."""
+        before = self._snapshot_hierarchy_rows()
+        self.update_hierarchy_list(names)
+        if focus_row is not None and 0 <= focus_row < self.hierarchy_list.count():
+            self.hierarchy_list.setCurrentRow(focus_row)
+            self.hierarchy_list.setFocus()
+        if before:
+            self._animate_hierarchy_rows(before)
+
+    def _snapshot_hierarchy_rows(self):
+        """{name: (rect, pixmap)} for the rows on screen right now, or {} when
+        the slide should be skipped (motion off, panel hidden, nothing laid out
+        yet -- a grab of an unmapped widget is an empty pixmap)."""
+        # Any slide still running belongs to the pre-rebuild rows: finish it
+        # while those widgets are alive, or its cleanup would touch corpses.
+        self._finish_hierarchy_anim()
+        try:
+            from frontEnd.motion import motion_enabled
+            if not motion_enabled():
+                return {}
+        except Exception:
+            pass
+        if not self.hierarchy_list.isVisible():
+            return {}
+        rows = {}
+        for i in range(self.hierarchy_list.count()):
+            item = self.hierarchy_list.item(i)
+            widget = self.hierarchy_list.itemWidget(item)
+            rect = self.hierarchy_list.visualItemRect(item)
+            if widget is None or rect.isEmpty():
+                continue
+            rows[item.data(QtCore.Qt.ItemDataRole.UserRole)] = (
+                QtCore.QRect(rect), widget.grab())
+        return rows
+
+    def _animate_hierarchy_rows(self, before):
+        """FLIP the rebuilt rows: park a snapshot of each moved row at its old
+        geometry, hide the real row, and animate the snapshot into place."""
+        viewport = self.hierarchy_list.viewport()
+        group = QtCore.QParallelAnimationGroup(self.hierarchy_list)
+        for i in range(self.hierarchy_list.count()):
+            item = self.hierarchy_list.item(i)
+            name = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if name not in before:
+                continue
+            old_rect, pixmap = before[name]
+            new_rect = self.hierarchy_list.visualItemRect(item)
+            if new_rect == old_rect or new_rect.isEmpty():
+                continue
+            ghost = QtWidgets.QLabel(viewport)
+            ghost.setPixmap(pixmap)
+            ghost.setGeometry(old_rect)
+            ghost.show()
+            ghost.raise_()
+            widget = self.hierarchy_list.itemWidget(item)
+            if widget is not None:
+                widget.hide()
+            self._hierarchy_ghosts.append((ghost, widget))
+            anim = QtCore.QPropertyAnimation(ghost, b"geometry", group)
+            anim.setDuration(190)
+            anim.setStartValue(old_rect)
+            anim.setEndValue(new_rect)
+            # Fast out of the old slot, settling into the new one -- the same
+            # curve the rest of the Aurora motion uses.
+            anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+            group.addAnimation(anim)
+        if group.animationCount() == 0:
+            self._finish_hierarchy_anim()
+            group.deleteLater()
+            return
+        self._hierarchy_anim = group
+        group.finished.connect(self._finish_hierarchy_anim)
+        group.start()
+
+    def _finish_hierarchy_anim(self):
+        """Drop the ghosts and un-hide the real rows. Idempotent, and safe to
+        call after a rebuild has already deleted the widgets it restores."""
+        group, self._hierarchy_anim = self._hierarchy_anim, None
+        if group is not None:
+            try:
+                group.finished.disconnect(self._finish_hierarchy_anim)
+                group.stop()
+                group.deleteLater()
+            except (RuntimeError, TypeError):
+                pass
+        ghosts, self._hierarchy_ghosts = self._hierarchy_ghosts, []
+        for ghost, widget in ghosts:
+            for w in (ghost, widget):
+                if w is None:
+                    continue
+                try:
+                    if w is widget:
+                        w.show()
+                    else:
+                        w.deleteLater()
+                except RuntimeError:
+                    # Rebuilt out from under us; the C++ side is already gone.
+                    pass
 
     def update_hierarchy_list(self, sorted_names=None):
         self.hierarchy_list.clear()
@@ -1034,11 +1677,15 @@ class VerilogVerifier(QtWidgets.QWidget):
                 if hasattr(self, 'design_views') and self.editor_tabs.widget(i) in self.design_views:
                     names.append(self.editor_tabs.tabText(i))
                 
-        for name in names:
+        for row, name in enumerate(names):
             item = QtWidgets.QListWidgetItem()
             item.setData(QtCore.Qt.ItemDataRole.UserRole, name)
             widget = QtWidgets.QWidget()
             widget.setObjectName("hierarchyRow")
+            # Open hand over the row body: the row is draggable, and nothing
+            # else on it says so.
+            widget.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+            widget.setToolTip("Drag to reorder — this is the compile order")
             layout = QtWidgets.QHBoxLayout(widget)
             # Zero vertical margin: the row fills the item rect exactly (item has
             # no vertical padding), so the hover/selected pill hugs the content
@@ -1054,17 +1701,27 @@ class VerilogVerifier(QtWidgets.QWidget):
             # the focus ring the last-clicked arrow otherwise kept.
             vcenter = QtCore.Qt.AlignmentFlag.AlignVCenter
 
-            btn_up = QtWidgets.QPushButton("▴")
+            # Solid ▲/▼ in a 26px hit target: the old ▴/▾ at 22px drew a
+            # 5px-tall hairline glyph that was hard to see and harder to hit.
+            btn_up = QtWidgets.QPushButton("▲")
             btn_up.setObjectName("hierarchyMoveBtn")
-            btn_up.setFixedSize(zoom_px(22), zoom_px(22))
+            btn_up.setFixedSize(zoom_px(26), zoom_px(26))
             btn_up.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            btn_up.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn_up.setToolTip("Move up (Ctrl+Up)")
+            # Greyed out at the ends of the list: the honest answer to "did my
+            # click do anything?" when there is nowhere left to go.
+            btn_up.setEnabled(row > 0)
             _no_glow(btn_up)
             btn_up.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "up"))
 
-            btn_down = QtWidgets.QPushButton("▾")
+            btn_down = QtWidgets.QPushButton("▼")
             btn_down.setObjectName("hierarchyMoveBtn")
-            btn_down.setFixedSize(zoom_px(22), zoom_px(22))
+            btn_down.setFixedSize(zoom_px(26), zoom_px(26))
             btn_down.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            btn_down.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn_down.setToolTip("Move down (Ctrl+Down)")
+            btn_down.setEnabled(row < len(names) - 1)
             _no_glow(btn_down)
             btn_down.clicked.connect(lambda checked, i=item: self.move_hierarchy_item(i, "down"))
 
@@ -1535,20 +2192,59 @@ class VerilogVerifier(QtWidgets.QWidget):
         if d:
             shutil.rmtree(d, ignore_errors=True)
 
-    def _start_job(self, work, on_done, on_fail, cancel, busy):
-        """Run ``work()`` on a worker thread; deliver its result to ``on_done``
-        (or its error to ``on_fail``) back on the GUI thread. ``busy`` buttons
-        are disabled and a Cancel button shown for the duration; ``cancel`` is
-        the token ``work`` threads into the backend so Cancel can kill it."""
+    # ------------------------------------------------------------------ #
+    #  Run status (phase + elapsed clock, updated once a second)
+    # ------------------------------------------------------------------ #
+    def _tick_progress(self):
+        if self._run_started is None:
+            return
+        secs = int(self._run_started.elapsed() / 1000)
+        self.lbl_progress.setText(
+            f"{self._run_phase} {secs // 60}:{secs % 60:02d}")
+
+    def set_phase(self, phase):
+        """Name what the in-flight run is doing right now (GUI thread)."""
+        self._run_phase = phase
+        self._tick_progress()
+
+    def _stream_line(self, stream, text):
+        """One line of live simulator output, delivered on the GUI thread."""
+        self._streamed += 1
+        if self._streamed <= MAX_STREAMED_LINES:
+            self.log_sim(text)
+        elif self._streamed == MAX_STREAMED_LINES + 1:
+            self.log(f"note: output past {MAX_STREAMED_LINES} lines is not "
+                     f"shown live; the run continues.")
+
+    def _start_job(self, work, on_done, on_fail, cancel, busy, phase="Working"):
+        """Run ``work(report)`` on a worker thread; deliver its result to
+        ``on_done`` (or its error to ``on_fail``) back on the GUI thread.
+
+        ``busy`` buttons are disabled and the Cancel button + run status shown
+        for the duration; ``cancel`` is the token ``work`` threads into the
+        backend so Cancel can kill it. ``report`` is a thread-safe callable the
+        backend uses to push phase changes and output lines to the console
+        while it runs."""
         self._active_cancel = cancel
         self._teardown_state["cancel"] = cancel
         self._busy_buttons = busy
+        self._streamed = 0
         for b in busy:
             b.setEnabled(False)
         self.btn_cancel.setVisible(True)
         self.btn_cancel.setEnabled(True)
 
+        self._run_started = QtCore.QElapsedTimer()
+        self._run_started.start()
+        self._run_phase = phase
+        self.lbl_progress.setText(f"{phase} 0:00")
+        self.lbl_progress.setVisible(True)
+        self.bar_progress.setVisible(True)
+        self._run_timer.start()
+
         job = jobs.BackgroundJob(work, parent=self)
+        # Queued across the thread boundary, so the backend can report freely.
+        job.progress.connect(self._on_progress)
         self._active_job = job
         self._teardown_state["job"] = job
 
@@ -1560,6 +2256,10 @@ class VerilogVerifier(QtWidgets.QWidget):
             for b in busy:
                 b.setEnabled(True)
             self.btn_cancel.setVisible(False)
+            self._run_timer.stop()
+            self._run_started = None
+            self.lbl_progress.setVisible(False)
+            self.bar_progress.setVisible(False)
 
         def ok(result):
             finish()
@@ -1573,6 +2273,14 @@ class VerilogVerifier(QtWidgets.QWidget):
         job.failed.connect(err)
         job.finished.connect(job.deleteLater)
         job.start()
+
+    def _on_progress(self, kind, text):
+        """Backend progress, marshalled onto the GUI thread by the job's
+        queued ``progress`` signal. ``kind`` is 'phase' or an output stream."""
+        if kind == 'phase':
+            self.set_phase(text)
+        else:
+            self._stream_line(kind, text)
 
     def cancel_running_job(self):
         if self._active_cancel is not None:
@@ -1624,14 +2332,18 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         def compile_unit(unit_sources, out_name):
             try:
-                return icarus.compile_design(
-                    iverilog, unit_sources, tmpdir, std="-g2012", warnings=True,
+                # Fall back through the older language standards: a 2001-era
+                # file using 'bit' or 'logic' as an identifier is valid code
+                # that -g2012 rejects with a bare "syntax error".
+                res, _std = icarus.compile_with_fallback(
+                    iverilog, unit_sources, tmpdir, warnings=True,
                     out_name=out_name, timeout=COMPILE_TIMEOUT_S, cancel=cancel)
+                return res
             except subprocess.TimeoutExpired:
                 raise RuntimeError(
                     f"Compilation exceeded {COMPILE_TIMEOUT_S}s and was stopped.")
 
-        def work():
+        def work(report):
             # Phase A -- the design on its own, which is the question this
             # button actually asks. iverilog roots at the user's own module, so
             # nothing the testbench tab happens to contain can colour the
@@ -1674,7 +2386,8 @@ class VerilogVerifier(QtWidgets.QWidget):
             self._cleanup_tmpdir()
 
         self._start_job(work, done, fail, cancel,
-                        busy=[self.btn_syntax, self.btn_simulate])
+                        busy=[self.btn_syntax, self.btn_simulate],
+                        phase="Checking")
 
     def _report_compile_errors(self, res, hints=True):
         """Log a failed compile: raw tool output, squiggles in the owning tabs,
@@ -1767,27 +2480,58 @@ class VerilogVerifier(QtWidgets.QWidget):
             self.btn_stub.setEnabled(True)
             return
 
-        tb_code = generate_stub_testbench(module_name, ports)
+        tb_code = generate_stub_testbench(module_name, ports, design_code=code)
         self.tb_view.setPlainText(tb_code)
         # Jump to the testbench tab (always last)
         self.editor_tabs.setCurrentIndex(self.editor_tabs.count() - 1)
         self.log(f"Generated testbench stub for module '{module_name}'.")
         self.btn_stub.setEnabled(True)
 
+    def _ensure_testbench(self, design_sources):
+        """Make sure a usable testbench exists before simulating.
+
+        The realistic user path here is: paste a module from somewhere, press
+        Simulate. Demanding that they *also* produce a matching testbench --
+        with the right instance name, the right port map and the exact
+        ``$dumpfile`` eSim wants -- is the step at which that user gives up. So
+        an empty testbench, or one left over from a different design, is
+        replaced with a generated one instead of failing the run.
+
+        A testbench that does instantiate this design is always left alone: it
+        is the user's, and they may well have written it deliberately.
+        Returns the testbench source to compile, or None if one cannot be made.
+        """
+        tb_code = self.get_tb_code()
+        defined = set()
+        for _name, code in design_sources:
+            defined.update(find_modules(code))
+
+        if testbench_matches(tb_code, defined):
+            return tb_code
+
+        design_code = "\n".join(code for _n, code in design_sources)
+        module_name, ports = extract_ports(design_code)
+        if not module_name:
+            self.log("Error: no Verilog module found in the design tabs.")
+            return None
+
+        why = ("the testbench is empty" if not tb_code.strip()
+               else f"the testbench does not instantiate '{module_name}'")
+        tb_code = generate_stub_testbench(module_name, ports,
+                                          design_code=design_code)
+        self.tb_view.setPlainText(tb_code)
+        self.log(f"note: {why} — generated one for '{module_name}' and used "
+                 f"it. Open the Testbench tab to edit or replace it.")
+        return tb_code
+
     def simulate_and_wave(self):
         if self._job_running():
             return
         self.log_section("Simulate")
-        self.log("Running simulation...")
 
         design_code = self.get_design_code()
         if not design_code or not design_code.strip():
             self.log("Error: Design editor is empty.")
-            return
-
-        tb_code = self.get_tb_code()
-        if not tb_code or not tb_code.strip():
-            self.log("Error: Testbench editor is empty. Use Auto-Generate first.")
             return
 
         iverilog = self.find_iverilog()
@@ -1800,8 +2544,41 @@ class VerilogVerifier(QtWidgets.QWidget):
         # _design_sources) so iverilog error output references the tab the user
         # sees and highlight_errors_from_log can find it.
         design_sources = self._design_sources()
-        sources = design_sources + [("tb_design.v", tb_code)]
-        self.log(f"Compiling {len(sources) - 1} module(s) + testbench...")
+
+        # A design that is already a complete testbench (no ports, drives
+        # itself) is simulated as-is; wrapping it would instantiate a port-less
+        # module and drive nothing.
+        self_contained = (len(design_sources) == 1
+                          and is_self_contained_testbench(design_sources[0][1]))
+        if self_contained:
+            tb_code = design_sources[0][1]
+            sources = list(design_sources)
+            self.log("Design is a self-contained testbench — running it "
+                     "directly.")
+        else:
+            tb_code = self._ensure_testbench(design_sources)
+            if tb_code is None:
+                return
+            sources = design_sources + [("tb_design.v", tb_code)]
+
+        # Read the waveform back under whatever name the testbench dumps to,
+        # and supply a dump (and a stop) when it has neither. Between them,
+        # these are the difference between "Simulate produced nothing" and a
+        # waveform, for every testbench not written against eSim's defaults.
+        vcd_name = dump_file_name(tb_code) or "sim_out.vcd"
+        if not has_dump(tb_code):
+            guard = None if has_finish(tb_code) else NO_FINISH_GUARD_NS
+            sources = sources + [("esim_autodump.v",
+                                  autodump_source(vcd_name, guard_ns=guard))]
+            note = "no $dumpvars in the testbench — capturing all signals"
+            if guard:
+                note += (f"; no $finish either — stopping after "
+                         f"{guard} ns")
+            self.log(f"note: {note}.")
+
+        count = len(design_sources)
+        self.log(f"Compiling {count} file(s)"
+                 + ("..." if self_contained else " + testbench..."))
 
         tmpdir = tempfile.mkdtemp()
         self._active_tmpdir = tmpdir
@@ -1809,20 +2586,48 @@ class VerilogVerifier(QtWidgets.QWidget):
         cancel = icarus.CancelToken()
         libdir = CosimConfig.iverilog_libdir()
 
-        def work():
+        def work(report):
+            # Cap the live relay HERE, on the worker side: a $display in a
+            # clocked loop can emit hundreds of thousands of lines, and one
+            # queued signal each would flood the GUI event loop even if the
+            # slot then threw them away. The full output is still captured in
+            # the result for the summary.
+            streamed = [0]
+
+            def relay(kind, text):
+                streamed[0] += 1
+                if streamed[0] <= MAX_STREAMED_LINES:
+                    report(kind, text)
+
             try:
-                return icarus.build_and_simulate(
+                report('phase', 'Compiling')
+                run = icarus.build_and_simulate(
                     iverilog, vvp, sources, tmpdir, libdir=libdir,
+                    vcd_name=vcd_name,
                     compile_timeout=COMPILE_TIMEOUT_S,
-                    sim_timeout=SIM_TIMEOUT_S, cancel=cancel)
+                    sim_timeout=SIM_TIMEOUT_S, cancel=cancel,
+                    on_line=relay,
+                    on_phase=lambda p: report(
+                        'phase',
+                        'Simulating' if p == 'simulate' else 'Compiling'))
             except subprocess.TimeoutExpired:
                 raise RuntimeError(
                     f"Simulation exceeded {SIM_TIMEOUT_S}s and was stopped. "
                     "Add a $finish to your testbench or shorten the run.")
+            # Parse the VCD HERE, on the worker thread. It used to run in the
+            # done-callback, i.e. on the GUI thread, where a long run's dump
+            # locked the whole application up for as long as it took.
+            parsed = None
+            if run.vcd_content and not cancel.cancelled:
+                report('phase', 'Reading waveform')
+                parsed = parse_vcd_for_plot(run.vcd_content)
+            return run, parsed
 
-        def done(run):
+        def done(result):
             try:
-                self._render_sim_result(run, cancelled=cancel.cancelled,
+                run, parsed = result
+                self._render_sim_result(run, parsed,
+                                        cancelled=cancel.cancelled,
                                         design_sources=design_sources)
             finally:
                 self._cleanup_tmpdir()
@@ -1832,12 +2637,15 @@ class VerilogVerifier(QtWidgets.QWidget):
             self._cleanup_tmpdir()
 
         self._start_job(work, done, fail, cancel,
-                        busy=[self.btn_simulate, self.btn_syntax])
+                        busy=[self.btn_simulate, self.btn_syntax],
+                        phase="Compiling")
 
-    def _render_sim_result(self, run, cancelled=False, design_sources=()):
+    def _render_sim_result(self, run, parsed=None, cancelled=False,
+                           design_sources=()):
         """Log/highlight/plot the outcome of build_and_simulate, on the GUI
-        thread. ``design_sources`` is the design half of what was compiled, used
-        only to recognise a testbench that does not match it."""
+        thread. ``parsed`` is the already-parsed VCD (done on the worker thread
+        so this method stays cheap). ``design_sources`` is the design half of
+        what was compiled, used only to recognise a mismatched testbench."""
         if cancelled:
             self.log("Simulation cancelled.")
             return
@@ -1850,11 +2658,18 @@ class VerilogVerifier(QtWidgets.QWidget):
             self._report_compile_errors(run.compile, hints=not stale)
             return
 
+        if run.std != icarus.STD_FALLBACKS[0]:
+            self.log(f"note: compiled with {run.std} — this code uses "
+                     f"identifiers that are reserved words in newer Verilog "
+                     f"standards.")
+
         sim = run.sim
-        if sim.stdout:
-            self.log_sim(sim.stdout)
-        if sim.stderr:
-            self.log_sim(sim.stderr)
+        # stdout/stderr already reached the console live (see _stream_line);
+        # only the tail beyond the streaming cap needs summarising.
+        produced = len(((sim.stdout or "") + (sim.stderr or "")).splitlines())
+        if produced > MAX_STREAMED_LINES:
+            self.log(f"note: {produced - MAX_STREAMED_LINES} further output "
+                     f"line(s) not shown.")
 
         if not sim.ok:
             self.log(f"vvp: exited with code {sim.returncode}")
@@ -1862,23 +2677,57 @@ class VerilogVerifier(QtWidgets.QWidget):
                 self.log("note: exit code 0xC0000135 — missing DLL. "
                          "Reinstall Icarus Verilog with 'Install MinGW Dependencies' checked.")
 
-        if run.vcd_content:
-            self.log("Parsing VCD...")
+        if parsed is None and run.vcd_content:
+            # Fallback for callers that hand over an unparsed run. The normal
+            # path parses on the worker thread (see simulate_and_wave) exactly
+            # so this does not happen on a big dump.
             try:
-                timestamps, signals_data, signal_types, raw_signals, timescale = parse_vcd_for_plot(run.vcd_content)
-                self.current_raw_signals_data = raw_signals
-                self.current_timescale = timescale
-                self.render_waveform(timestamps, signals_data, signal_types)
-                self.log("Waveform ready.")
+                parsed = parse_vcd_for_plot(run.vcd_content)
             except Exception as ex:
                 self.log(f"Error: failed to parse VCD — {ex}")
+
+        if parsed and parsed[0]:
+            timestamps, signals_data, signal_types, raw_signals, timescale = parsed
+            self.current_raw_signals_data = raw_signals
+            self.current_timescale = timescale
+            self.render_waveform(timestamps, signals_data, signal_types)
+            if run.vcd_name and run.vcd_name != "sim_out.vcd":
+                self.log(f"Read waveform from {run.vcd_name}.")
+            self.log(f"Waveform ready — {len(signals_data)} signal(s), "
+                     f"{len(timestamps)} sample(s).")
+            self._warn_if_undriven(signals_data, raw_signals)
+        elif run.vcd_content:
+            self.log("Error: the simulation dumped a waveform with no value "
+                     "changes. Check that the testbench drives the design "
+                     "before $finish.")
         else:
-            self.log("No VCD output. Verify testbench includes "
-                     '$dumpfile("sim_out.vcd") and $dumpvars(0, ...).')
+            self.log("No waveform was produced. The testbench ran but wrote "
+                     "no VCD — use Auto-Generate Testbench for one that does.")
 
         # Compile + simulate both succeeded: let the host advance the flow.
         if run.ok:
             self.simulationSucceeded.emit()
+
+    def _warn_if_undriven(self, signals_data, raw_signals):
+        """Say so when the waveform is mostly undefined.
+
+        An all-X trace is the single most common "the waveform is broken"
+        report, and it is almost never a plotting problem: it means the
+        testbench never drove the inputs. Naming that beats leaving the user
+        staring at a flat red plot wondering which half of the tool failed."""
+        undriven = [name for name, vals in raw_signals.items()
+                    if vals and all(str(v).lower() in ('x', 'z')
+                                    for v in vals)]
+        if not undriven:
+            return
+        names = ", ".join(undriven[:5])
+        if len(undriven) > 5:
+            names += f" (+{len(undriven) - 5} more)"
+        scope = ("every signal" if len(undriven) == len(signals_data)
+                 else "some signals")
+        self.log(f"note: {scope} stayed undefined (X/Z) for the whole run: "
+                 f"{names}. That usually means the testbench never drives "
+                 f"them — Auto-Generate Testbench writes one that does.")
 
     def set_design_bus(self, bus):
         """Bind this stage to the shared design (called by the Flow Navigator)."""

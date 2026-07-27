@@ -203,3 +203,164 @@ def test_order_keeps_duplicate_keys():
     order = order_modules([("d.v", "module d; endmodule"),
                            ("d.v", "module e; endmodule")])
     assert order == ["d.v", "d.v"]             # every unit returned once
+
+
+# --------------------------------------------------------------------------- #
+#  generate_stub_testbench — the stimulus itself
+#
+#  A testbench that compiles but drives nothing produces a waveform of solid X.
+#  That is the single most common "the simulator is broken" report, so these
+#  pin the property that actually matters: every input is driven.
+# --------------------------------------------------------------------------- #
+import re                                                     # noqa: E402
+from maker.hdl.ports import (autodump_source, dump_file_name,     # noqa: E402
+                             has_dump, has_finish,
+                             is_self_contained_testbench,
+                             module_parameters)
+# Imported under an alias: pytest's default python_functions glob is 'test*',
+# so a module-level name starting with 'test' is collected as a test.
+from maker.hdl.ports import testbench_matches as tb_matches       # noqa: E402
+
+COMB = """\
+module and_gate(input wire a, input wire b, output wire y);
+  assign y = a & b;
+endmodule
+"""
+
+SEQ = """\
+module counter(input i_clk, input rst_n, input [7:0] seed, output reg [7:0] q);
+  always @(posedge i_clk or negedge rst_n)
+    if (!rst_n) q <= seed; else q <= q + 1;
+endmodule
+"""
+
+
+def _tb_for(code):
+    name, ports = extract_ports(code)
+    return generate_stub_testbench(name, ports, design_code=code)
+
+
+def test_every_input_is_assigned_not_just_declared():
+    tb = _tb_for(COMB)
+    for sig in ('a', 'b'):
+        assert f"reg {sig};" in tb                     # declared ...
+        assert re.search(rf'\b{sig}\s*=', tb)          # ... and driven
+
+
+def test_small_combinational_space_is_swept_exhaustively():
+    tb = _tb_for(COMB)
+    assert "for (esim_i = 0; esim_i < 4;" in tb        # 2 inputs -> 4 vectors
+    assert "{a, b} = esim_i;" in tb
+    assert "integer esim_i;" in tb
+
+
+def test_wide_combinational_space_falls_back_to_random():
+    code = ("module wide(input [15:0] a, input [15:0] b, output [15:0] y);\n"
+            "  assign y = a + b;\nendmodule\n")
+    tb = _tb_for(code)
+    assert "$random" in tb
+    assert "esim_i < 65536" not in tb                  # never sweep 2**32
+    assert "{16{1'b1}}" in tb                          # all-ones corner case
+
+
+def test_clock_is_found_by_usage_when_the_name_is_unfamiliar():
+    # 'i_clk' is not in any name whitelist; the posedge in the design is what
+    # identifies it. Missing this leaves a clocked design frozen at X.
+    tb = _tb_for(SEQ)
+    assert "always #5 i_clk = ~i_clk;" in tb
+
+
+def test_active_low_reset_is_released_high():
+    tb = _tb_for(SEQ)
+    assert "rst_n = 0;" in tb and "#20 rst_n = 1;" in tb
+
+
+def test_clocked_stimulus_is_applied_off_the_active_edge():
+    tb = _tb_for(SEQ)
+    assert "@(negedge i_clk);" in tb                   # no race with posedge
+    assert "seed = $random;" in tb or "seed = esim_i;" in tb
+
+
+def test_enable_like_inputs_are_held_asserted():
+    code = ("module core(input clk, input enable, input [3:0] d,"
+            " output reg [3:0] q);\n"
+            "  always @(posedge clk) if (enable) q <= d;\nendmodule\n")
+    tb = _tb_for(code)
+    assert "enable = 1;" in tb          # random-toggling leaves the core idle
+
+
+def test_parameterised_port_widths_bring_their_parameters_along():
+    # 'output reg [Bits-1:0] r' is meaningless in a testbench that has never
+    # heard of Bits: iverilog fails with "Unable to bind parameter".
+    code = ("module adc(clk, r);\n  parameter Bits = 6;\n"
+            "  input clk;\n  output reg [Bits - 1 : 0] r;\nendmodule\n")
+    tb = _tb_for(code)
+    assert "localparam Bits = 6;" in tb
+    assert "wire [Bits - 1 : 0] r;" in tb
+
+
+def test_unrelated_parameters_are_not_copied_into_the_testbench():
+    code = ("module m(input clk, output [W-1:0] o);\n"
+            "  parameter W = 4;\n  parameter UNUSED = 99;\n"
+            "  assign o = 0;\nendmodule\n")
+    tb = _tb_for(code)
+    assert "localparam W = 4;" in tb
+    assert "UNUSED" not in tb
+
+
+def test_module_parameters_reads_header_and_body():
+    code = ("module m #(parameter A = 1, B = 2) (input x);\n"
+            "  localparam [1:0] C = 2'b01;\nendmodule\n")
+    names = [n for _r, n, _e in module_parameters(code, "m")]
+    assert names == ["A", "B", "C"]
+
+
+def test_generated_testbench_always_dumps_and_finishes():
+    for code in (COMB, SEQ):
+        tb = _tb_for(code)
+        assert '$dumpfile("sim_out.vcd");' in tb
+        assert "$dumpvars(0, tb_" in tb
+        assert "$finish;" in tb
+
+
+# --------------------------------------------------------------------------- #
+#  Inspecting a testbench the user brought with them
+# --------------------------------------------------------------------------- #
+
+def test_dump_file_name_is_read_from_the_testbench():
+    assert dump_file_name('initial $dumpfile("wave.vcd");') == "wave.vcd"
+    assert dump_file_name('// $dumpfile("commented.vcd")') is None
+    assert dump_file_name("module tb; endmodule") is None
+
+
+def test_dump_and_finish_detection_ignores_comments():
+    assert has_dump("initial $dumpvars(0, tb);")
+    assert not has_dump("// $dumpvars(0, tb);")
+    assert has_finish("initial #10 $finish;")
+    assert has_finish("initial #10 $stop;")
+    assert not has_finish("/* $finish; */")
+
+
+def test_autodump_module_dumps_everything_and_can_guard():
+    src = autodump_source("wave.vcd", guard_ns=1000)
+    assert '$dumpfile("wave.vcd");' in src
+    assert "$dumpvars;" in src          # no arguments: every scope
+    assert "#1000;" in src and "$finish;" in src
+    assert "$finish" not in autodump_source("wave.vcd")
+
+
+def test_testbench_matches_only_when_it_instantiates_the_design():
+    design = {"counter"}
+    assert tb_matches("module tb; counter uut(.a(a)); endmodule", design)
+    assert not tb_matches("module tb; other uut(.a(a)); endmodule", design)
+    assert not tb_matches("", design)
+    assert not tb_matches("// counter uut (", design)
+
+
+def test_self_contained_testbench_is_recognised():
+    assert is_self_contained_testbench(
+        "module top;\n  initial begin #10 $finish; end\nendmodule")
+    # A design with ports is not one, even if it has an initial block.
+    assert not is_self_contained_testbench(
+        "module m(input a);\n  initial $display(\"hi\");\nendmodule")
+    assert not is_self_contained_testbench("module m; endmodule")

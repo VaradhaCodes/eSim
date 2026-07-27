@@ -275,3 +275,109 @@ def test_closeevent_reaps_orphaned_tmpdir(verifier, tmp_path):
     verifier._active_tmpdir = str(d)
     verifier.closeEvent(QtGui.QCloseEvent())
     assert not d.exists()
+
+
+# --- Simulate must not demand a hand-written testbench -------------------- #
+# The realistic path into this tool is "paste a module, press Simulate". If
+# that also required writing a matching testbench -- correct instance name,
+# correct port map, the exact $dumpfile eSim looked for -- the user stops here.
+
+_OR_GATE = "module or_gate(input a, input b, output y);\n" \
+           "  assign y = a | b;\nendmodule\n"
+
+
+def _only_design(verifier, code, name="or_gate.v"):
+    for editor in list(verifier.design_views):
+        verifier.close_tab(verifier.editor_tabs.indexOf(editor))
+    verifier.add_module_tab(name, code)
+    return verifier._design_sources()
+
+
+def test_empty_testbench_is_generated_at_simulate_time(verifier):
+    sources = _only_design(verifier, _OR_GATE)
+    verifier.tb_view.setPlainText("")
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+
+    tb = verifier._ensure_testbench(sources)
+
+    assert tb and "or_gate uut" in tb
+    assert verifier.tb_view.toPlainText() == tb     # and it is shown to them
+    assert any("generated one" in m for m in logged)
+
+
+def test_mismatched_testbench_is_replaced_not_compiled(verifier):
+    # A testbench left over from another design fails with "Unknown module
+    # type" against a file the user never wrote.
+    sources = _only_design(verifier, _OR_GATE)
+    verifier.tb_view.setPlainText(
+        "module tb_counter;\n  counter uut();\nendmodule\n")
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+
+    tb = verifier._ensure_testbench(sources)
+
+    assert "or_gate uut" in tb
+    assert any("does not instantiate" in m for m in logged)
+
+
+def test_a_matching_testbench_is_left_exactly_as_written(verifier):
+    sources = _only_design(verifier, _OR_GATE)
+    mine = "module tb_mine;\n  reg a, b; wire y;\n" \
+           "  or_gate uut(.a(a), .b(b), .y(y));\nendmodule\n"
+    verifier.tb_view.setPlainText(mine)
+
+    assert verifier._ensure_testbench(sources) == mine
+    assert verifier.tb_view.toPlainText() == mine
+
+
+def test_no_module_at_all_reports_instead_of_generating(verifier):
+    sources = _only_design(verifier, "// just a comment\n")
+    verifier.tb_view.setPlainText("")
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+
+    assert verifier._ensure_testbench(sources) is None
+    assert any("no Verilog module" in m for m in logged)
+
+
+def test_undriven_signals_are_named_not_left_as_a_silent_red_plot(verifier):
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    verifier._warn_if_undriven(
+        {'a': [], 'y': []},
+        {'a': ['0', '1'], 'y': ['x', 'x']})
+    assert any("'y'" in m or " y." in m or ": y" in m for m in logged)
+    assert any("X/Z" in m for m in logged)
+
+
+def test_no_undriven_note_when_everything_moved(verifier):
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+    verifier._warn_if_undriven({'a': []}, {'a': ['0', '1']})
+    assert not logged
+
+
+# --- the waveform must not open empty ------------------------------------- #
+
+def test_waveform_opens_with_the_designs_own_signals_drawn(qapp):
+    """Traces default to hidden (right for the ngspice flow, where you pick
+    nodes off a schematic). Here it meant the tab a simulation had just opened
+    was a blank plot next to a list of every internal reg $dumpvars captured --
+    the user pressed Simulate and got nothing to look at."""
+    from maker.VerilogVerifier import make_vcd_plot_window
+
+    timestamps = [0, 5, 10]
+    signals = {'clk': [0, 1, 0], 'y': [0, 0, 1],
+               'uut.state': [0, 1, 2], 'esim_i': [0, 1, 2]}
+    types = {k: 'wire' for k in signals}
+
+    plot = make_vcd_plot_window(timestamps, signals, types, "t")
+    try:
+        visible = {t.name for t in plot.traces.values() if t.visible}
+        assert visible, "the waveform opened with nothing drawn"
+        # Top-level testbench signals (= the design's ports) are the default;
+        # instance internals and eSim's own loop counter are not.
+        assert visible == {'clk', 'y'}
+    finally:
+        plot.deleteLater()

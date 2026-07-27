@@ -1501,17 +1501,19 @@ QLabel#hierarchyName {
 QPushButton#hierarchyMoveBtn {
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: 7px;
     color: #7C92AE;
-    font-size: 12px;
+    /* Solid ▲/▼ at 11px in a 26px target -- see style_light for the why. Size
+       matches setFixedSize in VerilogVerifier. */
+    font-size: 11px;
     font-weight: 800;
     padding: 0;
     /* Pin the size — the global QPushButton min-width otherwise overrides
        setFixedSize for stylesheet-styled buttons and steals the name's space. */
-    min-width: 22px;
-    max-width: 22px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
 }
 
 QPushButton#hierarchyMoveBtn:hover {
@@ -1520,7 +1522,15 @@ QPushButton#hierarchyMoveBtn:hover {
 }
 
 QPushButton#hierarchyMoveBtn:pressed {
-    background: rgba(83,215,255,0.26);
+    background: rgba(83,215,255,0.30);
+    color: #FFFFFF;
+}
+
+/* First row's up / last row's down: dimmed, not hidden, so the row layout
+   never shifts and the limit reads as a limit rather than a dead click. */
+QPushButton#hierarchyMoveBtn:disabled {
+    background: transparent;
+    color: rgba(124,146,174,0.34);
 }
 
 QToolButton#verifierFileBtn {
@@ -1578,6 +1588,29 @@ QPushButton#verifierConsoleCopy:hover {
 
 QPushButton#verifierConsoleCopy:pressed {
     background: rgba(83,215,255,0.22);
+}
+
+/* Run status: phase + elapsed clock, and a moving bar beside it. Shown only
+   while a compile/simulate is in flight, so a long run reads as "working",
+   not "hung". */
+QLabel#verifierRunStatus {
+    color: #9FB1CC;
+    font-size: 12px;
+    font-weight: 600;
+    padding-right: 6px;
+}
+
+QProgressBar#verifierRunBar {
+    background: rgba(83,215,255,0.14);
+    border: none;
+    border-radius: 4px;
+    max-height: 8px;
+    min-height: 8px;
+}
+
+QProgressBar#verifierRunBar::chunk {
+    background: #53D7FF;
+    border-radius: 4px;
 }
 
 QPlainTextEdit#verilogCodeEditor {

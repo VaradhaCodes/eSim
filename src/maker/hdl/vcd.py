@@ -47,137 +47,207 @@ def format_vcd_val(bin_str, size, var_name=""):
         return bin_str
 
 
-def parse_vcd_for_plot(vcd_content):
-    lines = vcd_content.splitlines()
-    vars_map = {}
-    symbol_to_val = {}
+_FULL_RANGE_RE = re.compile(r'^\[(\d+):(\d+)\]$')
 
+
+def _is_full_range(token, size):
+    """True when ``token`` is a ``[hi:lo]`` covering all ``size`` bits."""
+    m = _FULL_RANGE_RE.match(token)
+    return bool(m) and abs(int(m.group(1)) - int(m.group(2))) + 1 == size
+
+
+def _decode(raw_val, size, name, var_type):
+    """``(plot_value, display_value)`` for one raw VCD value."""
+    if raw_val in ('x', 'X', 'z', 'Z'):
+        return 0, raw_val
+    if var_type == 'real':
+        # Real values are decimal floats, not base-2 — plot the float and show
+        # it verbatim (format_vcd_val would mangle it to 0/hex).
+        try:
+            return float(raw_val), raw_val
+        except ValueError:
+            return 0, raw_val
+    try:
+        dec = int(raw_val, 2)
+    except Exception:
+        dec = 0
+    return dec, format_vcd_val(raw_val, size, name)
+
+
+def _display_names(var_list):
+    """Map each kept var index to the label shown in the waveform list.
+
+    A bare signal name is used when it is unique. It usually is not: with
+    ``$dumpvars(0, tb)`` the testbench's ``clk`` and the instance's ``clk`` are
+    two different ``$var`` records, and keying the result dict by bare name
+    silently dropped one of every such pair. Duplicates therefore fall back to
+    their scope path (``uut.clk``), which is also what every other waveform
+    viewer shows."""
+    counts = {}
+    for v in var_list:
+        counts[v['name']] = counts.get(v['name'], 0) + 1
+    labels, used = [], set()
+    for v in var_list:
+        label = v['name']
+        if counts[label] > 1:
+            # Drop the outermost scope (the testbench itself): 'uut.clk' reads
+            # better than 'tb_counter.uut.clk' and stays unambiguous, and a
+            # signal declared in the testbench keeps its plain name.
+            label = '.'.join(list(v['scope'][1:]) + [v['name']])
+        base, n = label, 2
+        while label in used:            # last-resort disambiguation
+            label = f"{base}#{n}"
+            n += 1
+        used.add(label)
+        labels.append(label)
+    return labels
+
+
+def parse_vcd_for_plot(vcd_content):
+    """Parse a VCD into plot-ready arrays.
+
+    Returns ``(timestamps, signals_data, signal_types, raw_signals_data,
+    timescale)``, or five ``None`` when the dump holds no value changes.
+
+    The cost of this is linear in (value changes + timestamps x signals). That
+    is worth stating because it used to be *quadratic*: every sample searched
+    the whole change history for the most recent snapshot, so a run with a few
+    thousand clock edges took minutes -- on the GUI thread, which is what the
+    "the verifier freezes for 2-3 minutes" reports actually were.
+    """
     timescale = "Time"
-    timescale_match = re.search(r'\$timescale\s+(.*?)\s+\$end', vcd_content, re.DOTALL)
+    timescale_match = re.search(r'\$timescale\s+(.*?)\s+\$end', vcd_content,
+                                re.DOTALL)
     if timescale_match:
         timescale = timescale_match.group(1).strip()
 
+    # -- pass 1: header (vars + scopes) and the change stream ---------------- #
+    var_list = []                 # kept $var records, in declaration order
+    sym_index = {}                # VCD symbol -> index into var_list
+    changes = {}                  # index -> [(time, raw_value), ...]
+    scope = []
     in_header = True
-    time_series = []
     current_time = 0
-    current_changes = {}
+    times = set()
 
-    for line in lines:
+    for line in vcd_content.splitlines():
         line = line.strip()
         if not line:
             continue
+        first = line[0]
 
         if in_header:
+            if line.startswith('$scope'):
+                parts = line.split()
+                if len(parts) >= 3:
+                    scope.append(parts[2])
+                continue
+            if line.startswith('$upscope'):
+                if scope:
+                    scope.pop()
+                continue
             if line.startswith('$var'):
                 parts = line.split()
                 if len(parts) >= 5:
                     try:
                         size = int(parts[2])
                     except ValueError:
-                        continue          # malformed $var; skip, don't abort
-                    var_type = parts[1]
+                        continue      # malformed $var; skip, don't abort
                     symbol = parts[3]
-                    name = parts[4]
-                    vars_map[symbol] = {'name': name, 'size': size, 'type': var_type}
-                    symbol_to_val[symbol] = 'x'
-            elif (line.startswith('$enddefinitions')
-                  or line.startswith('$dumpvars')
-                  or line.startswith('$dumpall')):
+                    # The reference may carry a range: '$var wire 4 ! q [3:0]'.
+                    # A range spanning the whole signal is noise -- every
+                    # vector has one -- so it is dropped and the plain name
+                    # kept; a genuine bit-select ('q [0]' of a 1-bit $var) is
+                    # part of the identity and stays.
+                    tail = [t for t in parts[4:] if t != '$end']
+                    name = tail[0] if tail else parts[4]
+                    if len(tail) > 1 and not _is_full_range(tail[1], size):
+                        name += tail[1]
+                    if symbol in sym_index:
+                        # Same net, dumped again under another scope. Keep the
+                        # first (shallowest) record rather than the last: one
+                        # trace per real signal, named where the user declared
+                        # it.
+                        continue
+                    sym_index[symbol] = len(var_list)
+                    var_list.append({'name': name, 'size': size,
+                                     'type': parts[1], 'scope': tuple(scope)})
+                continue
+            if line.startswith('$enddefinitions'):
                 in_header = False
+                continue
+            if not line.startswith(('$dumpvars', '$dumpall')):
+                continue
+            in_header = False
+            # fall through: $dumpvars is followed by value lines
 
-        if not in_header or line.startswith('#') or (line and line[0] in '01zZxXbBrR'):
-            first = line[0]
-            if first == '#':
-                if current_changes:
-                    time_series.append((current_time, current_changes.copy()))
-                    current_changes.clear()
-                try:
-                    current_time = int(line[1:])
-                except ValueError:
-                    continue          # tolerate a malformed time marker
-            elif first in 'bBrR':
-                # Vector ('b1010 sym') or real ('r3.14 sym') value change.
-                # Reals were previously dropped entirely: their leading 'r'
-                # wasn't in the dispatch set, so a $var real signal stayed 'x'
-                # for the whole run.
-                parts = line.split()
-                if len(parts) < 2:
-                    continue          # malformed change line; skip
-                val = parts[0][1:]
-                symbol = parts[1]
-                current_changes[symbol] = val
-                symbol_to_val[symbol] = val
-            elif first in '01xXzZ':
-                # Scalar change: '<value><identifier>'. Restricting to real
-                # value chars keeps stray header tail lines ($dumpall, $end…)
-                # from being mis-parsed as a change of a bogus symbol.
-                symbol = line[1:]
-                if not symbol:
-                    continue
-                current_changes[symbol] = first
-                symbol_to_val[symbol] = first
+        if first == '#':
+            try:
+                current_time = int(line[1:])
+            except ValueError:
+                continue              # tolerate a malformed time marker
+            continue
+        if first in 'bBrR':
+            # Vector ('b1010 sym') or real ('r3.14 sym') value change.
+            parts = line.split()
+            if len(parts) < 2:
+                continue              # malformed change line; skip
+            idx = sym_index.get(parts[1])
+            if idx is None:
+                continue
+            changes.setdefault(idx, []).append((current_time, parts[0][1:]))
+            times.add(current_time)
+        elif first in '01xXzZ':
+            # Scalar change: '<value><identifier>'.
+            idx = sym_index.get(line[1:])
+            if idx is None:
+                continue
+            changes.setdefault(idx, []).append((current_time, first))
+            times.add(current_time)
 
-    if current_changes:
-        time_series.append((current_time, current_changes.copy()))
-
-    if not time_series:
+    if not times:
         return None, None, None, None, None
 
-    timestamps = sorted(list(set([0] + [t for t, _ in time_series])))
+    timestamps = sorted(times | {0})
+    labels = _display_names(var_list)
 
-    # Build a forward-filled state table.
-    # Use a running dict and snapshot it at each recorded timestamp so that
-    # signals that did NOT change at time t still carry their previous value
-    # rather than falling back to the broken single-key fallback dict.
-    running_state = {symbol: 'x' for symbol in vars_map}
-    raw_states = {0: running_state.copy()}
-    changes_by_time = {}
-    for t, ch in time_series:
-        changes_by_time.setdefault(t, {}).update(ch)
-    for t in sorted(changes_by_time):
-        running_state.update(changes_by_time[t])
-        raw_states[t] = running_state.copy()
-
+    # -- pass 2: forward-fill each signal onto the shared time axis ---------- #
+    # One walk per signal, advancing a cursor through its own change list --
+    # never a search back through the history. Values are decoded once per
+    # change and reused for the run of timestamps that holds them.
     signals_data = {}
     raw_signals_data = {}
+    signal_types = {}
+    n = len(timestamps)
 
-    for symbol, info in vars_map.items():
-        name = info['name']
-        size = info['size']
+    for idx, info in enumerate(var_list):
+        label = labels[idx]
+        signal_types[label] = info['type']
+        events = changes.get(idx, ())
+        y_values = [0] * n
+        raw_values = ['x'] * n
+        if not events:
+            signals_data[label] = y_values
+            raw_signals_data[label] = raw_values
+            continue
 
-        y_values = []
-        raw_values = []
-        for t in timestamps:
-            # raw_states always has a full snapshot for every recorded time;
-            # for timestamps between changes, find the most recent snapshot.
-            nearest_t = max((k for k in raw_states if k <= t), default=0)
-            raw_val = raw_states[nearest_t].get(symbol, 'x')
+        cur_plot, cur_raw = 0, 'x'
+        ev = 0
+        n_ev = len(events)
+        for i, t in enumerate(timestamps):
+            changed = False
+            while ev < n_ev and events[ev][0] <= t:
+                changed = True
+                ev += 1
+            if changed:
+                cur_plot, cur_raw = _decode(
+                    events[ev - 1][1], info['size'], info['name'],
+                    info['type'])
+            y_values[i] = cur_plot
+            raw_values[i] = cur_raw
 
-            if raw_val in ('x', 'X', 'z', 'Z'):
-                formatted_val = raw_val
-                dec_val = 0
-            elif info.get('type') == 'real':
-                # Real values are decimal floats, not base-2 — plot the float
-                # and show it verbatim (format_vcd_val would mangle it to 0/hex).
-                try:
-                    dec_val = float(raw_val)
-                except ValueError:
-                    dec_val = 0
-                formatted_val = raw_val
-            else:
-                formatted_val = format_vcd_val(raw_val, size, name)
-                try:
-                    dec_val = int(raw_val, 2)
-                except Exception:
-                    dec_val = 0
-
-            y_values.append(dec_val)
-            raw_values.append(formatted_val)
-
-        signals_data[name] = y_values
-        raw_signals_data[name] = raw_values
-
-    signal_types = {info['name']: info['type'] for info in vars_map.values()}
+        signals_data[label] = y_values
+        raw_signals_data[label] = raw_values
 
     return timestamps, signals_data, signal_types, raw_signals_data, timescale
 

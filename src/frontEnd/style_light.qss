@@ -1500,17 +1500,19 @@ QLabel#hierarchyName {
 QPushButton#hierarchyMoveBtn {
     background: transparent;
     border: none;
-    border-radius: 6px;
+    border-radius: 7px;
     color: #6B7F99;
-    font-size: 12px;
+    /* Solid ▲/▼ at 11px in a 26px target: the old 22px/hairline glyph pair was
+       a squint-and-aim control. Size matches setFixedSize in VerilogVerifier. */
+    font-size: 11px;
     font-weight: 800;
     padding: 0;
     /* Pin the size — the global QPushButton min-width otherwise overrides
        setFixedSize for stylesheet-styled buttons and steals the name's space. */
-    min-width: 22px;
-    max-width: 22px;
-    min-height: 22px;
-    max-height: 22px;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
 }
 
 QPushButton#hierarchyMoveBtn:hover {
@@ -1519,7 +1521,15 @@ QPushButton#hierarchyMoveBtn:hover {
 }
 
 QPushButton#hierarchyMoveBtn:pressed {
-    background: rgba(0,119,168,0.22);
+    background: rgba(0,119,168,0.26);
+    color: #00293B;
+}
+
+/* First row's up / last row's down: dimmed, not hidden, so the row layout
+   never shifts and the limit reads as a limit rather than a dead click. */
+QPushButton#hierarchyMoveBtn:disabled {
+    background: transparent;
+    color: rgba(107,127,153,0.32);
 }
 
 /* File menu button on the build bar. A bare QToolButton renders native and
@@ -1589,6 +1599,29 @@ QPushButton#verifierConsoleCopy:hover {
 
 QPushButton#verifierConsoleCopy:pressed {
     background: rgba(0,119,168,0.18);
+}
+
+/* Run status: phase + elapsed clock, and a moving bar beside it. Shown only
+   while a compile/simulate is in flight, so a long run reads as "working",
+   not "hung". */
+QLabel#verifierRunStatus {
+    color: #5A6B80;
+    font-size: 12px;
+    font-weight: 600;
+    padding-right: 6px;
+}
+
+QProgressBar#verifierRunBar {
+    background: rgba(0,119,168,0.10);
+    border: none;
+    border-radius: 4px;
+    max-height: 8px;
+    min-height: 8px;
+}
+
+QProgressBar#verifierRunBar::chunk {
+    background: #0077A8;
+    border-radius: 4px;
 }
 
 QPlainTextEdit#verilogCodeEditor {
