@@ -157,7 +157,7 @@ def _prune_modpath(path, base, marker="ifspec.ifs"):
     return dropped
 
 
-def _resolve_backend(xml_loc, name):
+def _resolve_backend(xml_loc, name, cosim_sym=None, nghdl_sym=None):
     """Resolve which backend owns model ``name`` from the on-disk modelParamXML
     layout -- the single source of truth that survives restarts and backend
     switches::
@@ -168,14 +168,158 @@ def _resolve_backend(xml_loc, name):
 
     cosim wins over nghdl wins over ngveri if xml files ever coexist (they
     should not -- one name, one backend -- but a deterministic precedence keeps
-    teardown from running the wrong dismantler and silently leaving a model)."""
-    if not xml_loc:
-        return "ngveri"
-    if os.path.isfile(os.path.join(xml_loc, 'NgVeriCosim', name + '.xml')):
+    teardown from running the wrong dismantler and silently leaving a model).
+
+    ``cosim_sym``/``nghdl_sym`` are optional .kicad_sym paths consulted with the
+    SAME precedence when no param XML answers. A model built by an older eSim
+    (or half-removed by one) can own a KiCad symbol with no XML beside it; going
+    by the XML alone then calls such a leftover "ngveri" and the wrong
+    dismantler runs, leaving the symbol in KiCad forever -- which is exactly how
+    the orphans in eSim_Ngveri / eSim_NgVeriCosim became unremovable."""
+    if xml_loc:
+        if os.path.isfile(os.path.join(xml_loc, 'NgVeriCosim',
+                                       name + '.xml')):
+            return "cosim"
+        if os.path.isfile(os.path.join(xml_loc, 'Nghdl', name + '.xml')):
+            return "nghdl"
+    if cosim_sym and name in _lib_part_names(cosim_sym):
         return "cosim"
-    if os.path.isfile(os.path.join(xml_loc, 'Nghdl', name + '.xml')):
+    if nghdl_sym and name in _lib_part_names(nghdl_sym):
         return "nghdl"
     return "ngveri"
+
+
+# =========================================================================
+#  Discovery: what is ACTUALLY on this machine
+#
+#  modpath.lst was long treated as the list of installed models, so the remove
+#  dialogs only ever offered what the running version had registered there. A
+#  model built by an older eSim -- or one whose teardown was interrupted -- can
+#  survive as any subset of {modpath line, param XML, KiCad symbol, source
+#  build dir, release build dir}, and every one of those pieces the dialog
+#  cannot name is a piece the user cannot delete from the GUI.
+#
+#  So discovery is a UNION over all five traces: if anything of a model is left
+#  anywhere, it gets listed and can be removed. The teardown helpers are each
+#  idempotent and absence-tolerant, so tearing down a model that owns only one
+#  trace is safe and cleans exactly that trace.
+# =========================================================================
+
+# Files that mark a directory as a generated model build dir rather than some
+# unrelated folder that happens to sit in the icm tree. Source dirs hold the
+# cmpp inputs (ifspec.ifs / cfunc.mod); release dirs hold their compiled
+# counterparts (ifspec.c / cfunc.c and the .o files next to them).
+_MODEL_DIR_MARKERS = ('ifspec.ifs', 'cfunc.mod', 'ifspec.c', 'cfunc.c',
+                      'sim_main.cpp')
+
+
+def _kicad_symlib():
+    """The kicad_symlib module for whichever layout this copy is packaged in
+    (``maker.kicad_symlib`` in eSim, flat ``kicad_symlib`` in the NGHDL
+    tarball). stdlib-only, so this keeps the no-Qt contract."""
+    try:
+        from . import kicad_symlib
+    except ImportError:                 # flat vendored layout (NGHDL package)
+        import kicad_symlib
+    return kicad_symlib
+
+
+def _lib_part_names(sym_path):
+    """Model names that still own a symbol block in the .kicad_sym at
+    ``sym_path``. Absent/unreadable/corrupt file -> empty list (never raises:
+    this feeds a listing, and a listing must not be what breaks)."""
+    if not sym_path:
+        return []
+    try:
+        return list(_kicad_symlib()._read_parts(sym_path))
+    except OSError:
+        return []
+
+
+def _xml_model_names(xml_loc, subdir):
+    """Model names with a param XML under ``<xml_loc>/<subdir>``."""
+    if not xml_loc:
+        return []
+    try:
+        return sorted(n[:-4] for n in os.listdir(os.path.join(xml_loc, subdir))
+                      if n.endswith('.xml'))
+    except OSError:
+        return []
+
+
+def _modpath_names(path):
+    """Non-blank entries of the modpath.lst at ``path`` (absent -> empty)."""
+    try:
+        with open(path) as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return []
+
+
+def _build_dir_model_names(base):
+    """Immediate subdirectories of ``base`` that look like a generated model
+    build dir: they hold one of the cmpp inputs/outputs, or the d_cosim vvp
+    (which is named exactly like its directory). The marker test keeps shared
+    scratch dirs in the same icm tree from being offered as removable models."""
+    try:
+        entries = sorted(os.listdir(base))
+    except OSError:
+        return []
+    names = []
+    for name in entries:
+        model_dir = os.path.join(base, name)
+        if not os.path.isdir(model_dir):
+            continue
+        marked = any(os.path.exists(os.path.join(model_dir, m))
+                     for m in _MODEL_DIR_MARKERS)
+        if marked or os.path.isfile(os.path.join(model_dir, name)):
+            names.append(name)
+    return names
+
+
+def discover_ngveri_models(digital_home, release_dir, xml_loc,
+                           ngveri_sym=None, cosim_sym=None):
+    """Every Verilog-side model with ANY trace left on disk, as
+    ``{name: "NgVeri" | "d_cosim"}`` (the RemoveItemsDialog badge).
+
+    d_cosim evidence is applied last so it wins the badge for a name that shows
+    up under both, matching _resolve_backend's precedence -- the badge and the
+    dismantler must never disagree."""
+    badges = {}
+    for name in _modpath_names(os.path.join(digital_home, 'modpath.lst')):
+        badges[name] = "NgVeri"
+    for name in _build_dir_model_names(digital_home):
+        badges[name] = "NgVeri"
+    if release_dir:
+        for name in _build_dir_model_names(
+                os.path.join(release_dir, 'src', 'xspice', 'icm', 'Ngveri')):
+            badges[name] = "NgVeri"
+    for name in _xml_model_names(xml_loc, 'Ngveri'):
+        badges[name] = "NgVeri"
+    for name in _lib_part_names(ngveri_sym):
+        badges[name] = "NgVeri"
+    # --- d_cosim last (wins the badge) ---
+    for name in _xml_model_names(xml_loc, 'NgVeriCosim'):
+        badges[name] = "d_cosim"
+    for name in _lib_part_names(cosim_sym):
+        badges[name] = "d_cosim"
+    return badges
+
+
+def discover_nghdl_models(ghdl_home, release_dir, xml_loc, nghdl_sym=None):
+    """Every NGHDL (GHDL) model with any trace left on disk, sorted.
+
+    Same union as discover_ngveri_models against the ghdl/ tree: modpath line,
+    source build dir, release build dir, Nghdl/<name>.xml and eSim_Nghdl
+    symbol."""
+    names = set(_modpath_names(os.path.join(ghdl_home, 'modpath.lst')))
+    names.update(_build_dir_model_names(ghdl_home))
+    if release_dir:
+        names.update(_build_dir_model_names(
+            os.path.join(release_dir, 'src', 'xspice', 'icm', 'ghdl')))
+    names.update(_xml_model_names(xml_loc, 'Nghdl'))
+    names.update(_lib_part_names(nghdl_sym))
+    return sorted(names, key=lambda s: s.lower())
 
 
 def _nghdl_sym_path(src_home):

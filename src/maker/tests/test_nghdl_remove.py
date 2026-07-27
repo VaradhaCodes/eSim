@@ -160,6 +160,115 @@ def test_resolve_backend_empty_loc_is_ngveri():
     assert mt._resolve_backend("", "anything") == "ngveri"
 
 
+def test_resolve_backend_falls_back_to_symbol_libs(tmp_path):
+    # A model built by an older eSim (or half-removed by one) can own a KiCad
+    # symbol with no param XML beside it. Resolving such a leftover as "ngveri"
+    # runs the wrong dismantler and the symbol stays in KiCad forever.
+    xml = str(tmp_path / "xml")
+    cosim_sym = str(tmp_path / "eSim_NgVeriCosim.kicad_sym")
+    nghdl_sym = str(tmp_path / "eSim_Nghdl.kicad_sym")
+    ksym._write_lib(cosim_sym, {"orphan_ic": _block("orphan_ic")})
+    ksym._write_lib(nghdl_sym, {"orphan_vhd": _block("orphan_vhd")})
+
+    assert mt._resolve_backend(xml, "orphan_ic", cosim_sym=cosim_sym) == "cosim"
+    assert mt._resolve_backend(xml, "orphan_vhd",
+                               nghdl_sym=nghdl_sym) == "nghdl"
+    # unknown name -> still legacy ngveri; XML still outranks the symbol libs
+    assert mt._resolve_backend(xml, "nobody", cosim_sym=cosim_sym) == "ngveri"
+    _touch_xml(xml, "Nghdl", "both")
+    assert mt._resolve_backend(xml, "both", cosim_sym=cosim_sym) == "nghdl"
+
+
+# ── discovery: every on-disk trace, not just modpath.lst ────────────────────
+# The remove dialogs used to list modpath.lst (+ NgVeriCosim XMLs) only, so a
+# model left behind by an older version -- symbol only, XML only, build dir
+# only -- could never be removed from the GUI while KiCad kept showing it.
+
+def _sym(path, *names):
+    ksym._write_lib(path, {n: _block(n) for n in names})
+    return path
+
+
+def _ngveri_env(tmp_path):
+    digital = tmp_path / "icm" / "Ngveri"
+    release = tmp_path / "release"
+    xml = tmp_path / "xml"
+    (digital).mkdir(parents=True)
+    (release / "src" / "xspice" / "icm" / "Ngveri").mkdir(parents=True)
+    (release / "src" / "xspice" / "icm" / "ghdl").mkdir(parents=True)
+    xml.mkdir()
+    return str(digital), str(release), str(xml)
+
+
+def test_discover_ngveri_unions_every_trace(tmp_path):
+    digital, release, xml = _ngveri_env(tmp_path)
+    _write_modpath(os.path.join(digital, "modpath.lst"), ["only_modpath"])
+    _make_model_dir(digital, "only_srcdir")
+    _make_model_dir(os.path.join(release, "src", "xspice", "icm", "Ngveri"),
+                    "only_reldir")
+    _touch_xml(xml, "Ngveri", "only_xml")
+    ngveri_sym = _sym(str(tmp_path / "eSim_Ngveri.kicad_sym"), "only_symbol")
+    _touch_xml(xml, "NgVeriCosim", "cosim_xml")
+    cosim_sym = _sym(str(tmp_path / "eSim_NgVeriCosim.kicad_sym"),
+                     "cosim_symbol")
+
+    badges = mt.discover_ngveri_models(digital, release, xml,
+                                       ngveri_sym=ngveri_sym,
+                                       cosim_sym=cosim_sym)
+    assert sorted(badges) == sorted([
+        "only_modpath", "only_srcdir", "only_reldir", "only_xml",
+        "only_symbol", "cosim_xml", "cosim_symbol"])
+    # The badge must agree with the dismantler _resolve_backend picks.
+    assert badges["cosim_symbol"] == "d_cosim"
+    assert badges["cosim_xml"] == "d_cosim"
+    assert badges["only_symbol"] == "NgVeri"
+
+
+def test_discover_skips_non_model_dirs(tmp_path):
+    # verilated.d / scratch folders share the icm tree with real model dirs;
+    # offering them as removable "models" would be nonsense.
+    digital, release, xml = _ngveri_env(tmp_path)
+    os.makedirs(os.path.join(digital, "verilated.d"))
+    assert mt.discover_ngveri_models(digital, release, xml) == {}
+
+
+def test_discover_cosim_vvp_dir_counts_as_a_model(tmp_path):
+    # A d_cosim build dir holds the compiled vvp named exactly like the dir,
+    # and none of the cmpp markers.
+    digital, release, xml = _ngveri_env(tmp_path)
+    os.makedirs(os.path.join(digital, "icmodel"))
+    open(os.path.join(digital, "icmodel", "icmodel"), "w").close()
+    assert list(mt.discover_ngveri_models(digital, release, xml)) == ["icmodel"]
+
+
+def test_discover_nghdl_unions_every_trace(tmp_path):
+    ghdl = tmp_path / "icm" / "ghdl"
+    release = tmp_path / "release"
+    xml = tmp_path / "xml"
+    ghdl.mkdir(parents=True)
+    (release / "src" / "xspice" / "icm" / "ghdl").mkdir(parents=True)
+    xml.mkdir()
+    _write_modpath(str(ghdl / "modpath.lst"), ["live"])
+    _make_model_dir(str(ghdl), "live")
+    _make_model_dir(str(ghdl), "halfremoved")
+    _make_model_dir(str(release / "src" / "xspice" / "icm" / "ghdl"), "relonly")
+    _touch_xml(str(xml), "Nghdl", "xmlonly")
+    sym = _sym(str(tmp_path / "eSim_Nghdl.kicad_sym"), "symonly")
+
+    assert mt.discover_nghdl_models(str(ghdl), str(release), str(xml),
+                                    nghdl_sym=sym) == [
+        "halfremoved", "live", "relonly", "symonly", "xmlonly"]
+
+
+def test_discover_tolerates_missing_everything(tmp_path):
+    # A listing must never be the thing that raises.
+    missing = str(tmp_path / "nope")
+    assert mt.discover_ngveri_models(missing, "", "", None, None) == {}
+    assert mt.discover_nghdl_models(missing, "", "", None) == []
+    assert mt._lib_part_names(str(tmp_path / "gone.kicad_sym")) == []
+    assert mt._lib_part_names("") == []
+
+
 # ── _safe_model_subdir guard (rmtree-all protection) ────────────────────────
 
 def test_safe_model_subdir_rejects_dangerous_names(tmp_path):

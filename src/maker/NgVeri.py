@@ -38,7 +38,8 @@ from . import createkicad
 from . import createkicadCosim
 from .model_teardown import (
     _safe_model_subdir, _resolve_backend, _ensure_modpath,
-    _strip_modpath_line)
+    _strip_modpath_line, discover_ngveri_models)
+from .kicad_symlib import generated_symlib_path, ensure_lib_registered
 from . import CosimConfig
 from .CosimLogger import CosimLog
 from .RemoveItemsDialog import RemoveItemsDialog
@@ -52,6 +53,15 @@ class NgVeri(QtWidgets.QWidget):
     '''
         This class create the NgVeri Tab
     '''
+
+    # Emitted from the removal worker thread. Both are connected to GUI-thread
+    # receivers, so Qt queues them automatically -- the worker never touches a
+    # widget. removeLog carries one HTML log line; removeStep carries
+    # (models_done, status text), with models_done < 0 meaning "switch the bar
+    # back to indeterminate" for the closing code-model rebuild.
+    removeLog = QtCore.pyqtSignal(str)
+    removeStep = QtCore.pyqtSignal(int, str)
+
     def __init__(self, filecount):
         QtWidgets.QWidget.__init__(self)
         # Maker.addverilog(self)
@@ -80,6 +90,12 @@ class NgVeri(QtWidgets.QWidget):
         self.count = 0
         self.text = ""
         self.entry_var = {}
+        # Async model-removal state (see open_remove_models): the detached log
+        # buffer, the shared logger and the running job. None == idle.
+        self._remove_logs = None
+        self._remove_log = None
+        self._remove_job = None
+        self._remove_model = None
         self.createNgveriWidget()
         self.fname = ""
         self.filecount = filecount
@@ -578,38 +594,67 @@ class NgVeri(QtWidgets.QWidget):
 
         return self.optionsbox
 
+    def _sym_paths(self):
+        '''
+            (eSim_Ngveri, eSim_NgVeriCosim) .kicad_sym paths -- the very files
+            createkicad/createkicadCosim write, resolved through the same
+            legacy-migration probe so symbols accumulated in the OLD location
+            (/usr/share/kicad/symbols on Ubuntu, <inst>/KiCad/share/kicad/
+            symbols on Windows) are copied in, seen, and therefore removable.
+
+            Registering the two libraries here is not cosmetic. The sym-lib-
+            table is only ever refreshed when a model is CREATED, so a user who
+            upgraded and has not built anything since still has KiCad pointing
+            at the legacy path. Removal rewrites the ~/.esim copy, KiCad reads
+            the legacy one, and the "removed" symbol is still in the picker.
+            The call is idempotent, best-effort (swallows OSError) and only
+            rewrites an entry whose uri is actually stale.
+        '''
+        legacy = []
+        if os.name == 'nt':
+            try:
+                src_home = createkicad.Appconfig.Appconfig.src_home
+            except AttributeError:
+                src_home = ""
+            legacy.append((src_home or "").replace('\\eSim', '') +
+                          '/KiCad/share/kicad/symbols')
+        ngveri_sym = generated_symlib_path("eSim_Ngveri", legacy_dirs=legacy)
+        cosim_sym = generated_symlib_path("eSim_NgVeriCosim",
+                                          legacy_dirs=legacy)
+        ensure_lib_registered("eSim_Ngveri", ngveri_sym,
+                              descr="eSim NgVeri (Ngspice code model) symbols")
+        ensure_lib_registered(
+            "eSim_NgVeriCosim", cosim_sym,
+            descr="eSim NgVeri d_cosim (Icarus Verilog) symbols")
+        return ngveri_sym, cosim_sym
+
     def _list_models(self):
         '''
             Scan disk for every removable model and tag each with its backend.
-            Disk is the single source of truth (survives restarts and backend
-            switches): legacy NgVeri models are lines in modpath.lst; d_cosim
-            models are NgVeriCosim/<name>.xml files (never in modpath.lst).
+
+            Disk is the single source of truth, and "on disk" means EVERY
+            trace, not just modpath.lst: a model built by an older eSim (or one
+            whose teardown was interrupted) can be left as nothing but a KiCad
+            symbol, or nothing but a param XML, or nothing but a build dir.
+            Listing only modpath.lst + NgVeriCosim/*.xml is what made those
+            leftovers permanently unremovable from the GUI while still showing
+            up in KiCad's eSim_Ngveri / eSim_NgVeriCosim libraries. The union
+            comes from discover_ngveri_models; the teardown helpers are all
+            idempotent, so removing a model that owns a single trace is safe.
 
             Returns (names, badges) where badges maps each name to
             "NgVeri"/"d_cosim". modpath.lst is created on demand so a fresh
             install lists cleanly.
+
+            NGHDL (GHDL) models are intentionally NOT listed here: they are
+            uninstalled from the NGHDL app's own "Uninstall Models" button (the
+            VHDL workflow), not this Verilog-side dialog.
         '''
-        badges = {}
-
-        modpath_file = _ensure_modpath(self.digital_home + '/modpath.lst')
-        with open(modpath_file) as fh:
-            for line in fh:
-                name = line.strip()
-                if name:
-                    badges[name] = "NgVeri"
-
-        # NGHDL (GHDL) models are intentionally NOT listed here: they are
-        # uninstalled from the NGHDL app's own "Remove Models" button (the
-        # VHDL workflow), not this Verilog-side dialog.
-        cosim_dir = os.path.join(self._xml_loc, 'NgVeriCosim')
-        if os.path.isdir(cosim_dir):
-            for fname in sorted(os.listdir(cosim_dir)):
-                if fname.endswith('.xml'):
-                    name = fname[:-4]
-                    # d_cosim wins the badge: a name present in both flows is
-                    # torn down by _model_backend below, which trusts the xml.
-                    badges[name] = "d_cosim"
-
+        _ensure_modpath(self.digital_home + '/modpath.lst')
+        ngveri_sym, cosim_sym = self._sym_paths()
+        badges = discover_ngveri_models(
+            self.digital_home, self.release_dir, self._xml_loc,
+            ngveri_sym=ngveri_sym, cosim_sym=cosim_sym)
         return list(badges.keys()), badges
 
     def open_remove_models(self):
@@ -619,7 +664,21 @@ class NgVeri(QtWidgets.QWidget):
             legacy NgVeri (Verilator -> Ngveri.cm) vs d_cosim (Icarus ->
             eSim_NgVeriCosim) -- since the two share nothing on disk and the
             wrong teardown silently leaves a model behind.
+
+            The teardown itself runs on a worker thread with the same progress
+            bar a convert build uses. It used to run inline on the GUI thread,
+            where the rmtree passes and -- far worse -- the closing `make` +
+            `make install` of the ngspice code model froze eSim solid ("not
+            responding") for the whole removal.
         '''
+        if self._remove_job is not None:
+            Dialogs.information(
+                self, "Remove Models",
+                "A model removal is already in progress. "
+                "Please wait for it to finish.",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            return
+
         names, badges = self._list_models()
         if not names:
             Dialogs.information(
@@ -634,38 +693,161 @@ class NgVeri(QtWidgets.QWidget):
         if not dlg.exec():
             return
 
-        log = CosimLog(self.entry_var[0])
+        # Belt-and-braces: a blank name must never reach the teardown helpers
+        # (os.path.join(base, "") -> "base/" -> rmtree wipes all models). The
+        # helpers guard too; this is defence in depth.
+        doomed = [n for n in dlg.selected_items() if n and n.strip()]
+        if not doomed:
+            return
+
+        # Resolve every backend HERE, on the GUI thread, so the worker only
+        # does file surgery: on-disk layout is the source of truth for which
+        # engine owns a name, and a leftover with no param XML is resolved from
+        # the symbol libraries instead of being mislabelled "ngveri".
+        plan = [(name, self._model_backend(name)) for name in doomed]
+
+        # One reusable, detached log buffer: worker log lines arrive through
+        # the queued removeLog signal and are flushed into the visible console
+        # in the epilogue, exactly like a build's currentTermLogs.
+        if self._remove_logs is None:
+            self._remove_logs = QtWidgets.QTextEdit()
+            self.removeLog.connect(self._remove_logs.append)
+            self.removeStep.connect(self._on_remove_step)
+        self._remove_logs.clear()
+        self._remove_log = CosimLog(self._remove_logs,
+                                    sink=self.removeLog.emit)
+
+        # ModelGeneration owns the Ngveri.cm rebuild. Build it on the GUI
+        # thread (it is a QObject wired to this tab's phase label) and only
+        # when a legacy model is actually going away -- a pure d_cosim removal
+        # needs no code-model rebuild at all.
+        self._remove_model = None
+        if any(backend != "cosim" for _, backend in plan):
+            self.fname = self._current_verilog_fname()
+            self._remove_model = ModelGeneration.ModelGeneration(
+                self.fname, self._remove_logs)
+            self._remove_model.phase.connect(self._on_build_phase)
+
+        self._set_convert_buttons_enabled(False)
+        self._set_remove_buttons_enabled(False)
+        self.buildBar.setRange(0, len(plan))
+        self.buildBar.setValue(0)
+        self._show_build_progress(
+            True, "Removing " + str(len(plan)) + " model" +
+            ("s" if len(plan) != 1 else "") + "…")
+        self._remove_job = BackgroundJob(
+            self._removal_pipeline, plan, self._remove_model, parent=self)
+        self._remove_job.succeeded.connect(self._on_removal_finished)
+        self._remove_job.failed.connect(self._on_removal_error)
+        self._remove_job.finished.connect(self._remove_job.deleteLater)
+        self._remove_job.start()
+
+    def _removal_pipeline(self, plan, model):
+        '''
+            Worker-thread half of a removal: the per-model file surgery, then
+            ONE Ngveri.cm rebuild for the whole batch. Returns "" on success or
+            the rebuild's error text (the dialog is raised by the GUI-thread
+            epilogue -- a QMessageBox must never be built off-thread).
+
+            Touches no widget: every line goes through the removeLog sink and
+            every progress tick through removeStep, both queued back to the GUI
+            thread.
+        '''
+        log = self._remove_log
         ngveri_needed = False
-        for name in dlg.selected_items():
-            # Belt-and-braces: a blank name must never reach the teardown
-            # helpers (os.path.join(base, "") -> "base/" -> rmtree wipes all
-            # models). The helpers guard too; this is defence in depth.
-            if not name or not name.strip():
-                continue
-            # On-disk layout is the source of truth for which engine owns it.
-            backend = self._model_backend(name)
+        for done, (name, backend) in enumerate(plan):
+            self.removeStep.emit(done, 'Removing "' + name + '"…')
             if backend == "cosim":
-                self._remove_cosim_model(name)
+                self._remove_cosim_model(name, log=log)
             else:
                 # Defer the (expensive) Ngveri.cm rebuild to one pass after
                 # every model is gone, not once per model.
-                self._remove_ngveri_model(name, rebuild=False)
+                self._remove_ngveri_model(name, rebuild=False, log=log)
                 ngveri_needed = True
+        self.removeStep.emit(len(plan), "Finishing…")
 
-        if ngveri_needed:
-            self._rebuild_ngveri_cm(log)
+        if ngveri_needed and model is not None:
+            # Indeterminate from here: make/make install give no countable
+            # steps, and the phase label takes over the narration.
+            self.removeStep.emit(-1, "Rebuilding Ngveri.cm…")
+            return self._run_cm_rebuild(model, log)
+        return ""
+
+    def _on_remove_step(self, done, message):
+        '''
+            Queued from the removal worker: advance the shared progress bar and
+            name the model currently being torn down. done < 0 switches the bar
+            back to indeterminate for the closing code-model rebuild.
+        '''
+        if done < 0:
+            self.buildBar.setRange(0, 0)
+        else:
+            self.buildBar.setValue(done)
+        if message:
+            self.buildStatus.setText(message)
+
+    def _on_removal_finished(self, err):
+        '''GUI-thread epilogue for a completed removal.'''
+        if err:
+            Dialogs.critical(
+                self, "Error Message",
+                "The ngspice code model could not be rebuilt after removal: " +
+                str(err),
+                QtWidgets.QMessageBox.StandardButton.Ok)
+        self._finish_removal()
+
+    def _on_removal_error(self, msg):
+        '''GUI-thread epilogue when the removal worker itself raised.'''
+        if self._remove_log is not None:
+            self._remove_log.error("Model removal failed: " + msg)
+        Dialogs.critical(
+            self, "Error Message",
+            "Model removal failed: " + str(msg),
+            QtWidgets.QMessageBox.StandardButton.Ok)
+        self._finish_removal()
+
+    def _finish_removal(self):
+        '''
+            Flush the removal log into the visible console, restore the bar to
+            its build (indeterminate) state, re-enable the controls and drop
+            the job refs. Shared by the success and failure epilogues.
+        '''
+        if self._remove_logs is not None:
+            self.entry_var[0].append(self._remove_logs.toHtml())
+            self.entry_var[0].verticalScrollBar().setValue(
+                self.entry_var[0].verticalScrollBar().maximum())
+        self._show_build_progress(False)
+        # Builds expect the shared bar indeterminate; put it back.
+        self.buildBar.setRange(0, 0)
+        self._set_convert_buttons_enabled(True)
+        self._set_remove_buttons_enabled(True)
+        self._remove_job = None
+        self._remove_model = None
+        self._remove_log = None
+
+    def _set_remove_buttons_enabled(self, enabled):
+        '''Enable/disable the model-management buttons around an async
+        removal, so a second teardown cannot race the running one.'''
+        for name in ("removeModelsBtn", "removeLintOffBtn"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn.setEnabled(enabled)
 
     def _model_backend(self, name):
         '''
             Resolve which backend created a model from the on-disk
             modelParamXML layout -- the single source of truth that survives
             restarts: NgVeriCosim/<name>.xml => cosim, Nghdl/<name>.xml =>
-            nghdl, else legacy NgVeri (ngveri). Delegates to the tested
-            free function _resolve_backend.
+            nghdl, else legacy NgVeri (ngveri). A leftover with no param XML at
+            all (an older eSim's model, or an interrupted teardown) is resolved
+            from the eSim_NgVeriCosim symbol library instead, so the right
+            dismantler runs and the symbol really leaves KiCad. Delegates to
+            the tested free function _resolve_backend.
         '''
-        return _resolve_backend(self._xml_loc, name)
+        return _resolve_backend(self._xml_loc, name,
+                                cosim_sym=self._sym_paths()[1])
 
-    def _remove_cosim_model(self, text):
+    def _remove_cosim_model(self, text, log=None):
         '''
             Tear down a d_cosim (Icarus) model: drop its symbol from
             eSim_NgVeriCosim.kicad_sym + its NgVeriCosim/<name>.xml, remove the
@@ -678,8 +860,14 @@ class NgVeri(QtWidgets.QWidget):
             cmpp abort every later Ngveri.cm build. So we always strip the line.
             Still NO Ngveri.cm rebuild -- d_cosim stays light; the next legacy
             build (and prune_modpathlst) reconciles ngspice's side.
+
+            `log` is injected by the async removal pipeline (a logger whose GUI
+            sink is a queued signal). The default -- writing straight to the
+            console widget -- is only for the GUI-thread callers (a backend
+            switch during a build).
         '''
-        log = CosimLog(self.entry_var[0])
+        if log is None:
+            log = CosimLog(self.entry_var[0])
         log.phase('REMOVE d_cosim model "' + str(text) + '"')
 
         if not text or not str(text).strip():
@@ -739,7 +927,7 @@ class NgVeri(QtWidgets.QWidget):
             log.info('Dropped "' + str(text) + '" from modpath.lst')
         return dropped
 
-    def _remove_ngveri_model(self, text, rebuild=True):
+    def _remove_ngveri_model(self, text, rebuild=True, log=None):
         '''
             Tear down a legacy NgVeri (Verilator) model: drop it from
             modpath.lst, remove its eSim_Ngveri symbol + param XML, delete the
@@ -748,9 +936,11 @@ class NgVeri(QtWidgets.QWidget):
 
             Pass rebuild=False when removing several models in one pass; the
             caller then runs a single _rebuild_ngveri_cm() at the end rather
-            than rebuilding the code model once per model.
+            than rebuilding the code model once per model. `log` is injected by
+            the async removal pipeline (see _remove_cosim_model).
         '''
-        log = CosimLog(self.entry_var[0])
+        if log is None:
+            log = CosimLog(self.entry_var[0])
         log.phase('REMOVE NgVeri model "' + str(text) + '"')
 
         # Drop the model from modpath.lst (guarded: absent => no crash)
@@ -807,19 +997,30 @@ class NgVeri(QtWidgets.QWidget):
         vf = Maker.verilogFile
         return vf[self.filecount] if len(vf) > self.filecount else ""
 
-    def _rebuild_ngveri_cm(self, log):
+    def _run_cm_rebuild(self, model, log):
         '''
             Rebuild and reinstall the Ngveri.cm code model so ngspice unlinks
             every model already stripped from modpath.lst. Run once after a
             batch removal. prune_modpathlst() first sweeps any unrelated ghost
             entries so the rebuild can't fail on a dead line left by something
             else.
+
+            Worker-thread safe: returns "" on success or the error text, and
+            raises no dialog -- the caller shows it on the GUI thread.
+
+            A missing legacy toolchain is NOT an error here. Removing leftovers
+            (an old install's orphan symbol, an interrupted teardown) has to
+            work on a machine that can no longer build code models at all; the
+            files are gone either way, and the next successful build reconciles
+            ngspice.
         '''
-        self.fname = self._current_verilog_fname()
-        model = ModelGeneration.ModelGeneration(
-            self.fname, self.entry_var[0])
         if not model.require_legacy_toolchain():
-            return
+            log.warn(
+                "Ngveri.cm was NOT rebuilt: the NgVeri (Verilator) toolchain "
+                "is not available on this machine. The model files are "
+                "removed; ngspice drops the models on the next successful "
+                "code-model build.")
+            return ""
         model.prune_modpathlst()
 
         try:
@@ -833,14 +1034,27 @@ class NgVeri(QtWidgets.QWidget):
                     "the ngspice code-model rebuild returned a "
                     "non-zero exit status")
         except Exception as err:
+            return str(err)
+        log.ok("Ngveri.cm rebuilt.")
+        return ""
+
+    def _rebuild_ngveri_cm(self, log):
+        '''
+            GUI-thread wrapper around _run_cm_rebuild: rebuild the code model
+            and report a failure in a dialog. Used by the single-model
+            teardown path (_remove_ngveri_model(rebuild=True)); the batch
+            removal calls _run_cm_rebuild directly from its worker.
+        '''
+        self.fname = self._current_verilog_fname()
+        model = ModelGeneration.ModelGeneration(self.fname, self.entry_var[0])
+        err = self._run_cm_rebuild(model, log)
+        if err:
             Dialogs.critical(
                 self, "Error Message",
                 "The ngspice code model could not be rebuilt after removal: " +
-                str(err),
+                err,
                 QtWidgets.QMessageBox.StandardButton.Ok
             )
-        else:
-            log.ok("Ngveri.cm rebuilt.")
 
     # ------------------------------------------------------------------ #
     #  Backend switching (d_cosim <-> legacy NgVeri for the same model)
@@ -1044,11 +1258,15 @@ class NgVeri(QtWidgets.QWidget):
             "Remove Verilog Models…")
         self.entry_var[self.count].clicked.connect(self.open_remove_models)
         controls.addWidget(self.entry_var[self.count])
+        # Named ref so the async teardown can grey it out while it runs
+        # (entry_var is index-keyed and shared with the lint controls).
+        self.removeModelsBtn = self.entry_var[self.count]
         self.count += 1
 
         self.entry_var[self.count] = QtWidgets.QPushButton("Remove lint_off")
         self.entry_var[self.count].clicked.connect(self.open_remove_lint_off)
         controls.addWidget(self.entry_var[self.count])
+        self.removeLintOffBtn = self.entry_var[self.count]
         self.count += 1
 
         # lint_off entry + its Add button share one row so they read as a pair.

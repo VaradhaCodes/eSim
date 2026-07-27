@@ -21,7 +21,38 @@ import model_teardown
 from RemoveItemsDialog import RemoveItemsDialog
 
 
+class _BackgroundJob(QtCore.QThread):
+    """Run ``fn(*args)`` on a worker thread, reporting back through queued
+    signals.
+
+    NGHDL is packaged standalone and must never import eSim, so this is a local
+    twin of maker.hdl.jobs.BackgroundJob. It exists for model removal: the
+    teardown deletes whole build trees and rewrites the symbol library, which
+    on the GUI thread froze the window for seconds with no feedback at all."""
+
+    succeeded = QtCore.pyqtSignal(object)
+    failed = QtCore.pyqtSignal(str)
+
+    def __init__(self, fn, *args, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+        self._args = args
+
+    def run(self):
+        try:
+            result = self._fn(*self._args)
+        except Exception as exc:            # surfaced to the UI as failed()
+            self.failed.emit(str(exc))
+            return
+        self.succeeded.emit(result)
+
+
 class Mainwindow(QtWidgets.QWidget):
+
+    # Emitted from the removal worker; both receivers live on the GUI thread,
+    # so Qt queues the calls and the worker never touches a widget.
+    removeLog = QtCore.pyqtSignal(str)
+    removeStep = QtCore.pyqtSignal(int, str)
 
     def __init__(self, parent=None, embedded=False):
         # NOTE: this class is a QWidget. Initialise it as one (the previous
@@ -65,6 +96,7 @@ class Mainwindow(QtWidgets.QWidget):
         self.file_list = []       # to keep the supporting files
         self.filename = ''
         self.errorFlag = False    # to keep the check of "make install" errors
+        self._removejob = None    # running teardown worker; None == idle
         self.initUI()
 
     def initUI(self):
@@ -165,6 +197,27 @@ class Mainwindow(QtWidgets.QWidget):
         consolev.addWidget(self.termedit)
         consolebox.setLayout(consolev)
 
+        # ---- Live progress: a bar + a label naming the current step --------
+        # Shown while a build or an uninstall runs. Both are off the GUI thread
+        # (QProcess for make, a worker for the teardown), so the bar actually
+        # animates -- which is the whole point: an uninstall used to freeze the
+        # window with no indication that anything was happening.
+        self.progressStatus = QtWidgets.QLabel("")
+        self.progressStatus.setObjectName("hint")
+        self.progressStatus.setVisible(False)
+        self.progressBar = QtWidgets.QProgressBar()
+        self.progressBar.setRange(0, 0)       # 0..0 == indeterminate "busy"
+        self.progressBar.setTextVisible(False)
+        self.progressBar.setVisible(False)
+        progressrow = QtWidgets.QHBoxLayout()
+        progressrow.setSpacing(10)
+        progressrow.addWidget(self.progressStatus)
+        progressrow.addWidget(self.progressBar, 1)
+
+        # Queued sinks for the removal worker (see _BackgroundJob).
+        self.removeLog.connect(self.termedit.append)
+        self.removeStep.connect(self._on_remove_step)
+
         # ---- Header: page title + model maintenance (uninstall) ------------
         # Uninstall is maintenance, kept out of the numbered build flow so it is
         # never mistaken for a build step -- but it now sits top-right where it
@@ -201,6 +254,7 @@ class Mainwindow(QtWidgets.QWidget):
         grid.addWidget(supportbox)
         grid.addLayout(actionrow)
         grid.addWidget(consolebox, 1)   # console takes the remaining height
+        grid.addLayout(progressrow)
         # Standalone keeps a slim Exit footer; embedded there is nothing left
         # to show, so no footer row is added at all.
         if not self.embedded:
@@ -257,6 +311,17 @@ class Mainwindow(QtWidgets.QWidget):
                 self.process.kill()
         except BaseException:
             pass
+        # A teardown worker must finish before this widget dies: it emits into
+        # the console and the progress row, and a half-deleted receiver during
+        # a queued emit is a hard crash. The steps are file ops, so the wait is
+        # short and bounded.
+        job = getattr(self, "_removejob", None)
+        if job is not None:
+            try:
+                if job.isRunning():
+                    job.wait(10000)
+            except BaseException:
+                pass
         super().closeEvent(event)
 
     def browseFile(self):
@@ -313,23 +378,44 @@ class Mainwindow(QtWidgets.QWidget):
             self.parser.get('NGHDL', 'DIGITAL_MODEL'), "ghdl")
 
     def _list_nghdl_models(self):
-        '''Installed NGHDL model names, from ghdl/modpath.lst -- the
-        authoritative, always-present list of what ngspice has linked.'''
-        modpath = os.path.join(self._ghdl_home(), "modpath.lst")
-        try:
-            with open(modpath) as f:
-                return sorted({ln.strip() for ln in f if ln.strip()})
-        except OSError:
-            return []
+        '''Every NGHDL model with ANY trace left on this machine, sorted.
+
+        modpath.lst alone is not that list. A model built by an older NGHDL --
+        or one whose teardown was interrupted -- can survive as nothing but an
+        eSim_Nghdl KiCad symbol, a Nghdl/<name>.xml, or a build dir, and
+        anything this list cannot name is something the user cannot delete from
+        the GUI (while KiCad happily keeps showing the symbol). So the union of
+        all five traces is offered; every teardown step below is idempotent and
+        absence-tolerant, so removing a model that owns only one of them is
+        safe.'''
+        sym_path = model_teardown._nghdl_sym_path(self.src_home)
+        # Point KiCad at the library this teardown actually rewrites. The
+        # sym-lib-table is otherwise only refreshed when a model is CREATED, so
+        # a user who upgraded without building anything still has KiCad reading
+        # the legacy copy (/usr/share/kicad/symbols on Ubuntu) -- and every
+        # symbol removed here would keep showing up there. Idempotent and
+        # best-effort; a correct entry is left untouched.
+        kicad_symlib.ensure_lib_registered(
+            "eSim_Nghdl", sym_path,
+            descr="eSim NGHDL (GHDL co-simulation) symbols")
+        return model_teardown.discover_nghdl_models(
+            self._ghdl_home(), self.release_dir, Appconfig.xml_loc,
+            nghdl_sym=sym_path)
 
     def openRemoveModels(self):
         '''Open the checkbox remover listing only NGHDL models and tear down
-        whatever the user picks.'''
+        whatever the user picks (on a worker thread, behind the progress bar).'''
         proc = getattr(self, "process", None)
         if proc is not None and proc.state() != QtCore.QProcess.ProcessState.NotRunning:
             QtWidgets.QMessageBox.information(
                 self, "Remove Models",
                 "A build is in progress. Please wait for it to finish.")
+            return
+        if self._removejob is not None:
+            QtWidgets.QMessageBox.information(
+                self, "Remove Models",
+                "A removal is already in progress. "
+                "Please wait for it to finish.")
             return
         names = self._list_nghdl_models()
         if not names:
@@ -344,25 +430,68 @@ class Mainwindow(QtWidgets.QWidget):
             "Remove NGHDL Models", names,
             badges={name: "Nghdl" for name in names},
             item_noun="model", parent=self)
-        if dlg.exec():
-            self._remove_nghdl_models(dlg.selected_items())
+        if not dlg.exec():
+            return
+        doomed = [n for n in dlg.selected_items() if n and str(n).strip()]
+        if not doomed:
+            return
+
+        # Off the GUI thread: the rmtree passes and the symbol-library rewrite
+        # are what made "Uninstall Models" freeze the window.
+        self.uploadbtn.setEnabled(False)
+        self.removemodelbtn.setEnabled(False)
+        self._show_progress(True, "Removing " + str(len(doomed)) + " model" +
+                            ("s" if len(doomed) != 1 else "") + "…",
+                            maximum=len(doomed))
+        self._removejob = _BackgroundJob(
+            self._remove_nghdl_models, doomed, parent=self)
+        self._removejob.succeeded.connect(self._on_removal_finished)
+        self._removejob.failed.connect(self._on_removal_error)
+        self._removejob.finished.connect(self._removejob.deleteLater)
+        self._removejob.start()
+
+    def _show_progress(self, on, message="", maximum=0):
+        '''Show/hide the progress row. maximum=0 keeps the bar indeterminate
+        (a build, or the closing ghdl.cm rebuild); a positive maximum makes it
+        count models torn down.'''
+        if on:
+            self.progressStatus.setText(message)
+            self.progressBar.setRange(0, maximum)
+            self.progressBar.setValue(0)
+        self.progressStatus.setVisible(on)
+        self.progressBar.setVisible(on)
+
+    def _on_remove_step(self, done, message):
+        '''Queued from the removal worker: advance the bar and name the model
+        being torn down. done < 0 switches back to indeterminate.'''
+        if done < 0:
+            self.progressBar.setRange(0, 0)
+        else:
+            self.progressBar.setValue(done)
+        if message:
+            self.progressStatus.setText(message)
 
     def _remove_nghdl_models(self, names):
         '''Tear down each selected NGHDL model -- ghdl/modpath.lst line,
         eSim_Nghdl KiCad symbol, Nghdl/<name>.xml, and the source + release
-        per-model dirs -- then rebuild ghdl.cm once so ngspice unlinks them.'''
+        per-model dirs. Returns True if anything was processed, so the caller
+        knows to rebuild ghdl.cm.
+
+        Runs on the removal worker thread: every line goes through the queued
+        removeLog signal, never straight to the console widget.'''
         ghdl_home = self._ghdl_home()
         xml_loc = Appconfig.xml_loc
         removed_any = False
-        for text in names:
+        for done, text in enumerate(names):
             if not text or not str(text).strip():
                 continue
-            self.termedit.append('Removing NGHDL model "' + str(text) + '"')
+            self.removeStep.emit(done, 'Removing "' + str(text) + '"…')
+            self.removeLog.emit('Removing NGHDL model "' + str(text) + '"')
 
             # Drop from ghdl/modpath.lst (absent file/line => no crash).
             if model_teardown._strip_modpath_line(
                     os.path.join(ghdl_home, "modpath.lst"), text):
-                self.termedit.append('  dropped from ghdl/modpath.lst')
+                self.removeLog.emit('  dropped from ghdl/modpath.lst')
 
             # Strip the symbol + the orphan param XML (both idempotent).
             try:
@@ -370,17 +499,17 @@ class Mainwindow(QtWidgets.QWidget):
                 parts = kicad_symlib._read_parts(sym_path)
                 if parts.pop(str(text), None) is not None:
                     kicad_symlib._write_lib(sym_path, parts)
-                    self.termedit.append('  removed eSim_Nghdl symbol')
+                    self.removeLog.emit('  removed eSim_Nghdl symbol')
                 xml = os.path.join(xml_loc, 'Nghdl', str(text) + '.xml')
                 try:
                     os.remove(xml)
-                    self.termedit.append('  removed Nghdl/' + str(text) +
-                                         '.xml')
+                    self.removeLog.emit('  removed Nghdl/' + str(text) +
+                                        '.xml')
                 except FileNotFoundError:
                     pass
             except Exception as err:
-                self.termedit.append("  WARN: symbol/XML removal failed: " +
-                                     str(err))
+                self.removeLog.emit("  WARN: symbol/XML removal failed: " +
+                                    str(err))
 
             # Drop both per-model dirs (guarded against blank/unsafe names).
             for label, base in (
@@ -389,21 +518,47 @@ class Mainwindow(QtWidgets.QWidget):
                         self.release_dir, "src/xspice/icm/ghdl"))):
                 model_dir = model_teardown._safe_model_subdir(base, text)
                 if model_dir is None:
-                    self.termedit.append("  WARN: refusing unsafe " + label +
-                                         " dir for " + repr(text))
+                    self.removeLog.emit("  WARN: refusing unsafe " + label +
+                                        " dir for " + repr(text))
                     continue
                 try:
                     shutil.rmtree(model_dir)
-                    self.termedit.append("  removed " + label + " dir")
+                    self.removeLog.emit("  removed " + label + " dir")
                 except FileNotFoundError:
                     pass
                 except OSError as err:
-                    self.termedit.append("  WARN: could not remove " + label +
-                                         " dir: " + str(err))
+                    self.removeLog.emit("  WARN: could not remove " + label +
+                                        " dir: " + str(err))
             removed_any = True
 
+        self.removeStep.emit(len(names), "Finishing…")
+        return removed_any
+
+    def _on_removal_finished(self, removed_any):
+        '''GUI-thread epilogue: chain into the (already async) ghdl.cm rebuild,
+        or just close the progress row when nothing was touched.'''
+        self._removejob = None
         if removed_any:
+            self._show_progress(True, "Rebuilding ghdl.cm…")
             self._rebuild_ghdl_cm()
+            return
+        self._end_removal_ui()
+
+    def _on_removal_error(self, msg):
+        '''GUI-thread epilogue when the teardown worker raised.'''
+        self._removejob = None
+        self.termedit.append('<b style="color:red">Model removal failed: ' +
+                             str(msg) + '</b>')
+        self._end_removal_ui()
+        QtWidgets.QMessageBox.critical(
+            self, 'Error', 'Model removal failed: ' + str(msg))
+
+    def _end_removal_ui(self):
+        '''Hide the progress row and give the controls back.'''
+        self._show_progress(False)
+        self.uploadbtn.setEnabled(True)
+        self.exitbtn.setEnabled(True)
+        self.removemodelbtn.setEnabled(True)
 
     def _rebuild_ghdl_cm(self):
         '''Rebuild + reinstall ghdl.cm so ngspice unlinks every model already
@@ -664,6 +819,7 @@ class Mainwindow(QtWidgets.QWidget):
         reason = "was killed" if crashed else "exit code " + str(exitCode)
         self.termedit.append('<b style="color:red">' + label +
                              ' failed (' + reason + '). Build stopped.</b>')
+        self._show_progress(False)
         self.uploadbtn.setEnabled(True)
         self.exitbtn.setEnabled(True)
         if getattr(self, "_rebuild_only", False):
@@ -767,6 +923,7 @@ class Mainwindow(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(
                 self, 'Error', 'Library creation failed: ' + str(e)
             )
+            self._show_progress(False)
             self.uploadbtn.setEnabled(True)
             self.exitbtn.setEnabled(True)
 
@@ -775,14 +932,13 @@ class Mainwindow(QtWidgets.QWidget):
         # <install_dir>/lib/ngspice on every platform now; the old nt-only
         # hand copy into the release tree pointed where ngspice never looks.)
         os.chdir(self.cur_dir)
+        self._show_progress(False)
         # Post-removal rebuild: ghdl.cm is refreshed (copied on nt / installed
         # on posix); there is no model to draw, so skip symbol creation.
         if getattr(self, "_rebuild_only", False):
             self.termedit.append("ghdl.cm rebuilt.")
             self._rebuild_only = False
-            self.uploadbtn.setEnabled(True)
-            self.exitbtn.setEnabled(True)
-            self.removemodelbtn.setEnabled(True)
+            self._end_removal_ui()
             return
         if Appconfig.esimFlag == 1:
             if not self.errorFlag:
@@ -825,8 +981,10 @@ class Mainwindow(QtWidgets.QWidget):
                 self.uploadbtn.setEnabled(False)
                 self.exitbtn.setEnabled(False)
                 self.termedit.append('<b style="color:yellow">Processing... do not close until Symbol Added dialog appears.</b>')
+                self._show_progress(True, "Building model…")
                 if not self.createModelDirectory():
                     # User cancelled an overwrite - abort cleanly.
+                    self._show_progress(False)
                     self.uploadbtn.setEnabled(True)
                     self.exitbtn.setEnabled(True)
                     return
@@ -845,6 +1003,7 @@ class Mainwindow(QtWidgets.QWidget):
                 os.chdir(self.cur_dir)
             except BaseException:
                 pass
+            self._show_progress(False)
             self.uploadbtn.setEnabled(True)
             self.exitbtn.setEnabled(True)
             QtWidgets.QMessageBox.critical(self, 'Error', str(e))
