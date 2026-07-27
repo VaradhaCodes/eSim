@@ -347,7 +347,7 @@ flatpak run org.fossee.eSim
 **Quick install** — paste this in a terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/dev/Ubuntu/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/merge-upstream/Ubuntu/bootstrap.sh | bash
 ```
 
 Downloads eSim to `~/eSim` and runs the installer. Re-run the same line to
@@ -359,7 +359,7 @@ Prefer a manual download? The zip flow below runs the exact same installer:
 
 ```bash
 # 1. Download and extract eSim
-unzip eSim-2.6.zip
+unzip eSim-2.6-ubuntu.zip
 cd eSim-2.6
 
 # 2. Install eSim with all dependencies
