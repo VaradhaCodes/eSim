@@ -23,16 +23,51 @@ class _ProjectTree(QtWidgets.QTreeWidget):
     double-click on the row got silently downgraded back into a plain press
     -- no project switch, even though the row could still look selected.
 
-    The toggle itself is deferred a tick (QTimer.singleShot(0, ...)) rather
-    than run inline: with animation on (setAnimated(True)), calling
-    setExpanded() synchronously *inside* mousePressEvent also corrupts that
-    same pressedIndex bookkeeping for the row just pressed, breaking
-    doubleClicked on it -- even with the unmodified event passed straight to
-    QTreeView. Deferring lets the whole press/release/double-click sequence
-    for this event finish first, so the expand animation can never land
-    inside the same window Qt uses to validate a double-click."""
+    The toggle itself is deferred rather than run inline: with animation on
+    (setAnimated(True)), calling setExpanded() synchronously *inside*
+    mousePressEvent also corrupts that same pressedIndex bookkeeping for the
+    row just pressed, breaking doubleClicked on it -- even with the unmodified
+    event passed straight to QTreeView. Deferring lets the whole press/release
+    sequence for this event finish first, so the expand animation can never
+    land inside the same window Qt uses to validate a double-click.
+
+    That deferral is also why the row click used to expand with a snap while
+    the arrow expanded smoothly. QTreeView drives the drop-down off the view's
+    State: expand() puts the view in AnimatingState and paintEvent only
+    composites the before/after pixmaps while it stays there. The deferred
+    toggle runs between the press and the release, so the animation is already
+    under way when QAbstractItemView::mouseReleaseEvent fires -- and that
+    unconditionally calls setState(NoState), dropping the view out of
+    AnimatingState one frame in. The native arrow click never hits it, because
+    QTreeView::mouseReleaseEvent sees the click on the decoration and skips the
+    base-class release entirely.
+
+    So the release restores the state the base class clobbered, instead of the
+    toggle being moved after the release. Moving it there does keep the
+    animation, but it lands the expand inside the window Qt uses to validate a
+    double-click, and project switching (doubleClicked -> openProject) stops
+    working. Re-arming AnimatingState touches nothing else: pressedIndex and
+    the rest of the double-click bookkeeping are left exactly as the
+    unmodified base class left them, and the animation's own completion
+    handler still returns the view to NoState when it finishes.
+
+    Re-arming it does mean the view is now in AnimatingState for the ~250ms
+    the drop-down takes -- and the second click of a double-click lands inside
+    that window. QTreeView::mouseDoubleClickEvent begins with a bare
+    ``if (state() != NoState) return;``, so it would swallow the click and no
+    project would open. mouseDoubleClickEvent below steps over that guard: an
+    animation still in flight is not a reason to ignore a double-click, and
+    the animation settles on its own either way (it did before this class
+    existed, since the release used to end it every time)."""
 
     def mousePressEvent(self, event):
+        # Any fresh input ends the re-armed animation state first -- see
+        # _settleAnimation. A press that arrives while the view still reads as
+        # AnimatingState is reported as already-handled by QTreeView's
+        # expandOrCollapseItemAtPos, which then skips QAbstractItemView's
+        # press entirely: clicking a second project during the first one's
+        # drop-down would never move the selection.
+        self._settleAnimation()
         index = self.indexAt(event.position().toPoint())
         item = self.itemFromIndex(index) if index.isValid() else None
         # Only toggle on left-clicks on an expandable top-level project row.
@@ -50,6 +85,37 @@ class _ProjectTree(QtWidgets.QTreeWidget):
                 QtCore.QTimer.singleShot(
                     0, lambda: self._deferredToggle(persistent))
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # Only ever re-arms a drop-down this same click started: NoState is
+        # read back after super(), so a release that was not animating to
+        # begin with cannot be turned into one.
+        animating = QtWidgets.QAbstractItemView.State.AnimatingState
+        was_animating = self.state() == animating
+        super().mouseReleaseEvent(event)
+        if was_animating and \
+                self.state() == QtWidgets.QAbstractItemView.State.NoState:
+            self.setState(animating)
+
+    def mouseDoubleClickEvent(self, event):
+        # QTreeView::mouseDoubleClickEvent early-returns on `state() !=
+        # NoState`, so the re-armed state has to go before the click can open
+        # a project.
+        self._settleAnimation()
+        super().mouseDoubleClickEvent(event)
+
+    def _settleAnimation(self):
+        """Give up the re-armed AnimatingState ahead of handling new input.
+
+        Only the *painting* of the drop-down needs that state, and only while
+        the tree is idle; every QTreeView input path treats a non-NoState view
+        as busy and drops the event. The animation itself is unaffected -- it
+        keeps running and its own completion handler repaints and returns the
+        view to NoState -- so the branch simply finishes opening without the
+        remaining frames being composited.
+        """
+        if self.state() == QtWidgets.QAbstractItemView.State.AnimatingState:
+            self.setState(QtWidgets.QAbstractItemView.State.NoState)
 
     def _deferredToggle(self, persistent):
         if persistent.isValid():
