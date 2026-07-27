@@ -828,6 +828,368 @@ def _refresh_graphics_effects(app):
             pass
 
 
+# --- Light <-> dark transition ---------------------------------------------
+#
+# A theme flip is one logical event, but Qt delivers it as thousands of small
+# ones: setPalette/setStyleSheet walk the widget tree, every widget repolishes
+# and repaints when its turn comes, and the per-widget changeEvent handlers
+# restyle a tick later still (see defer_restyle). With painting live the whole
+# time, the user watches the window turn dark in pieces -- toolbar, then tree,
+# then editor -- over the ~0.5-1s the walk takes.
+#
+# Two mechanisms fix that, in order of importance:
+#
+#   1. Freeze painting on every visible window for the duration of the walk
+#      (setUpdatesEnabled(False)). Widgets still repolish; nothing reaches the
+#      screen until updates come back, so the switch lands in ONE frame instead
+#      of leaking out widget by widget. This is the part that removes the
+#      staggered reveal, and it is what a hard-cut theme switch should always
+#      do.
+#
+#   2. Hold a snapshot of the pre-flip window on top while that happens, then
+#      cross-dissolve it out. The freeze alone still shows a stall on the old
+#      colors followed by a hard cut; the dissolve turns the stall into a
+#      deliberate-looking 200ms transition. Skipped when motion is off (the
+#      app's reduce-motion switch) -- then it is just the atomic cut.
+#
+# The snapshot is drawn by our own paintEvent at a painter opacity, NOT via a
+# QGraphicsOpacityEffect: a theme apply already toggles and frees graphics
+# effects across the whole app, and adding one more effect into that window is
+# how this module used to crash (see _apply_theme_impl's glow freeze).
+#
+# Only a real light<->dark flip transitions. Zoom re-applies and accent-only
+# changes go through the same repolish but are left alone.
+_FADE_MS = 220
+_SETTLE_MS = 60
+_TRANSITION_WATCHDOG_MS = 4000
+
+# Whether apply_theme has run at least once. The first apply happens before any
+# window exists (and would "flip" from the False default), so it never fades.
+_THEME_APPLIED_ONCE = False
+
+# True while at least one window is painting-frozen for a flip. Read by
+# _apply_theme_impl to skip work that only exists to fix what is on screen.
+_TRANSITION_ACTIVE = False
+
+
+def transition_active():
+    return _TRANSITION_ACTIVE
+
+
+class _ThemeFadeOverlay(QtWidgets.QWidget):
+    """Cross-dissolves a snapshot of the old theme into one of the new.
+
+    Both sides are *pixmaps*, and that is the whole point. Fading a
+    translucent snapshot over the live widget tree makes Qt repaint every
+    widget under it on every frame of the fade -- on a populated session that
+    is a full-app repaint 60 times a second, which is why the first version of
+    this ran at about 10fps. Once the new look is a pixmap too, the overlay is
+    opaque, Qt clips the widgets underneath out of the paint entirely, and a
+    frame costs two blits regardless of how many widgets the app has.
+    """
+
+    def __init__(self, parent, pixmap):
+        super().__init__(parent)
+        self._before = pixmap
+        self._after = None
+        self._opacity = 1.0     # opacity of the OLD look: 1 -> 0 over the fade
+        self.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setGeometry(parent.rect())
+
+    def set_after(self, pixmap):
+        """Hand over the new-theme snapshot; from here the overlay is opaque.
+
+        WA_OpaquePaintEvent is what actually buys the frame rate: it tells Qt
+        this widget fills every pixel it owns, so the repaint of a covered
+        sibling never happens while the dissolve runs.
+        """
+        self._after = pixmap
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.update()
+
+    def set_opacity(self, value):
+        self._opacity = float(value)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        # Nearest-neighbour: the snapshots are already at the window's device
+        # pixel ratio, so there is nothing to interpolate and the smooth path
+        # would only cost time per frame.
+        painter.setRenderHint(
+            QtGui.QPainter.RenderHint.SmoothPixmapTransform, False)
+        # drawPixmap at a point (not into rect()) uses the pixmap's own device
+        # pixel ratio, so HiDPI lands 1:1 instead of going through a rescale.
+        if self._after is not None:
+            painter.drawPixmap(0, 0, self._after)
+        painter.setOpacity(self._opacity)
+        painter.drawPixmap(0, 0, self._before)
+
+    def release_opaque(self):
+        """Stop claiming the region, so the real widgets paint again."""
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+
+
+def _has_web_surface(widget):
+    """True when the window hosts a QWebEngineView (Makerchip / User Manual).
+
+    WebEngine paints through its own compositing surface, which a sibling
+    overlay cannot cover and QWidget.grab() captures as an empty rectangle --
+    a snapshot would blank that pane for the length of the fade. Such windows
+    get the paint freeze only. Never imports the module: if WebEngine was
+    never loaded this session, no window can be holding a view.
+    """
+    module = sys.modules.get("PyQt6.QtWebEngineWidgets")
+    if module is None:
+        return False
+    try:
+        return widget.findChild(module.QWebEngineView) is not None
+    except Exception:
+        return True     # unsure -> no snapshot, freeze only
+
+
+def _snapshot_is_degenerate(pixmap):
+    """True when a grab came back as a flat slab (or not at all).
+
+    A window snapshot that holds exactly one color did not render its
+    children -- the window background is all there is. Dissolving into that
+    shows a solid white/black rectangle where the UI should be, so the caller
+    falls back to a hard cut instead. This is the guard for the whole class of
+    "the grab did not work here": painting frozen, a native surface, a driver
+    that hands back an empty buffer. Sampled on a coarse grid, so the cost
+    does not scale with window size.
+    """
+    if pixmap is None or pixmap.isNull():
+        return True
+    try:
+        image = pixmap.toImage()
+        step = max(8, min(image.width(), image.height()) // 24)
+        first = None
+        for y in range(0, image.height(), step):
+            for x in range(0, image.width(), step):
+                pixel = image.pixel(x, y)
+                if first is None:
+                    first = pixel
+                elif pixel != first:
+                    return False
+        return True
+    except Exception:
+        return True
+
+
+def _discard_overlay(overlay):
+    if overlay is None:
+        return
+    try:
+        owner = getattr(overlay, "_esim_owner", None)
+        if owner is not None and getattr(owner, "_esim_theme_overlay", None) is overlay:
+            owner._esim_theme_overlay = None
+        # A second flip during the dissolve discards this overlay mid-fade;
+        # stop its animation rather than let it keep driving a widget that is
+        # already on its way out.
+        anim = getattr(overlay, "_esim_fade_anim", None)
+        if anim is not None:
+            anim.stop()
+        overlay.hide()
+        overlay.deleteLater()
+    except RuntimeError:
+        pass
+
+
+def _set_overlay_opacity(overlay, value):
+    try:
+        overlay.set_opacity(value)
+    except RuntimeError:
+        pass
+
+
+def _end_fade(overlay):
+    """Hand the region back to the real widgets, then drop the overlay.
+
+    Order matters: the last frame of the dissolve is pixel-identical to what
+    the widgets paint, so releasing the opaque claim first lets them repaint
+    underneath before the overlay goes away -- no uncovered frame in between.
+    """
+    try:
+        overlay.release_opaque()
+        owner = getattr(overlay, "_esim_owner", None)
+        if owner is not None:
+            owner.update()
+    except RuntimeError:
+        pass
+    _discard_overlay(overlay)
+
+
+def _fade_out_overlay(overlay):
+    anim = QtCore.QVariantAnimation(overlay)
+    anim.setDuration(_FADE_MS)
+    anim.setStartValue(1.0)
+    anim.setEndValue(0.0)
+    # Symmetric ease: a dissolve that starts and ends gently reads as one
+    # movement, where OutCubic front-loads it and looks like a jump-cut.
+    anim.setEasingCurve(QtCore.QEasingCurve.Type.InOutQuad)
+    anim.valueChanged.connect(lambda v: _set_overlay_opacity(overlay, v))
+    anim.finished.connect(lambda: _end_fade(overlay))
+    # Parented to the overlay, so it dies with it and never outlives the
+    # widget it is driving.
+    overlay._esim_fade_anim = anim
+    anim.start()
+
+
+def _sync_titlebar_to_fade(window):
+    """Recolor the native caption partway through the dissolve.
+
+    DWM owns the titlebar: it cannot fade, it can only cut. Cutting it at the
+    top of _apply_theme_impl (where the icon loop used to) put the new caption
+    over a client area still showing the old theme -- a bright bar over a dark
+    app for the whole freeze plus the whole fade. Cutting it at the dissolve's
+    halfway point instead puts the switch where the client area is already
+    halfway there, and the eye reads the two as one event.
+    """
+    def _recolor():
+        try:
+            apply_titlebar_theme(window)
+        except RuntimeError:
+            pass        # window closed mid-dissolve
+    QtCore.QTimer.singleShot(max(0, int(_FADE_MS * 0.45)), _recolor)
+
+
+def _begin_theme_transition(app, animate=True):
+    """Freeze painting on every visible window (and snapshot it, if animating).
+
+    Returns the transition state, which also carries its own completion: the
+    finish is queued HERE, before the repolish that could raise, so a failed
+    theme apply can never strand a window with painting switched off.
+    """
+    state = {"windows": [], "finished": False}
+    for tlw in app.topLevelWidgets():
+        try:
+            if not tlw.isVisible() or tlw.isMinimized():
+                continue
+            if tlw.width() <= 0 or tlw.height() <= 0:
+                continue
+        except RuntimeError:
+            continue
+        overlay = None
+        if animate and not _has_web_surface(tlw):
+            try:
+                _discard_overlay(getattr(tlw, "_esim_theme_overlay", None))
+                pixmap = tlw.grab()
+                if not pixmap.isNull():
+                    overlay = _ThemeFadeOverlay(tlw, pixmap)
+                    overlay._esim_owner = tlw
+                    tlw._esim_theme_overlay = overlay
+                    overlay.show()
+                    overlay.raise_()
+                    # Get the snapshot onto the screen NOW: the repolish below
+                    # blocks the event loop, so a merely-posted paint would not
+                    # be served until after it, leaving the window uncovered
+                    # for the frame the new theme lands in.
+                    overlay.repaint()
+            except Exception:
+                overlay = None
+        try:
+            tlw.setUpdatesEnabled(False)
+            # Tells the icon loop in _apply_theme_impl to leave this window's
+            # native caption alone -- the dissolve schedules it instead.
+            tlw._esim_theme_frozen = True
+        except RuntimeError:
+            _discard_overlay(overlay)
+            continue
+        state["windows"].append((tlw, overlay))
+
+    if not state["windows"]:
+        return state
+
+    global _TRANSITION_ACTIVE
+    _TRANSITION_ACTIVE = True
+
+    # Two hops on purpose. The repolish runs to completion before the event
+    # loop turns again, so a delay armed now would already be overdue when the
+    # loop resumes and would fire ahead of the deferred per-widget restyles.
+    # The zero-timer only tells us the loop is live again; the settle delay is
+    # measured from there, so it really is 60ms of quiet.
+    QtCore.QTimer.singleShot(0, lambda: _arm_theme_transition(state))
+    QtCore.QTimer.singleShot(
+        _TRANSITION_WATCHDOG_MS,
+        lambda: _finish_theme_transition(state, fade=False))
+    return state
+
+
+def _arm_theme_transition(state):
+    if state.get("finished"):
+        return
+    QtCore.QTimer.singleShot(
+        _SETTLE_MS, lambda: _finish_theme_transition(state, fade=True))
+
+
+def _finish_theme_transition(state, fade=True):
+    """Restore painting, then dissolve the snapshots away. Idempotent."""
+    if state.get("finished"):
+        return
+    state["finished"] = True
+    global _TRANSITION_ACTIVE
+    _TRANSITION_ACTIVE = False
+    for tlw, overlay in state["windows"]:
+        try:
+            # Painting comes back FIRST, and the new-look snapshot is taken
+            # after it. QWidget.grab() on a window with updates disabled does
+            # not render the children at all -- it hands back a single flat
+            # slab of the window background. Grabbing while still frozen is
+            # what made the dissolve fade into solid white (or solid black)
+            # and then snap to life when the overlay was dropped. Measured:
+            # 78 distinct colors live, 1 frozen.
+            #
+            # Nothing reaches the screen in between: the un-freeze only POSTS
+            # a repaint, and this function does not return to the event loop
+            # until the overlay is back in place covering the window.
+            tlw.setUpdatesEnabled(True)
+            if overlay is not None and fade:
+                # The overlay has to step out of the way for the grab: it
+                # renders children too, and it is holding the old theme.
+                overlay.hide()
+                after = tlw.grab()
+                if not _snapshot_is_degenerate(after):
+                    overlay.set_after(after)
+                overlay.show()
+                overlay.raise_()
+            if overlay is None or overlay._after is None:
+                # No snapshot to dissolve from (or the grab failed): the new
+                # theme has to reach the backing store right now, because it
+                # is what the user is about to see -- either bare, or through
+                # a translucent overlay.
+                tlw.repaint()
+            tlw._esim_theme_frozen = False
+        except RuntimeError:
+            _discard_overlay(overlay)
+            continue
+        if overlay is not None and fade and overlay._after is not None:
+            # Caption lands mid-dissolve.
+            _sync_titlebar_to_fade(tlw)
+            _fade_out_overlay(overlay)
+        else:
+            # Hard cut (motion off, grab failed, watchdog): the caption has to
+            # switch with it, or the window keeps the outgoing theme's bar.
+            try:
+                apply_titlebar_theme(tlw)
+            except RuntimeError:
+                pass
+            _discard_overlay(overlay)
+
+
+def _transition_enabled(app):
+    """Off on the headless platforms tests run under: grabbing and fading
+    every window there buys nothing and only makes tests time-dependent."""
+    try:
+        return app.platformName() not in ("offscreen", "minimal", "")
+    except Exception:
+        return False
+
+
 def system_is_dark():
     """True when the OS prefers a dark color scheme.
 
@@ -922,8 +1284,27 @@ def _apply_theme_impl(app):
     else:
         is_dark = system_is_dark()
 
-    global _CURRENT_DARK
+    global _CURRENT_DARK, _THEME_APPLIED_ONCE
+    was_dark = _CURRENT_DARK
     _CURRENT_DARK = is_dark
+
+    # Nothing below has repainted anything yet, so this is the last point where
+    # the window on screen still shows the OLD theme -- where a snapshot is
+    # worth taking. Only a real light<->dark flip transitions; a zoom re-apply
+    # or an accent change repolishes just the same but is not what the eye is
+    # tracking, and freezing paint through those would cost responsiveness on
+    # the zoom slider for nothing.
+    if _THEME_APPLIED_ONCE and was_dark != is_dark and _transition_enabled(app):
+        try:
+            from frontEnd import motion as _motion
+            animate = _motion.motion_enabled()
+        except Exception:
+            animate = True
+        try:
+            _begin_theme_transition(app, animate=animate)
+        except Exception:
+            pass
+    _THEME_APPLIED_ONCE = True
 
     if is_dark:
         qss_name = 'style_dark.qss'
@@ -1021,13 +1402,27 @@ def _apply_theme_impl(app):
     # pass mops that up.
     # Synchronous pass now; the deferred pass runs in _thaw (queued at the top),
     # which also lifts the glow freeze once effects have settled.
-    _refresh_graphics_effects(app)
+    #
+    # Unless a flip transition is holding the windows painting-frozen: this
+    # pass exists to fix what is ON SCREEN, and nothing is reaching the screen
+    # right now. _thaw's pass runs before the freeze lifts (it is queued ahead
+    # of the transition's settle timer), so the effects are still valid by the
+    # time anything is visible -- and skipping this one takes a full walk of
+    # every widget in every window off the length of the freeze.
+    if not _TRANSITION_ACTIVE:
+        _refresh_graphics_effects(app)
 
     from frontEnd.icon_paths import workspace_icon, timeline_icon, help_icon, dev_docs_icon, settings_icon, home_icon
     for widget in app.topLevelWidgets():
         # Keep every open window's native titlebar in step with the theme
         # (windows shown later are handled by the Show hook in motion.py).
-        apply_titlebar_theme(widget, is_dark)
+        # A window the transition froze owns its own caption timing instead,
+        # and cuts it at the middle of the dissolve: DWM cannot fade, and
+        # recoloring it here would light the titlebar up while the client area
+        # below is still showing the outgoing theme. Windows the transition
+        # passed over (minimized, hidden) are still themed right here.
+        if not getattr(widget, "_esim_theme_frozen", False):
+            apply_titlebar_theme(widget, is_dark)
         if hasattr(widget, 'home_action'):
             widget.home_action.setIcon(home_icon())
         if hasattr(widget, 'wrkspce'):
