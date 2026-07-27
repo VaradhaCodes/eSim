@@ -139,6 +139,10 @@ class HoverSurfaceMixin:
 
 # --------------------------------------------------------------------- card
 class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
+    # Must track the border-radius of QFrame#welcomeCard in the .qss files --
+    # the hover glow and the shadow backdrop are both drawn against it.
+    RADIUS = 16
+
     def __init__(
         self,
         name: str,
@@ -223,7 +227,15 @@ class ToolCard(HoverSurfaceMixin, QtWidgets.QFrame):
         color = QtGui.QColor(83, 215, 255, int(42 * self._hover_progress))
         painter.setBrush(color)
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 16, 16)
+        # Full rect at the *live* zoomed radius, not rect().adjusted(1,1,-1,-1)
+        # at a baked 16. build_qss rescales the card's QSS border-radius on
+        # every zoom change, so a hardcoded 16 draws a tighter corner than the
+        # card itself above 100% -- the card's own background then showed as a
+        # white crescent outside the glow (and a 1px hairline down the straight
+        # edges, from the inset). Both track the same curve now.
+        from frontEnd.theme_utils import zoom_px
+        radius = zoom_px(self.RADIUS)
+        painter.drawRoundedRect(QtCore.QRectF(self.rect()), radius, radius)
 
     # ------------------------------------------------------------------ events
     def mousePressEvent(self, event):
@@ -389,7 +401,13 @@ class HeroBanner(QtWidgets.QFrame):
         orb.setColorAt(0.45, violet)
         orb.setColorAt(1.0, QtCore.Qt.GlobalColor.transparent)
         clip = QtGui.QPainterPath()
-        clip.addRoundedRect(QtCore.QRectF(rect), self.RADIUS, self.RADIUS)
+        # Zoomed radius, same reason as ToolCard.paintEvent: the QSS corner
+        # this clip has to sit inside is rescaled on every zoom change, so a
+        # baked 18 clipped the orb short of the curve and left the panel's own
+        # background showing in the corners.
+        from frontEnd.theme_utils import zoom_px
+        _r = zoom_px(self.RADIUS)
+        clip.addRoundedRect(QtCore.QRectF(rect), _r, _r)
         painter.setClipPath(clip)
         painter.fillRect(rect, orb)
         painter.end()
@@ -460,7 +478,8 @@ class Welcome(QtWidgets.QWidget):
                 attr,
                 self.trigger_action,
             )
-            self._apply_tile_shadow(card, blur=26, y=6, alpha=48)
+            self._apply_tile_shadow(card, blur=26, y=6, alpha=48,
+                                    radius=ToolCard.RADIUS)
             quick.addWidget(card, 0, n)
             quick.setColumnStretch(n, 1)
         inner_layout.addLayout(quick)
@@ -498,7 +517,8 @@ class Welcome(QtWidgets.QWidget):
                 attr,
                 self.trigger_action,
             )
-            self._apply_tile_shadow(card, blur=26, y=6, alpha=48)
+            self._apply_tile_shadow(card, blur=26, y=6, alpha=48,
+                                    radius=ToolCard.RADIUS)
             grid.addWidget(card, row, col)
             grid.setColumnStretch(col, 1)
 
