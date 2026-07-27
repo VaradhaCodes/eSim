@@ -20,6 +20,128 @@
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 from frontEnd.icon_paths import fullscreen_icon, dock_back_icon
 
+#: Docks whose panel is CURRENTLY fullscreen -> the toggle holding it, keyed by
+#: the dock's C++ pointer. A fullscreen panel lives in a frameless top-level
+#: window covering the screen, so anything that opens or raises another dock
+#: behind it is invisible to the user -- which is exactly how "the waveform
+#: never appears" and "Back to Verify does nothing" happened. Code that moves
+#: the user between docks consults this and hands the fullscreen state over
+#: (see :func:`is_fullscreen` / :func:`exit_fullscreen` / :func:`go_fullscreen`).
+_ACTIVE = {}
+
+
+def _key(dock):
+    try:
+        return sip.unwrapinstance(dock)
+    except Exception:
+        return None
+
+
+def _purge(toggle=None):
+    """Drop registry entries whose toggle is no longer fullscreen.
+
+    Keys are raw C++ pointers, which Qt recycles, so a stale entry could make
+    a brand-new dock look fullscreen. Every read and write prunes first."""
+    for k, t in list(_ACTIVE.items()):
+        dead = t is toggle
+        if not dead:
+            try:
+                dead = t._win is None or sip.isdeleted(t._win)
+            except RuntimeError:
+                dead = True
+        if dead:
+            del _ACTIVE[k]
+
+
+def is_fullscreen(dock):
+    """True when ``dock``'s panel is showing as a fullscreen window."""
+    _purge()
+    return _key(dock) in _ACTIVE
+
+
+def exit_fullscreen(dock):
+    """Dock ``dock``'s panel back if it is fullscreen. True if it was."""
+    toggle = _ACTIVE.get(_key(dock))
+    if toggle is None:
+        return False
+    try:
+        toggle._exit()
+    except RuntimeError:
+        _ACTIVE.pop(_key(dock), None)
+    return True
+
+
+def handover(src_dock, dst_dock):
+    """Move the LIVE fullscreen window from one dock's panel to another's.
+
+    The obvious way to follow the user between panels -- exit fullscreen on the
+    one they are leaving, enter it on the one they are going to -- is visibly
+    wrong: the covering window is destroyed, the docked main window flashes up
+    for a frame, and a brand-new window then grows into fullscreen. What should
+    read as "the waveform is now on screen" reads as a stutter.
+
+    So the window is never torn down. Its content is swapped: the old panel
+    goes home to its dock, the new one takes its place, and ownership moves to
+    the new panel's own toggle so Esc and the button still work. Nothing ever
+    uncovers the screen, so there is nothing to see.
+
+    Returns False when the hand-off is not possible (no live fullscreen, or the
+    target has no toggle to own the window); the caller can fall back to
+    exit + enter."""
+    _purge()
+    src = _ACTIVE.get(_key(src_dock))
+    if src is None or dst_dock is None or sip.isdeleted(dst_dock):
+        return False
+    dst_toggle = dst_dock.findChild(FullScreenToggle)
+    dst_content = dst_dock.widget()
+    if dst_toggle is None or dst_content is None:
+        return False
+
+    win = src._win
+    if win is None or sip.isdeleted(win):
+        return False
+    layout = win.layout()
+
+    # 1. the outgoing panel goes back to its own dock (still hidden behind
+    #    the window that is about to hold the incoming one)
+    content = src._content
+    if content is not None and not sip.isdeleted(content):
+        layout.removeWidget(content)
+        if src_dock is not None and not sip.isdeleted(src_dock):
+            src_dock.setWidget(content)
+            src_dock.show()
+    src._win = src._dock = src._content = None
+    src._set_state(full=False)
+    _ACTIVE.pop(_key(src_dock), None)
+
+    # 2. the incoming panel takes the same window, and its toggle takes
+    #    ownership -- including the close handler, so Esc/F11 dock IT back
+    layout.addWidget(dst_content)
+    win.setWindowTitle(dst_dock.windowTitle())
+    dst_toggle._win = win
+    dst_toggle._dock = dst_dock
+    dst_toggle._content = dst_content
+    win.closeEvent = dst_toggle._make_close_handler()
+    _ACTIVE[_key(dst_dock)] = dst_toggle
+    dst_toggle._set_state(full=True)
+    win.raise_()
+    return True
+
+
+def go_fullscreen(dock):
+    """Put ``dock``'s panel fullscreen, if it carries a toggle to do it with.
+
+    Used to hand fullscreen *over* to a panel the user is being moved to, so
+    the mode follows them instead of stranding them behind a covered window.
+    """
+    if dock is None or sip.isdeleted(dock) or is_fullscreen(dock):
+        return False
+    toggle = dock.findChild(FullScreenToggle)
+    if toggle is None:
+        return False
+    toggle._enter()
+    return is_fullscreen(dock)
+
 
 class FullScreenToggle(QtWidgets.QToolButton):
     """Per-panel fullscreen toggle. Drop one into any panel's header; it finds
@@ -113,7 +235,18 @@ class FullScreenToggle(QtWidgets.QToolButton):
         win.closeEvent = self._make_close_handler()
 
         self._win = win
+        if _key(dock) is not None:
+            _ACTIVE[_key(dock)] = self
         self._set_state(full=True)
+
+        # Size the window to the screen BEFORE showing it. A fresh QWidget has
+        # a small default geometry, and showFullScreen() on an unshown widget
+        # lets the window manager animate from that default out to the screen
+        # -- the panel visibly "grows" into fullscreen instead of just being
+        # there. Presetting the geometry gives the animation nothing to do.
+        screen = dock.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            win.setGeometry(screen.geometry())
         win.showFullScreen()
 
     def _make_close_handler(self):
@@ -130,6 +263,7 @@ class FullScreenToggle(QtWidgets.QToolButton):
                 dock, content = self._dock, self._content
                 self._dock = None
                 self._content = None
+                _purge(self)
 
                 content_alive = (content is not None
                                  and not sip.isdeleted(content))

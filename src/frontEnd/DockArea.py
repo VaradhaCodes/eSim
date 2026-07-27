@@ -1083,10 +1083,35 @@ class DockArea(QtWidgets.QMainWindow):
         ModelSim keep a single waveform viewer that updates. The tab carries a
         "Back to Verify" control; that button and closing the tab both return to
         the Verify stage that produced the plot.
+
+        If the Verify panel was fullscreen when the run finished, the waveform
+        takes that fullscreen window over -- the window itself is never torn
+        down (see FullScreen.handover), so the screen is not uncovered for even
+        a frame. Simply adding the tab put it *behind* the fullscreen window,
+        so the simulation looked like it had produced nothing and the user had
+        to leave fullscreen and hunt for the tab.
         """
+        from frontEnd.FullScreen import (exit_fullscreen, go_fullscreen,
+                                         handover, is_fullscreen)
+
+        def take_fullscreen(target):
+            """Move the editor's fullscreen window onto ``target``, seamlessly
+            if possible and by a visible exit+enter only as a fallback."""
+            if handover(source_dock, target):
+                return
+            exit_fullscreen(source_dock)
+            go_fullscreen(target)
+
+        # The user asked for a fullscreen work surface; the waveform is now
+        # that surface, so it inherits the state rather than opening behind it.
+        was_full = is_fullscreen(source_dock)
+
         existing = self._wave_docks.get(source_dock)
         if existing is not None:
-            # Swap the plot inside the live tab and bring it forward.
+            # Swap the plot inside the live tab and bring it forward. If that
+            # tab is ITSELF the fullscreen panel (re-simulate from a second
+            # screen), the swap happens inside the fullscreen window and there
+            # is nothing else to do.
             old = existing._wave_plot
             if old is not None:
                 existing._wave_layout.removeWidget(old)
@@ -1095,6 +1120,8 @@ class DockArea(QtWidgets.QMainWindow):
             existing._wave_plot = plot
             existing.setVisible(True)
             existing.raise_()
+            if was_full and not is_fullscreen(existing):
+                take_fullscreen(existing)
             return
 
         wave_dock = WaveformDock("Waveform-" + source_dock.windowTitle(), self)
@@ -1118,7 +1145,7 @@ class DockArea(QtWidgets.QMainWindow):
         back_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         back_btn.setProperty("cssClass", "secondary")
         back_btn.clicked.connect(
-            lambda: self._return_to_verify(source_dock, flow))
+            lambda: self._return_to_verify(source_dock, flow, wave_dock))
         hrow.addWidget(back_btn)
         hrow.addStretch(1)
         layout.addWidget(header)
@@ -1140,14 +1167,16 @@ class DockArea(QtWidgets.QMainWindow):
         def _on_closed():
             if self._wave_docks.get(source_dock) is wave_dock:
                 del self._wave_docks[source_dock]
-            self._return_to_verify(source_dock, flow)
+            self._return_to_verify(source_dock, flow, wave_dock)
         wave_dock.closed.connect(_on_closed)
 
         wave_dock.setVisible(True)
         wave_dock.setFocus()
         wave_dock.raise_()
+        if was_full:
+            take_fullscreen(wave_dock)
 
-    def _return_to_verify(self, source_dock, flow):
+    def _return_to_verify(self, source_dock, flow, wave_dock=None):
         """Bring the Model Creation dock that owns this plot forward and select
         its Verify stage.
 
@@ -1155,15 +1184,47 @@ class DockArea(QtWidgets.QMainWindow):
         that dock (WA_DeleteOnClose) while the plot tab it spawned stays open,
         still holding this reference. Closing the plot afterwards -- or hitting
         "Back to Verify" -- would then touch a freed QDockWidget, so check the
-        dock is still alive first, exactly as _live_tool_dock does."""
-        if sip.isdeleted(source_dock):
+        dock is still alive first, exactly as _live_tool_dock does.
+
+        Fullscreen is handed back the same way it was handed over -- the same
+        window, its content swapped, so the round trip has no flash in either
+        direction. Without any of this, "Back to Verify" pressed on a
+        fullscreen waveform raised the editor *behind* the fullscreen window:
+        the click worked, and nothing appeared to happen.
+
+        The decision reads the CURRENT state and nothing else: fullscreen
+        waveform -> fullscreen editor, docked waveform -> docked editor. An
+        earlier version remembered how the waveform tab was first opened, which
+        went stale the moment the user pressed Esc -- a later docked run then
+        threw the editor into fullscreen on the way back, out of nowhere."""
+        from frontEnd.FullScreen import (exit_fullscreen, go_fullscreen,
+                                         handover, is_fullscreen)
+
+        source_alive = source_dock is not None and not sip.isdeleted(source_dock)
+        wave_alive = wave_dock is not None and not sip.isdeleted(wave_dock)
+        wave_is_full = wave_alive and is_fullscreen(wave_dock)
+
+        # Select the stage first: the panel is about to be shown either way,
+        # and switching it while it is off-screen avoids a visible re-layout.
+        if source_alive:
+            try:
+                flow.goto_verify()
+            except Exception:
+                pass
+
+        handed = False
+        if wave_is_full:
+            if source_alive:
+                handed = handover(wave_dock, source_dock)
+            if not handed:
+                exit_fullscreen(wave_dock)
+
+        if not source_alive:
             return
-        try:
-            flow.goto_verify()
-        except Exception:
-            pass
         source_dock.setVisible(True)
         source_dock.raise_()
+        if wave_is_full and not handed:
+            go_fullscreen(source_dock)
 
     def modelicaEditor(self, projDir):
         """This function sets up the UI for ngspice to modelica conversion."""
