@@ -50,6 +50,51 @@ from .model_teardown import (
 import hdlparse.verilog_parser as vlog
 
 
+#: ``1ns`` / ``100 ps`` -- a Verilog time literal, as magnitude and unit.
+_TIME_UNIT_EXP = {'s': 0, 'ms': -3, 'us': -6, 'ns': -9, 'ps': -12, 'fs': -15}
+_TIMESCALE_RE = re.compile(
+    r'(`timescale\s+)(1|10|100)\s*(s|ms|us|ns|ps|fs)'
+    r'(\s*/\s*)(1|10|100)\s*(s|ms|us|ns|ps|fs)',
+    re.IGNORECASE)
+
+#: Finest precision d_cosim ever needs. Its default output delay is 1 ns and
+#: SPICE event times land on picoseconds, so 1 ps resolves every edge the
+#: analog side can produce.
+_TARGET_PRECISION_EXP = -12
+
+
+def normalise_timescale(text):
+    """Sharpen every ``\\`timescale`` precision in ``text`` to at least 1 ps.
+
+    Returns ``(text, ["1ms/1ms", ...])`` naming the directives that were too
+    coarse; the list is empty (and the text unchanged) when all of them were
+    already fine enough.
+
+    ivlng advances VVP by ``(spice_time - vvp_time) / precision`` ticks and
+    **truncates**. When one SPICE step is shorter than a single precision tick
+    that quotient is 0, so VVP never runs: the design sits at its initial value
+    for the whole simulation, ngspice reports success, and every output reads
+    zero. A source that declares ``\\`timescale 1ms/1ms`` (legal, and fine
+    under plain vvp) is silently dead under d_cosim -- measured on a probe
+    design, every counter stayed at 0 for 10 ms.
+
+    Only the *precision* field is rewritten. The time unit is what the design's
+    own ``#`` delays are expressed in, so leaving it alone keeps their meaning
+    exactly; a finer precision can only reduce rounding, never change it.
+    """
+    coarse = []
+
+    def sharpen(m):
+        exp = _TIME_UNIT_EXP[m.group(6).lower()] + len(m.group(5)) - 1
+        if exp <= _TARGET_PRECISION_EXP:
+            return m.group(0)
+        coarse.append('%s%s/%s%s' % (m.group(2), m.group(3),
+                                     m.group(5), m.group(6)))
+        return m.group(1) + m.group(2) + m.group(3) + m.group(4) + '1ps'
+
+    return _TIMESCALE_RE.sub(sharpen, text), coarse
+
+
 class ModelGeneration(QtWidgets.QWidget):
     '''
         Class is used to generate the Ngspice Model
@@ -704,6 +749,54 @@ class ModelGeneration(QtWidgets.QWidget):
         for output in self.output_list:
             self.output_port.append(output[0] + ":" + output[2])
 
+    # Widest port the Verilator/NgVeri flow can carry. Verilator represents a
+    # port up to 64 bits as CData/SData/IData/QData -- plain unsigned integers,
+    # which int2arr/arr2int convert exactly. Past 64 it becomes VlWide (an
+    # array of uint32_t) that no integer conversion can carry: the generated
+    # C++ either fails to compile with an unreadable template error or, worse,
+    # silently truncates. Refuse it here, where the message can name the port.
+    MAX_PORT_WIDTH = 64
+
+    def validate_ports(self):
+        '''
+            Check the parsed port list against what the NgVeri (Verilator)
+            backend can actually represent, and return an error string
+            describing the first problem, or None if the model is buildable.
+
+            Call this after getPortInfo() and before any file generation. It
+            exists because both problems it catches used to produce a model
+            that BUILT and RAN and gave wrong numbers with no diagnostic
+            anywhere -- the failure mode this whole path is being hardened
+            against. d_cosim has its own inout group and its own width
+            handling, so this gate is for the legacy NgVeri flow only.
+        '''
+        # inout: getPortInfo() files it under input_list because that is what
+        # the rest of the legacy flow can drive. The ifspec then declares it
+        # "Direction: in" and the driven half of the pin never reaches ngspice
+        # -- the model appears to work and is simply wrong on that net.
+        inouts = [p[0] for p in self.input_list
+                  if len(p) > 1 and p[1].lower() == "inout"]
+        if inouts:
+            return ("This model declares inout port(s): " +
+                    ", ".join(inouts) + ". The NgVeri (Verilator) backend "
+                    "drives them as inputs only, so the output half of the "
+                    "pin never reaches ngspice and the results are silently "
+                    "wrong. Split the pin into separate in and out ports. "
+                    "(The d_cosim backend refuses them for the same reason: "
+                    "its code model has an inout group, but eSim's netlister "
+                    "never fills it, which misaligns the other ports too.)")
+
+        for item in self.input_port + self.output_port:
+            width = self._port_width(item)
+            if width > self.MAX_PORT_WIDTH:
+                return ("Port '" + item.split(':')[0] + "' is " + str(width) +
+                        " bits. The NgVeri (Verilator) backend carries ports "
+                        "up to " + str(self.MAX_PORT_WIDTH) + " bits; wider "
+                        "ones cannot be converted without truncation. Split "
+                        "the port, or use the d_cosim backend.")
+
+        return None
+
     def build_cosim(self, engine="icarus"):
         '''
             Build a d_cosim digital artifact for this Verilog model and return
@@ -770,49 +863,91 @@ class ModelGeneration(QtWidgets.QWidget):
                     "copy the .v in first.")
             return "Error"
 
-        # eSim's port parser lumps `inout` into the input side, but d_cosim
-        # keeps a separate d_inout group -- warn rather than emit a wrong
-        # netlist silently. (Common no-inout modules are unaffected.)
+        # d_cosim's code model does have a d_inout group, but eSim's port
+        # parser files `inout` under the inputs, so the netlist declares it as
+        # a plain d_in and the group stays empty. ngspice then reports
+        # "mismatched XSPICE/co-simulator input counts: 2/1" and "inout counts:
+        # 0/1" -- two lines in a wall of output -- and carries on with the port
+        # indices off by the width of the inout. Measured on a probe module
+        # whose only inout is driven by the design: the inout never leaves the
+        # simulation AND a sibling output declared `assign q = 1'b1;` toggled
+        # with the clock. Every port is wrong, not just the bidirectional one,
+        # so this is refused rather than warned about.
+        # Read connection_info.txt directly rather than self.input_list: the
+        # d_cosim flow never calls getPortInfo(). Lines are "name direction
+        # bits", so match on the direction FIELD -- a port named "inout_en"
+        # is not a bidirectional pin.
+        inouts = []
         try:
-            with open(os.path.join(self.modelpath, 'connection_info.txt')) as f:
-                if 'inout' in f.read().lower():
-                    log.warn("Module has inout port(s). d_cosim handling of "
-                             "inout is limited; results may be wrong.")
-                    log.fix("Use the legacy NgVeri flow if inout is required.")
+            path = os.path.join(self.modelpath, 'connection_info.txt')
+            with open(path) as fh:
+                for entry in fh:
+                    fields = entry.split()
+                    if len(fields) > 1 and fields[1].lower() == 'inout':
+                        inouts.append(fields[0])
         except OSError:
             pass
+        if inouts:
+            log.error("d_cosim build REFUSED: this module declares inout "
+                      "port(s): " + ", ".join(inouts) + ".")
+            log.fix("eSim cannot wire a bidirectional pin to either backend "
+                    "yet -- the netlist declares it as an input, which "
+                    "misaligns every port and silently corrupts the outputs "
+                    "too. Split the pin into separate in and out ports.")
+            return "Error"
 
         try:
             # ----- [2/4] Prepare source -----
             log.phase("[2/4] Prepare source")
             # d_cosim/ivlng needs a `timescale to advance VVP ticks; without one
             # the tick length defaults to 1 second and combinational logic never
-            # re-evaluates. Inject one transparently if the source lacks it.
+            # re-evaluates. Inject one transparently if the source lacks it,
+            # and sharpen a too-coarse one the source declares itself (see
+            # normalise_timescale) -- both leave the design's delays alone.
             with open(src, 'r') as fh:
                 verilog_text = fh.read()
             compile_src = src
             tmp_src = None
             if '`timescale' not in verilog_text:
+                prepared = '`timescale 1ns/1ps\n' + verilog_text
+                note = "Injected `timescale 1ns/1ps (absent in source)."
+            else:
+                prepared, coarse = normalise_timescale(verilog_text)
+                note = ("Sharpened `timescale precision to 1ps (source "
+                        "declared " + ", ".join(coarse) + "; VVP cannot "
+                        "advance in steps shorter than one precision tick, "
+                        "so the design would have stayed frozen)."
+                        if coarse else "")
+                if not coarse:
+                    log.detail("`timescale present in source, precision OK.")
+            if prepared != verilog_text:
                 tmp_fd, tmp_src = tempfile.mkstemp(
-                    suffix='.v', dir=os.path.abspath(self.modelpath))
-                os.write(tmp_fd,
-                         ('`timescale 1ns/1ps\n' + verilog_text).encode())
+                    suffix=os.path.splitext(self.fname)[1] or '.v',
+                    dir=os.path.abspath(self.modelpath))
+                os.write(tmp_fd, prepared.encode())
                 os.close(tmp_fd)
                 compile_src = tmp_src
-                log.info("Injected `timescale 1ns/1ps (absent in source).")
-            else:
-                log.detail("`timescale present in source.")
+                log.info(note)
 
             # ----- [3/4] Compile -----
             log.phase("[3/4] Compile")
-            cmd = [iverilog, "-g2012", "-o", out, compile_src]
+            # -y/-I/-Y: resolve submodules and `include files the user added
+            # through "Add dependency files/folder", which land beside the top
+            # source in modelpath. Without them iverilog sees one file and any
+            # multi-file design dies on "Unknown module type". -y only pulls a
+            # file in when a module is still unresolved, so a self-contained
+            # design compiles exactly as before.
+            libdir = os.path.abspath(self.modelpath)
+            extra_flags = ["-y", libdir, "-I", libdir, "-Y", ".sv"]
+            cmd = ([iverilog, "-g2012"] + extra_flags
+                   + ["-o", out, compile_src])
             log.info("$ " + " ".join(shlex.quote(c) for c in cmd))
             start = time.monotonic()
             try:
                 # Same iverilog invocation path as the Verilog Simulator IDE
                 # (hdl.icarus), so both features stay byte-for-byte consistent.
                 res = icarus.run_iverilog(
-                    iverilog, [compile_src], out,
+                    iverilog, [compile_src], out, extra_flags=extra_flags,
                     cwd=os.path.abspath(self.modelpath), timeout=300)
             finally:
                 if tmp_src and os.path.isfile(tmp_src):
@@ -951,20 +1086,39 @@ and set the load for input ports */
 
             cm_count_ptr = cm_count_ptr + 1
 
+        # cm_event_get_ptr(tag, timepoint): the two arguments are ORTHOGONAL.
+        # `tag` selects the block cm_event_alloc'd for this port; `timepoint`
+        # says how far BACK in the rotating state history to look -- 0 is the
+        # current timestep, 1 the previous one (ngspice cm/cmevt.c, and every
+        # stock code model: see d_dff, which uses (0,0)/(0,1) .. (3,0)/(3,1)
+        # for its four tags).
+        #
+        # This loop used to carry a second counter that was initialised once
+        # OUTSIDE it and bumped twice per port, so it tracked the tag index
+        # instead of resetting: port 0 got the correct (0,0)/(0,1) but port 1
+        # got (1,1)/(1,2), port 2 (2,2)/(2,3) and so on. Every port after the
+        # first therefore wrote its new value into a PREVIOUS timestep's block
+        # -- one ngspice has already copied forward, so the current block never
+        # saw it -- and compared against a block two steps back which, since
+        # ngspice 45 collapses the state history at every accepted timestep,
+        # aliases onto the one just written. `_op_x[i] != _op_x_old[i]` is then
+        # permanently false, OUTPUT_CHANGED stays FALSE, and the pin holds its
+        # first transition forever.
+        #
+        # It is not a 2.6 regression: the same loop shipped in 2.5, where
+        # ngspice 35 kept the full per-instance state history and the
+        # out-of-range timepoint happened to land on a self-consistent block.
+        # ngspice 45's state-recycling removed that padding and made a
+        # long-latent bug live. Models built before this fix carry the bad
+        # indices in their compiled cfunc.mod and must be rebuilt.
         els_evt_ptr = []
-        els_evt_count1 = 0
-        els_evt_count2 = 0
-        for item in self.output_port:
+        for tag, item in enumerate(self.output_port):
             els_evt_ptr.append("_op_" + item.split(":")[0] +
                                " = (Digital_State_t *) cm_event_get_ptr(" +
-                               str(els_evt_count1) + "," +
-                               str(els_evt_count2) + ");")
-            els_evt_count2 = els_evt_count2 + 1
+                               str(tag) + ",0);")
             els_evt_ptr.append("_op_" + item.split(":")[0] + "_old" +
                                " = (Digital_State_t *) cm_event_get_ptr(" +
-                               str(els_evt_count1) + "," +
-                               str(els_evt_count2) + ");")
-            els_evt_count1 = els_evt_count1 + 1
+                               str(tag) + ",1);")
 
         # Assign bit value to every input
         assign_data_to_input = []
@@ -1278,6 +1432,7 @@ and set the load for input ports */
         #include <string>
         #include <iostream>
         #include <cstring>
+        #include <cstdint>
         using namespace std;
 
         /* Per-iteration port tracing. This model is evaluated once per ngspice
@@ -1312,21 +1467,36 @@ and set the load for input ports */
         extern_var.append('''
         extern "C" int foo_''' + self.model_stem + '''(int,int);
         ''')
+        # Verilator hands a port over as CData/SData/IData/QData -- all
+        # UNSIGNED. These two took and returned `int`, which broke both
+        # directions once a port reached 32 bits:
+        #
+        #   int2arr: a 32-bit output whose top bit was set arrived NEGATIVE,
+        #   the loop's `num>=0` guard failed on iteration 0, the body never
+        #   ran at all, and the temp array silently kept the PREVIOUS
+        #   timestep's bits -- the port froze for the entire upper half of its
+        #   range with no diagnostic. (ml_act_relu_64bit_q32_32's frac_out[31:0]
+        #   is a real instance of this.)
+        #
+        #   arr2int: `k = 2*k + array[i]` over 32 bits is signed overflow,
+        #   i.e. undefined behaviour, not merely a wrap.
+        #
+        # Both now work on uint64_t and extract/insert bits instead of
+        # dividing, which is exact for every width up to 64. Wider ports are
+        # rejected up front by validate_ports() -- Verilator represents them as
+        # VlWide, which no integer conversion can carry.
         convert_func = '''
         void int2arr''' + self.model_stem + \
-            '''(int  num, int array[], int n)
+            '''(uint64_t num, int array[], int n)
         {
-            for (int i = 0; i < n && num>=0; i++)
-            {
-                array[n-i-1] = num % 2;
-                num /= 2;
-                }
+            for (int i = 0; i < n; i++)
+                array[n-i-1] = (int)((num >> i) & 1u);
         }
-        int arr2int''' + self.model_stem + '''(int array[],int n)
+        uint64_t arr2int''' + self.model_stem + '''(const int array[], int n)
         {
-            int i,k=0;
-            for (i = 0; i < n; i++)
-                k = 2 * k + array[i];
+            uint64_t k = 0;
+            for (int i = 0; i < n; i++)
+                k = (k << 1) | (uint64_t)(array[i] & 1);
             return k;
         }
         '''
@@ -1373,15 +1543,18 @@ beyond the %d instances this model was built for; skipping it.\\n",
 
         before_eval = []
         after_eval = []
+        # %llu on an explicit cast: the port is CData/SData/IData/QData, so the
+        # old "%d" was a format/type mismatch (undefined behaviour) for
+        # anything wider than 31 bits whenever the trace was actually enabled.
         for i, item in enumerate(self.input_port + self.output_port):
             before_eval.append(
                 '''\t\t\t\tESIM_TRACE("''' +
                 item.split(':')[0] +
-                '''=%d\\n", ''' +
+                '''=%llu\\n", (unsigned long long)(''' +
                 self.model_stem +
                 '''[count] ->''' +
                 item.split(':')[0] +
-                ''');\n''')
+                '''));\n''')
         for i, item in enumerate(self.input_port):
 
             before_eval.append(
@@ -1407,11 +1580,11 @@ beyond the %d instances this model was built for; skipping it.\\n",
             after_eval.append(
                 '''\t\t\t\tESIM_TRACE("''' +
                 item.split(':')[0] +
-                '''=%d\\n", ''' +
+                '''=%llu\\n", (unsigned long long)(''' +
                 self.model_stem +
                 '''[count] ->''' +
                 item.split(':')[0] +
-                ''');\n''')
+                '''));\n''')
 
         for i, item in enumerate(self.output_port):
             after_eval.append(

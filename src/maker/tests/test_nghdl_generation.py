@@ -247,3 +247,40 @@ def test_server_caps_match_the_c_sources():
     with open(os.path.join(_NGHDL_SRC, "ghdlserver", "ghdlserver.c"),
               encoding="utf-8", errors="replace") as fh:
         assert "calloc(1, " + str(mod.SERVER_REPLY_CAP) + ")" in fh.read()
+
+
+# ------------------------------------------------- event-storage indices
+
+_VHDL_TWO_OUTPUTS = """entity adder is
+port (
+    clk : in std_logic;
+    a : in std_logic_vector(3 downto 0);
+    sum : out std_logic_vector(4 downto 0);
+    carry : out std_logic
+);
+end entity;
+"""
+
+
+def test_output_storage_uses_timepoint_0_and_1(tmp_path, monkeypatch):
+    """cm_event_get_ptr(tag, timepoint): the tag picks the port's storage,
+    the timepoint picks how far BACK in the rotating state history to look --
+    0 current, 1 previous. This generator carried a counter that made the
+    timepoint climb with the tag, so port 1 got (1,1)/(1,2): it wrote into a
+    stale block and compared against one aliasing it, and froze after its
+    first transition. Same defect and same fix as the Verilog generator (see
+    test_ngveri_event_ptrs.py)."""
+    _, _, outdir, _ = _build(tmp_path, monkeypatch, vhdl=_VHDL_TWO_OUTPUTS)
+    cfunc = (outdir / "cfunc.mod").read_text()
+
+    for tag, name in enumerate(["sum", "carry"]):
+        assert ("_op_%s = (Digital_State_t *) cm_event_get_ptr(%d,0);"
+                % (name, tag)) in cfunc
+        assert ("_op_%s_old = (Digital_State_t *) cm_event_get_ptr(%d,1);"
+                % (name, tag)) in cfunc
+
+    import re as _re
+    timepoints = {int(m) for m in
+                  _re.findall(r"cm_event_get_ptr\(\s*\d+\s*,\s*(\d+)\s*\)",
+                              cfunc)}
+    assert timepoints <= {0, 1}, sorted(timepoints)

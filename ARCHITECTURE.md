@@ -110,3 +110,13 @@ flowchart LR
     TEMPLATE --> LIB([Save to project .lib file]):::output
     LIB --> K2N([Attached during Netlist Conversion]):::output
 ```
+
+---
+
+## 5. Further reading
+
+- [`docs/NGVERI_ACCURACY.md`](docs/NGVERI_ACCURACY.md) — correctness record for
+  the NgVeri / NGHDL / d_cosim digital co-simulation backends: what the
+  generated `cfunc.mod` contract with ngspice is, the silent-wrong-value
+  defects that have been fixed in it, and the open work (notably
+  `cm_irreversible()` on generated models).

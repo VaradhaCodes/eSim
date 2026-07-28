@@ -25,6 +25,7 @@ from xml.etree import ElementTree as ET
 from PyQt6 import QtWidgets
 from configuration import Dialogs
 from configuration.Appconfig import Appconfig
+from maker.CosimLogger import CosimLog
 
 from . import Analysis
 from . import Convert
@@ -38,6 +39,38 @@ from .Processing import PrcocessNetlist
 from projManagement.projectPaths import previous_values_path
 
 
+def _model_types(schematic_info):
+    """``{model card name: ngspice model type}`` for every ``.model`` line,
+    e.g. ``{"u1": "adc_bridge", "u2": "d_cosim"}``. Both keys and values are
+    lower-cased; the type is the token before the parameter parenthesis."""
+    types = {}
+    for line in schematic_info:
+        s = str(line).strip()
+        if s.lower().startswith('.model '):
+            parts = s.split()
+            if len(parts) >= 3:
+                types[parts[1].lower()] = parts[2].split('(')[0].lower()
+    return types
+
+
+def _a_devices(schematic_info):
+    """``(model card name, [node lists])`` for every XSPICE a-device line.
+
+    ``a2 [in1 in2] [out1] u2`` yields ``("u2", [["in1", "in2"], ["out1"]])``.
+    One entry per *instance*: several a-lines may share one ``.model`` card,
+    which is exactly the case a per-instance limit has to count."""
+    devices = []
+    for line in schematic_info:
+        s = str(line).strip()
+        if not s or s[0].lower() != 'a':
+            continue
+        groups = re.findall(r'\[([^\]]*)\]', s)
+        if not groups:
+            continue
+        devices.append((s.split()[-1].lower(), [g.split() for g in groups]))
+    return devices
+
+
 def _get_event_plot_nodes(schematic_info, plot_text):
     """Return ordered event (digital) node names that appear in plot_text.
 
@@ -46,29 +79,18 @@ def _get_event_plot_nodes(schematic_info, plot_text):
     only those also requested in plot_text ("plot v(node)"). ngspice's `eprint`
     fails if handed a plain analog node, so the two sets must be intersected.
     """
-    model_types = {}
-    for line in schematic_info:
-        s = str(line).strip()
-        if s.lower().startswith('.model '):
-            parts = s.split()
-            if len(parts) >= 3:
-                model_types[parts[1].lower()] = parts[2].split('(')[0].lower()
+    model_types = _model_types(schematic_info)
 
     event_nodes = set()
-    for line in schematic_info:
-        s = str(line).strip()
-        if not s or s[0].lower() != 'a':
-            continue
-        groups = re.findall(r'\[([^\]]*)\]', s)
-        inst_name = s.split()[-1].lower()
-        mtype = model_types.get(inst_name, '')
+    for model, groups in _a_devices(schematic_info):
+        mtype = model_types.get(model, '')
         if mtype == 'adc_bridge' and len(groups) >= 2:
-            event_nodes.update(groups[1].split())
+            event_nodes.update(groups[1])
         elif mtype == 'd_cosim':
             for g in groups:
-                event_nodes.update(g.split())
+                event_nodes.update(g)
         elif mtype == 'dac_bridge' and len(groups) >= 1:
-            event_nodes.update(groups[0].split())
+            event_nodes.update(groups[0])
 
     seen = set()
     result = []
@@ -80,6 +102,122 @@ def _get_event_plot_nodes(schematic_info, plot_text):
                 result.append(node)
                 seen.add(node)
     return result
+
+
+def dcosim_instance_count(schematic_info):
+    """How many d_cosim blocks the netlist instantiates.
+
+    Counted per a-device, not per ``.model`` card: two instances of the same
+    Verilog block share one card and are still two co-simulations."""
+    types = _model_types(schematic_info)
+    return sum(1 for model, _ in _a_devices(schematic_info)
+               if types.get(model) == 'd_cosim')
+
+
+#: ``in_low=1.5``, ``in_high = 2.0e0`` -- one adc_bridge threshold parameter.
+def _param_re(name):
+    return re.compile(
+        r'\b' + name + r'\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)')
+
+
+#: ``.model`` categories whose blocks are an HDL simulation behind an XSPICE
+#: shell -- Verilator (Ngveri), GHDL (Nghdl) and Icarus (NgVeriCosim). Each
+#: reads its inputs as logic, and none of them wants an x from a voltage ramp.
+HDL_MODEL_TYPES = ('Ngveri', 'Nghdl', 'NgVeriCosim')
+
+
+def collapse_adc_band_for_hdl(schematic_info, hdl_cards=()):
+    """Give every adc_bridge that feeds an HDL block a single switching
+    threshold, and return ``(netlist, [(card, in_low, in_high, threshold)])``.
+
+    XSPICE's adc_bridge is a THREE-state converter: below ``in_low`` it emits
+    0, above ``in_high`` it emits 1, and **in between it emits x**. Dumping the
+    digital node for a 0-5 V clock with the stock 1.0/2.0 band shows four
+    events per period, not two::
+
+        0.000321 ms  U        <- crossed in_low going up
+        0.000448 ms  1        <- crossed in_high
+        0.501701 ms  U        <- crossed in_high coming down
+        0.501828 ms  0        <- crossed in_low
+
+    What each backend does with that ``U`` differs, and both answers are wrong:
+
+    * **Icarus (d_cosim)** is a real four-state simulator and, per IEEE 1364,
+      counts a transition to a *higher* value as a posedge -- so ``0->U`` and
+      ``U->1`` are **both** posedges and the design is clocked twice per analog
+      edge. Measured on a probe design: a ``posedge`` counter and a ``negedge``
+      counter each advance 2 per period, and an ``always @(clk)`` counter
+      advances 4.
+    * **Verilator (Ngveri) and GHDL (Nghdl)** are spared the double edge only
+      by accident: both generators emit
+      ``if (INPUT_STATE(p) == ZERO) 0; else 1;``, so x is silently read as a
+      logic 1. They see one edge -- but taken at ``in_low`` on the way up *and*
+      on the way down, so the edge is early on one side and late on the other,
+      and a genuinely undefined input reads as a confident 1.
+
+    A logic input has one switching threshold; the ``in_low``/``in_high`` pair
+    describes a *static* datasheet guarantee, not a dynamic behaviour, and
+    applying it to a ramping clock is the modelling error. Collapsing the band
+    to its midpoint keeps the user's intent (the centre of the band they asked
+    for) and removes the ``U`` window entirely.
+
+    ``hdl_cards`` names the ``.model`` cards known to be Ngveri/Nghdl blocks.
+    They cannot be recognised from the netlist alone -- a generated model's
+    type token is just the HDL entity name -- so the caller passes them in from
+    the parsed model list. d_cosim blocks are self-identifying and are always
+    included. Doing all three uniformly is what keeps a backend swap an
+    apples-to-apples comparison: the analog half of the netlist must not change
+    under the schematic just because the block behind it was rebuilt.
+    """
+    types = _model_types(schematic_info)
+    devices = _a_devices(schematic_info)
+    hdl = {str(c).lower() for c in hdl_cards}
+
+    hdl_inputs = set()
+    for model, groups in devices:
+        if (types.get(model) == 'd_cosim' or model in hdl) and groups:
+            hdl_inputs.update(groups[0])
+    if not hdl_inputs:
+        return list(schematic_info), []
+
+    feeders = set()
+    for model, groups in devices:
+        if (types.get(model) == 'adc_bridge' and len(groups) >= 2
+                and hdl_inputs.intersection(groups[1])):
+            feeders.add(model)
+
+    low_re, high_re = _param_re('in_low'), _param_re('in_high')
+    collapsed = []
+    netlist = []
+    for line in schematic_info:
+        s = str(line)
+        parts = s.strip().split()
+        if not (len(parts) >= 3 and parts[0].lower() == '.model'
+                and parts[1].lower() in feeders
+                and parts[2].split('(')[0].lower() == 'adc_bridge'):
+            netlist.append(line)
+            continue
+
+        low, high = low_re.search(s), high_re.search(s)
+        if not (low and high):
+            netlist.append(line)
+            continue
+        try:
+            lo, hi = float(low.group(1)), float(high.group(1))
+        except ValueError:
+            netlist.append(line)
+            continue
+        if hi <= lo:                    # already a single threshold
+            netlist.append(line)
+            continue
+
+        mid = '%.10g' % ((lo + hi) / 2.0)
+        s = low_re.sub('in_low=' + mid, s, count=1)
+        s = high_re.sub('in_high=' + mid, s, count=1)
+        netlist.append(s)
+        collapsed.append((parts[1], lo, hi, mid))
+
+    return netlist, collapsed
 
 
 class MainWindow(QtWidgets.QWidget):
@@ -1166,6 +1304,50 @@ class MainWindow(QtWidgets.QWidget):
         """
         print("=============================================================")
         print("Creating Final netlist")
+
+        # ivlng loads Icarus's libvvp, whose simulation engine is process
+        # global and single-shot. A second d_cosim block in the same netlist
+        # gets "This VVP simulation has already run and can not be reused" and
+        # then ngspice SEGFAULTS with no output file at all. Renaming libvvp
+        # does not help: ivlng.vpi imports the first copy by name. Refuse the
+        # netlist here, where the message can say what to do instead.
+        blocks = dcosim_instance_count(store_schematicInfo)
+        if blocks > 1:
+            raise RuntimeError(
+                "This schematic has %d Verilog co-simulation (d_cosim) "
+                "blocks. Icarus Verilog's engine is loaded once per ngspice "
+                "process, so a second block crashes the simulator. Keep one "
+                "d_cosim block and build the others through NgVeri "
+                "(\"Add Verilog file\"), which has no such limit." % blocks)
+
+        # Give every adc_bridge feeding an HDL block one switching threshold,
+        # so the x window between in_low and in_high never reaches the digital
+        # side (see collapse_adc_band_for_hdl). Nghdl rows were moved out of
+        # modelList into microcontrollerList during the parse, so both lists
+        # have to be consulted.
+        # getattr, not attribute access: both lists are filled by _loadNetlist,
+        # and createNetlistFile is also reachable on a window that never got
+        # that far. Absent lists mean "no Ngveri/Nghdl blocks known"; d_cosim
+        # blocks are still recognised from the netlist itself.
+        hdl_cards = {
+            str(row[3]) for row in
+            list(getattr(self, 'modelList', []))
+            + list(getattr(self, 'microcontrollerList', []))
+            if len(row) > 6 and str(row[6]) in HDL_MODEL_TYPES}
+        store_schematicInfo, collapsed = collapse_adc_band_for_hdl(
+            store_schematicInfo, hdl_cards)
+        for card, low, high, mid in collapsed:
+            note = (
+                "adc_bridge %s feeds an HDL block, so its in_low/in_high "
+                "(%g/%g) were collapsed to a single %s V threshold. The x "
+                "state between them reaches Icarus as a second clock edge "
+                "(double-clocking the design) and Verilator/GHDL as a "
+                "confident logic 1. Set in_low = in_high in the Ngspice Model "
+                "tab to choose the threshold yourself."
+                % (card, low, high, mid))
+            print(note)
+            self.obj_appconfig.print_warning(note)
+            CosimLog().warn(note)
 
         # To avoid writing optionInfo twice in final netlist
         store_optionInfo = list(self.optionInfo)

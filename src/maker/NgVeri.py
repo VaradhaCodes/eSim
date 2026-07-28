@@ -175,6 +175,21 @@ class NgVeri(QtWidgets.QWidget):
                 self._flush_build_logs(currentTermLogs)
                 return
             model.getPortInfo()
+            # Refuse the two port shapes the Verilator backend cannot carry
+            # (inout, and anything wider than 64 bits) BEFORE generating a
+            # line of C. Both used to build and run and quietly produce wrong
+            # values, which is the failure mode this path is being hardened
+            # against; a named error beats a silently wrong waveform.
+            port_error = model.validate_ports()
+            if port_error:
+                Dialogs.critical(
+                    self, "Error Message",
+                    "<b>" + port_error + "</b>",
+                    QtWidgets.QMessageBox.StandardButton.Ok)
+                currentTermLogs.append("NgVeri stopped: " + port_error)
+                currentTermLogs.append(self._build_failure_html())
+                self._flush_build_logs(currentTermLogs)
+                return
             model.cfuncmod()
             model.ifspecwrite()
             model.sim_main_header()

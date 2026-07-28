@@ -389,20 +389,23 @@ class ModelGeneration:
                 ''',ctime(&systime));
         '''
 
+        # cm_event_get_ptr(tag, timepoint): the arguments are ORTHOGONAL. `tag`
+        # picks the block cm_event_alloc'd for this port; `timepoint` says how
+        # far BACK in the rotating state history to look -- 0 current, 1
+        # previous (ngspice cm/cmevt.c; every stock code model uses
+        # (tag,0)/(tag,1) for every tag). The old loop carried a second counter
+        # that tracked the tag index instead of resetting, so every port after
+        # the first read and wrote the wrong timestep's block and froze after
+        # its first transition. Same fix as the Verilog generator in
+        # src/maker/ModelGeneration.py -- keep the two in step.
         els_evt_ptr = []
-        els_evt_count1 = 0
-        els_evt_count2 = 0
-        for item in self.output_port:
+        for tag, item in enumerate(self.output_port):
             els_evt_ptr.append("_op_" + item.split(":")[0] +
                                " = (Digital_State_t *) cm_event_get_ptr(" +
-                               str(els_evt_count1) + "," +
-                               str(els_evt_count2) + ");")
-            els_evt_count2 = els_evt_count2 + 1
+                               str(tag) + ",0);")
             els_evt_ptr.append("_op_" + item.split(":")[0] + "_old" +
                                " = (Digital_State_t *) cm_event_get_ptr(" +
-                               str(els_evt_count1) + "," +
-                               str(els_evt_count2) + ");")
-            els_evt_count1 = els_evt_count1 + 1
+                               str(tag) + ",1);")
 
         client_setup_ip = '''
                 /* Client Setup IP Addr */
