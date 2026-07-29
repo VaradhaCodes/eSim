@@ -99,13 +99,16 @@ class NgspiceWidget(QtWidgets.QWidget):
         self._console_flush_timer.setInterval(50)
         self._console_flush_timer.timeout.connect(self._flush_console)
 
+        # Read before _prepare_ngspice_arguments: it decides whether '-r' is
+        # passed, and a d_cosim netlist must not get it.
+        self.uses_dcosim = self._netlist_uses_dcosim(netlist)
+
         self.ngspice_args = self._prepare_ngspice_arguments(netlist)
         logger.info(f"NGSpice arguments: {self.ngspice_args}")
 
         # Use eSim's ngspice (the nghdl-simulator build that carries d_cosim +
         # ivlng) for ALL simulations; resolved without hardcoded paths.
         self.ngspice_bin = CosimConfig.ngspice_binary()
-        self.uses_dcosim = self._netlist_uses_dcosim(netlist)
 
         self.process = QtCore.QProcess(self)
         # Redo restarts ngspice from inside TerminalUi, bypassing
@@ -160,6 +163,18 @@ class NgspiceWidget(QtWidgets.QWidget):
         return os.path.splitext(netlist)[0] + ".raw"
 
     def _prepare_ngspice_arguments(self, netlist: str) -> List[str]:
+        """ngspice argv for this netlist.
+
+        '-r' is omitted for a d_cosim run. Its analysis card lives inside
+        .control (the Icarus engine is one-shot and must run exactly once), so
+        ngspice's own '-r' pass finds nothing left in the deck to run and
+        writes only an empty rawfile header -- while holding the filename open,
+        which stops the netlist's own 'write <project>.raw' from producing the
+        real thing. Dropping '-r' lets that write land, so a co-simulation
+        leaves the same rawfile behind as every other backend.
+        """
+        if self.uses_dcosim:
+            return ['-b', netlist]
         return ['-b', '-r', self.raw_file, netlist]
 
     def _configure_process(self) -> None:

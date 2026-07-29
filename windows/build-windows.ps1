@@ -534,14 +534,29 @@ function Stage-SimToolchain {
         # Fresh tree every time; configure a clean build dir. The tarball is the
         # eSim nghdl-simulator: ngspice-45.2 + the nghdl delta (ghdl/Ngveri icm
         # model dirs, outitf.c ghdlserver close hook, spinit/makedefs wiring,
-        # Verilator-5 link rules) baked in -- no separate patch step anymore.
+        # Verilator-5 link rules) baked in.
         # ngspice >= 42 also brings d_cosim + the ivlng Icarus bridge, which the
         # old ngspice-35 tarball could never provide.
+        #
+        # One delta is deliberately NOT baked into the tarball: patches\0002
+        # makes a d_cosim block evaluate at the operating point so it agrees
+        # with an equivalent NgVeri model at t=0. It stays a readable diff for
+        # review instead of an opaque change inside a binary tarball, and is
+        # applied here to the freshly extracted tree. Ubuntu does the same in
+        # nghdl/install-nghdl.sh (apply_esim_patches). The tree is extracted
+        # fresh above, so a plain apply is enough -- no idempotence dance --
+        # but a failure must stop the build rather than silently ship an
+        # unpatched simulator, which is why this is inside the `set -e` chain.
+        $patchU = (Join-Path $RepoRoot 'patches\ngspice') -replace '\\', '/'
         Invoke-MsysBash (
             "set -e; cd `"`$(cygpath -u '$toolsU')`" && " +
             "rm -rf nghdl nghdl-simulator-source && " +
             "tar -xJf `"`$(cygpath -u '$tarU')`" && " +
             "mv nghdl-simulator-source nghdl && cd nghdl && " +
+            "for p in `"`$(cygpath -u '$patchU')`"/*.patch; do " +
+            "[ -f `"`$p`" ] || continue; " +
+            "echo `"applying `$(basename `"`$p`")`"; " +
+            "patch -p1 < `"`$p`"; done && " +
             "rm -rf release && " +
             # Verilator runtime objects for Ngveri.cm: the icm makefile lists them
             # as link inputs but nothing compiles them (verilated_threads.o is a

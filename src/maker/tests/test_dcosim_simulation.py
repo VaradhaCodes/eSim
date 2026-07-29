@@ -142,8 +142,14 @@ def sample(names, rows, when, signals):
     return value
 
 
-def simulate(tmp_path, netlist_lines, tag):
-    """Run ``netlist_lines`` under the d_cosim ngspice; return its dump."""
+def run_ngspice(tmp_path, netlist_lines, tag):
+    """Run ``netlist_lines`` under the d_cosim ngspice.
+
+    Returns ``(dump_path, console)``. Split out of :func:`simulate` because
+    some checks are on what ngspice *said*, not on the numbers it produced --
+    a co-simulator whose time base has drifted still emits data, it just warns
+    while doing it.
+    """
     out = tmp_path / (tag + ".txt")
     cir = tmp_path / (tag + ".cir")
     cir.write_text("\n".join(netlist_lines).replace("OUTFILE", out.name))
@@ -158,10 +164,16 @@ def simulate(tmp_path, netlist_lines, tag):
     env = dict(os.environ)
     env[LOADER] = os.pathsep.join(LOADER_DIRS + [env.get(LOADER, "")])
 
-    subprocess.run([NGSPICE, "-b", str(cir)],
-                   cwd=str(tmp_path), env=env, capture_output=True,
-                   text=True, timeout=300)
+    res = subprocess.run([NGSPICE, "-b", str(cir)],
+                         cwd=str(tmp_path), env=env, capture_output=True,
+                         text=True, timeout=300)
     assert out.is_file(), "ngspice produced no output for " + tag
+    return out, (res.stdout or "") + (res.stderr or "")
+
+
+def simulate(tmp_path, netlist_lines, tag):
+    """Run ``netlist_lines`` under the d_cosim ngspice; return its dump."""
+    out, _console = run_ngspice(tmp_path, netlist_lines, tag)
     return read_columns(str(out))
 
 
@@ -394,3 +406,120 @@ def test_a_merged_block_still_strobes_for_exactly_one_clock(
 
     assert len(edges) == 2, "expected one strobe, got %d edges" % len(edges)
     assert edges[1] - edges[0] == pytest.approx(1e-3, abs=5e-6)
+
+
+# --- the operating point -------------------------------------------------
+#
+# A d_cosim block used to report every output as 0 at t=0 and for the whole of
+# the first timestep, because the TIME == 0.0 branch of the code model pushed
+# its inputs into the co-simulator without ever running it, and the ivlng
+# bridge would not run VVP for a zero-length advance either. A design whose
+# correct initial output is 1 was therefore wrong at the start of every
+# simulation, unlike an equivalent NgVeri (Verilator) model of the same
+# Verilog -- so the two co-simulation backends disagreed on identical sources.
+#
+# Fixed by patches/nghdl-simulator/0002; these tests are the gate. They fail
+# against an unpatched simulator, which is the point.
+
+# Two outputs that must both read 1 from t=0: one combinational (an inverter
+# fed a low input) and one from an initial block. Between them they cover the
+# two ways a design can be 1 before anything has happened.
+INIT_V = """\
+`timescale 1ns / 1ps
+module dcinit (
+    input  a,
+    output y,
+    output q
+);
+    reg qr;
+    initial qr = 1'b1;
+
+    assign y = ~a;
+    assign q = qr;
+endmodule
+"""
+
+# `a` is low until 5 ms and high from 6 ms, so `y` must be 1 at the operating
+# point and 0 later. The late transition is deliberate: without it the test
+# would also pass against a model whose outputs were stuck high for an
+# unrelated reason.
+INIT_NETLIST = """\
+* d_cosim operating point
+v1 a_a gnd pwl(0 0 5m 0 6m 5 20m 5)
+a1 [a_a] [a_d] u1
+a2 [a_d] [y_d q_d] u2
+a3 [y_d q_d] [y q] u3
+.model u1 adc_bridge(in_low=1.0 in_high=2.0 rise_delay=1.0e-9 \
+fall_delay=1.0e-9 )
+.model u2 d_cosim simulation="ivlng" lib_args=["libvvp", "ivlng"] \
+sim_args=["dcinit"]
+.model u3 dac_bridge(out_low=0.0 out_high=5.0 out_undef=0.5 t_rise=1.0e-9 \
+t_fall=1.0e-9 )
+.control
+set width=1000
+tran 10e-06 20e-03 0e-00
+print allv > OUTFILE
+.endc
+.end
+"""
+
+
+@pytest.fixture(scope="module")
+def init_vvp(tmp_path_factory):
+    """dcinit behind the generated wrapper, as build_cosim compiles it."""
+    workdir = tmp_path_factory.mktemp("dcinit")
+    (workdir / "dcinit.v").write_text(INIT_V)
+    ports = [("a", "input", 1), ("y", "output", 1), ("q", "output", 1)]
+    (workdir / (COSIM_TOP_MODULE + ".v")).write_text(
+        cosim_wrapper_source([("dcinit", "dcinit", ports)],
+                             "`timescale 1ns / 1ps"))
+    res = icarus.run_iverilog(
+        IVERILOG, [COSIM_TOP_MODULE + ".v", "dcinit.v"],
+        str(workdir / "dcinit"), cwd=str(workdir), timeout=300)
+    assert res.ok, res.output
+    return workdir / "dcinit"
+
+
+def stage_init(tmp_path, init_vvp):
+    (tmp_path / "dcinit").write_bytes(init_vvp.read_bytes())
+    return INIT_NETLIST.splitlines()
+
+
+def test_outputs_are_live_at_the_operating_point(tmp_path, init_vvp):
+    """Both outputs read 1 at t=0, where the design says they are 1.
+
+    Before the fix both read 0 here: the co-simulation had not been run, so
+    d_cosim was still publishing the ZERO it writes during INIT.
+    """
+    names, rows = simulate(tmp_path, stage_init(tmp_path, init_vvp), "opinit")
+
+    assert sample(names, rows, 0.0, ["y"]) == 1, "inverter output wrong at t=0"
+    assert sample(names, rows, 0.0, ["q"]) == 1, "initial block lost at t=0"
+
+
+def test_operating_point_value_is_not_just_a_stuck_output(
+        tmp_path, init_vvp):
+    """The t=0 reading is a live value, not a pin stuck high.
+
+    `y` must follow its input down once `a` goes high, while `q` -- which
+    nothing ever drives again -- must hold the 1 its initial block gave it.
+    """
+    names, rows = simulate(tmp_path, stage_init(tmp_path, init_vvp), "oplive")
+
+    assert sample(names, rows, 4.0e-3, ["y"]) == 1
+    assert sample(names, rows, 8.0e-3, ["y"]) == 0
+    assert sample(names, rows, 8.0e-3, ["q"]) == 1
+
+
+def test_co_simulator_time_base_starts_aligned(tmp_path, init_vvp):
+    """No "impossible delay" warning.
+
+    Deferring time zero to the first accepted timestep left the co-simulator's
+    vtime a whole timestep behind SPICE, so the first output() computed a
+    negative delay and said so. It is the same defect seen from the other
+    side, and a cheap witness that the two clocks now start together.
+    """
+    _out, console = run_ngspice(
+        tmp_path, stage_init(tmp_path, init_vvp), "opdelay")
+
+    assert "impossible delay" not in console.lower(), console

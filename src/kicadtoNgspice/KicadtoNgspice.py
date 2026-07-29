@@ -1586,6 +1586,21 @@ class MainWindow(QtWidgets.QWidget):
         # recover the real names (count-guarded, falls back if absent).
         out.writelines('set filetype=ascii\n')
         out.writelines('write plot_data.raw\n')
+        if uses_dcosim:
+            # A d_cosim netlist has no bare analysis card -- the .tran was
+            # moved into .control above so the one-shot Icarus engine runs
+            # exactly once. That also means ngspice's own `-r <project>.raw`
+            # has no analysis left to run in the deck and writes nothing, so
+            # the project rawfile that every other backend leaves behind was
+            # simply absent after a co-simulation (and any rawfile from an
+            # earlier run stayed there, stale, for gaw to pick up). Write it
+            # from here instead, keeping the on-disk result of a run the same
+            # whichever backend produced it. Relative name: ngspice's working
+            # directory is the project directory, so the netlist stays
+            # portable.
+            out.writelines(
+                'write %s.raw\n'
+                % os.path.basename(os.path.splitext(self.kicadFile)[0]))
         event_nodes = _get_event_plot_nodes(store_schematicInfo, plotText)
         if event_nodes:
             out.writelines('eprint ' + ' '.join(event_nodes)

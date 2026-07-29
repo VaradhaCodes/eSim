@@ -36,8 +36,16 @@
 /make-release.sh                 export-ignore
 /setup.py                        export-ignore
 /requirements.txt                export-ignore
-/patches/                        export-ignore
 /scripts/                        export-ignore
+
+# patches/ is maintainer-facing EXCEPT patches/ngspice/, which is part of the
+# Ubuntu install path: install-nghdl.sh applies it to the extracted
+# nghdl-simulator tree. Dropping it from the archive would leave the curl and
+# zip installs building an unpatched simulator -- silently, because a missing
+# patch directory is not an error. So ignore the maintainer patches by name
+# and let patches/ngspice/ ship. (A blanket `/patches/ export-ignore` here
+# would take patches/ngspice/ with it.)
+/patches/*.patch                 export-ignore
 
 # ---- Sphinx doc sources (the built manual is shipped, not its input) ----
 /conf.py                         export-ignore
@@ -77,6 +85,11 @@ windows/*.sh text eol=lf
 #   /bin/bash^M: bad interpreter: No such file or directory
 # Pin them to LF in the working tree so that can never happen.
 Ubuntu/*.sh text eol=lf
+
+# Same again, for the same reason: install-nghdl.sh feeds these to `patch`
+# against an LF source tree. A CRLF checkout on a contributor's Windows box,
+# committed back verbatim, produces a patch that no longer applies.
+patches/ngspice/*.patch text eol=lf
 
 # ---- audit / handoff scratch (also .gitignore'd; this is the archive guard) ----
 # One-off fuzz/soak harnesses and the audit write-ups that drove a fix batch.

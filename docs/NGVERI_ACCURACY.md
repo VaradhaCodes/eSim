@@ -388,6 +388,68 @@ accepting `inout` and keeps being silently wrong about it, because taking that
 away is a maintainer's decision — `N3` and
 [`UPSTREAM_DECISIONS.md`](UPSTREAM_DECISIONS.md) item 2.
 
+### D7 — d_cosim reported all-zero outputs at the operating point (HIGH)
+
+A `d_cosim` block reported every output as 0 at `t=0` and for the whole of the
+first timestep. An NgVeri (Verilator) model of the *same Verilog* is already
+correct there, so the two co-simulation backends disagreed on identical
+sources — which is the one thing this backend was not allowed to do.
+
+It bit any design whose correct initial output is 1: an inverter, a NAND with
+both inputs low, anything held by a reset.
+
+**Measured** on the three-gate reference circuit (AND + OR + NAND, driven
+through one `adc_bridge`, read back through one `dac_bridge`), against the
+eSim 2.5 NgVeri run of the same schematic:
+
+| | t=0 NAND | logic vs 2.5 over 25 ms | worst edge skew |
+|---|---|---|---|
+| 2.5 NgVeri (reference) | 5 V | — | — |
+| 2.6 NgVeri | 5 V | identical | 2.5 ns |
+| 2.6 d_cosim, before | **0 V until 2.506 µs** | **one 2.51 µs window wrong** | n/a (extra edge) |
+| 2.6 d_cosim, after | 5 V | identical | 0.000 ns |
+
+The pre-fix run also emitted `WARNING: output scheduled with impossible delay
+(-2.504e-06)`, which is the same defect seen from the other side: the
+co-simulator's `vtime` was still 0 while SPICE had reached the first timestep.
+
+**Cause** — two halves, one on each side of the d_cosim/ivlng boundary.
+
+1. `src/xspice/verilog/vpi.c`, `next_advance_cb()`. SPICE asks for time zero at
+   the operating point, which gives `ticks == 0`; the loop went straight back
+   to waiting for a later time, so VVP never ran its time-zero events and never
+   reported the design's initial outputs.
+2. `src/xspice/icm/digital/d_cosim/cfunc.mod`, `ucm_d_cosim()`. The
+   `TIME == 0.0` branch pushed inputs into the co-simulator and returned
+   without running it, leaving every output at the `ZERO` written during
+   `INIT`. Time zero was first stepped from `STEP_PENDING`, which does not run
+   until the first accepted timestep.
+
+**Fix** — `patches/ngspice/0002-d_cosim-evaluate-co-simulation-at-operating-point.patch`.
+The bridge settles once at time zero using the zero-length `set_stop()` that
+`output_cb()` already uses to gather same-instant events; the code model steps
+at the operating point and publishes the result through a new `op_output()`,
+which writes the port state directly rather than scheduling a delayed event,
+because the operating point has no future — the value *is* the DC state.
+
+The patch is applied to the extracted simulator tree by both installers rather
+than baked into `nghdl/nghdl-simulator-source.tar.xz`, so it stays a readable
+diff instead of an opaque change inside a binary blob. See
+`patches/ngspice/README.md`.
+
+**Clocked behaviour is unchanged.** On a divide-by-2 flip-flop the toggle edges
+land at identical times before and after (10 edges, 0.5028 µs … 9.5028 µs), and
+the patch *removes* a spurious 1.5 ns startup glitch on the inverted output.
+
+**Also fixed alongside it**: a d_cosim netlist keeps its analysis card inside
+`.control` so the one-shot Icarus engine runs exactly once, which left
+ngspice's own `-r <project>.raw` with nothing to run — it wrote an empty
+rawfile header and held the filename open. A co-simulation therefore never
+produced the project rawfile every other backend leaves behind, and any
+rawfile from an earlier run stayed there, stale. `-r` is now omitted for a
+d_cosim run and the netlist writes that file itself
+(`KicadtoNgspice.createNetlistFile`, `NgspiceWidget._prepare_ngspice_arguments`).
+
 ### Regression tests
 
 - `src/kicadtoNgspice/tests/test_dcosim_netlist.py` — the parked band collapse
@@ -410,6 +472,21 @@ away is a maintainer's decision — `N3` and
   one simulation. Skipped when the machine has no iverilog/ivlng. This is the
   only test in the area that can catch "builds, runs, and is wrong", so a
   change here should be taken through it rather than through unit tests alone.
+  Also carries the `D7` gate — `test_outputs_are_live_at_the_operating_point`,
+  `test_operating_point_value_is_not_just_a_stuck_output` and
+  `test_co_simulator_time_base_starts_aligned` — which fail against an
+  unpatched simulator, by design. Their design has no clock, so they are
+  timing-independent; the second one exists so the first cannot pass against a
+  model whose outputs are merely stuck high.
+
+  > **Known flake, pre-existing:**
+  > `test_three_blocks_of_two_models_run_in_one_simulation` fails
+  > intermittently (measured 4/6 runs on an unpatched simulator and 2/6 on a
+  > patched one, interleaved, so it is not related to `D7`). `MULTI_NETLIST`
+  > clocks from `pulse(0 5 0 1u 1u 0.5m 1m)` — first rising edge at t=0,
+  > period 1 ms — and releases reset at exactly 2.0 ms, i.e. *on* a clock
+  > edge, so whether the 2 ms edge counts is a race. Releasing reset between
+  > two edges would make it deterministic without weakening what it asserts.
 
 ---
 

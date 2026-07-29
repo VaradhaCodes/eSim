@@ -43,6 +43,31 @@
 # No global `set -u`/`pipefail` (breaks venv activate / aborts benign pipelines).
 
 nghdl="nghdl-simulator"
+
+# Apply every eSim patch under <repo>/patches to the extracted simulator tree.
+# Idempotent: a patch that is already applied is detected with a reverse dry
+# run and skipped, so re-running the installer over a patched tree is a no-op.
+# Missing patch directory is not an error (a source drop may not carry one);
+# a patch that neither applies nor is already applied IS an error, because
+# silently building an unpatched simulator is how a fixed bug comes back.
+apply_esim_patches() {
+    local dir="$src_dir/../patches/ngspice" p
+    [ -d "$dir" ] || return 0
+    for p in "$dir"/*.patch; do
+        [ -f "$p" ] || continue
+        if patch -p1 --dry-run --silent <"$p" >/dev/null 2>&1; then
+            patch -p1 <"$p" >/dev/null || return 1
+            log "Applied patch $(basename "$p")"
+        elif patch -p1 -R --dry-run --silent <"$p" >/dev/null 2>&1; then
+            log "Patch $(basename "$p") already applied"
+        else
+            echo "ERROR: patch $(basename "$p") does not apply to this"
+            echo "       simulator source tree and is not already applied."
+            return 1
+        fi
+    done
+    return 0
+}
 config_dir="$HOME/.nghdl"
 config_file="config.ini"
 src_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -141,8 +166,9 @@ installDependency() {
     # xz-utils: install-eSim.sh provides it on the normal path, but this
     # script's standalone --install mode must be self-sufficient (the
     # simulator source ships as .tar.xz).
+    # patch: apply_esim_patches applies patches/*.patch to the extracted tree.
     sudo apt-get install -y \
-        make autoconf g++ flex bison \
+        make autoconf g++ flex bison patch \
         git gperf xz-utils \
         zlib1g-dev libreadline-dev \
         libxaw7 libxaw7-dev \
@@ -254,10 +280,17 @@ installNGHDL() {
 
     cd "$HOME/$nghdl"
 
-    # No patch step: the tarball is ngspice-45.2 with the whole nghdl delta
-    # baked in (ghdl/Ngveri icm model dirs, outitf.c ghdlserver close hook,
-    # spinit/makedefs wiring, Verilator-5 link rules) plus d_cosim + the
-    # ivlng Icarus bridge that ngspice >= 42 provides upstream.
+    # The tarball is ngspice-45.2 with the whole nghdl delta baked in (ghdl/
+    # Ngveri icm model dirs, outitf.c ghdlserver close hook, spinit/makedefs
+    # wiring, Verilator-5 link rules) plus d_cosim + the ivlng Icarus bridge
+    # that ngspice >= 42 provides upstream.
+    #
+    # One delta is NOT baked in and is applied here, so that it stays a
+    # readable diff for review rather than an opaque change inside a binary
+    # tarball: patches/0002 makes a d_cosim block evaluate at the operating
+    # point, so it agrees with an equivalent NgVeri model at t=0. See the
+    # patch header and docs/NGVERI_ACCURACY.md.
+    apply_esim_patches
 
     # Verilator runtime objects for Ngveri.cm: the icm makefile links
     # $(srcdir)/Ngveri/verilated{,_threads}.o but nothing else builds them
