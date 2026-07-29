@@ -29,6 +29,9 @@ _autosave-*
 *-rescue.dcm
 rescue-backup/
 
+# macOS Finder droppings: four were committed under nghdl/ once already
+.DS_Store
+
 # nghdl build/cache artifacts (re-ignored after the !nghdl/** negation above)
 nghdl/**/__pycache__/
 nghdl/src/xspice/
