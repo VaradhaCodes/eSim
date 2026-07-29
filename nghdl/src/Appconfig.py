@@ -18,6 +18,21 @@ class Appconfig:
         lib_loc = os.path.expanduser('~')
     except BaseException:
         pass
+
+    # Inside eSim, the model-parameter root must be the one the RUNNING eSim
+    # uses -- the same override eSim's own maker/Appconfig applies, and for the
+    # same reason. eSim_HOME in the shared config.ini is rewritten by every
+    # launch, so an eSim started from a second root leaves this window creating
+    # models in one library while eSim's Verilog side reads another: a model
+    # this page cannot list is a model the user cannot remove, while the
+    # Verilog side keeps refusing the name because it "already exists".
+    # Standalone NGHDL has no eSim beside it (no `configuration` package), so
+    # there the config-derived value above stands.
+    try:
+        from configuration import paths as _esim_paths
+        xml_loc = _esim_paths.library_path('modelParamXML')
+    except Exception:
+        pass
     esimFlag = 0
 
     # Reading all variables from nghdl config.ini

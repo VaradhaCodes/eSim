@@ -42,6 +42,7 @@ from .model_teardown import (
     _actual_subdir_name)
 from .kicad_symlib import generated_symlib_path, ensure_lib_registered
 from . import CosimConfig
+from . import model_registry
 from . import verilog_library
 from .CosimLogger import CosimLog
 from .RemoveItemsDialog import RemoveItemsDialog
@@ -155,6 +156,11 @@ class NgVeri(QtWidgets.QWidget):
             self._flush_build_logs(currentTermLogs)
             return
         self._snapshot_source(model)
+        # Settle the NAME before verilator, make and the ngspice rebuild spend
+        # minutes on a model that a foreign library already owns.
+        if not self._preflight_model_name("ngveri", model):
+            self._flush_build_logs(currentTermLogs)
+            return
         file = model.model_stem
         # If this name was previously built via d_cosim, ASK, then remove that
         # version first so the switch to the legacy NgVeri flow is clean. A
@@ -339,6 +345,35 @@ class NgVeri(QtWidgets.QWidget):
             if btn is not None:
                 btn.setEnabled(enabled)
 
+    def _toggle_convert_hint(self, shown):
+        '''Fold the "which method" explainer in or out, and point the arrow
+        the way it will move.'''
+        self.convertHint.setVisible(shown)
+        self.convertHintToggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if shown
+            else QtCore.Qt.ArrowType.RightArrow)
+
+    def _scroll_progress_into_view(self):
+        '''
+            Make sure the progress row is on screen when a build starts.
+
+            The page is mounted behind a QScrollArea (FlowNavigator._scroll),
+            so on a short dock the bar can sit below the fold. A user who has
+            just pressed Convert and sees nothing move assumes the click did
+            not register -- and has no reason to suspect this page scrolls at
+            all. The page is laid out to fit without scrolling at ordinary
+            sizes; this is what covers the sizes where it cannot.
+        '''
+        bar = getattr(self, "buildBar", None)
+        if bar is None:
+            return
+        widget = self.parentWidget()
+        while widget is not None:
+            if isinstance(widget, QtWidgets.QScrollArea):
+                widget.ensureWidgetVisible(bar)
+                return
+            widget = widget.parentWidget()
+
     def _show_build_progress(self, on, message="Starting build…"):
         '''
             Show/hide the live build progress bar + phase label. Called on the
@@ -349,6 +384,8 @@ class NgVeri(QtWidgets.QWidget):
             self.buildStatus.setText(message)
         self.buildStatus.setVisible(on)
         self.buildBar.setVisible(on)
+        if on:
+            self._scroll_progress_into_view()
 
     def _on_build_phase(self, phase):
         '''
@@ -417,6 +454,10 @@ class NgVeri(QtWidgets.QWidget):
             self._flush_build_logs(currentTermLogs)
             return
         self._snapshot_source(model)
+        # Settle the NAME before the build tree is created and iverilog runs.
+        if not self._preflight_model_name("cosim", model):
+            self._flush_build_logs(currentTermLogs)
+            return
         modelname = model.model_stem
 
         # Fast GUI-thread half: the backend-switch prompt, source generation and
@@ -488,6 +529,15 @@ class NgVeri(QtWidgets.QWidget):
                     model.clog.error(
                         'KiCad symbol generation failed for "' + modelname +
                         '". The vvp built but the symbol was not created.')
+                    # Roll the build back. A model with no symbol cannot be
+                    # placed on a schematic, so leaving its build tree behind
+                    # only puts an unusable entry in Remove Models -- which is
+                    # how a failed convert ended up looking like a successful
+                    # one everywhere except the schematic.
+                    model.clog.info(
+                        "Rolling back the incomplete build so it does not "
+                        "linger as a half-model.")
+                    self._remove_cosim_model(modelname, log=model.clog)
             # sim_lib == "Error": build_cosim already logged the phased failure.
         except Exception as err:
             model.clog.error("Error in d_cosim model creation: " + str(err))
@@ -571,19 +621,40 @@ class NgVeri(QtWidgets.QWidget):
         # prefix is what stops them reading as two identical buttons.
         convertHeading = QtWidgets.QLabel("Convert Verilog to Ngspice")
         convertHeading.setProperty("cssClass", "heading")
-        outer.addWidget(convertHeading)
 
         # What is about to be built, named from the design's own top module.
         # This stage used to say nothing at all: the model's name, its ports
         # and its source were only revealed by the build log afterwards -- or,
         # when something was wrong, by an error about a file the user had never
         # deliberately named.
+        #
+        # It rides on the heading's own line, right-aligned, rather than
+        # standing as two paragraphs beneath it. Vertical space on this page is
+        # not decoration: the page lives in a dock behind a scroll area, and
+        # every row added here is a row that can push the build progress bar
+        # below the fold -- where a user who has just pressed Convert cannot
+        # see that anything is happening. The source path moves to the tooltip;
+        # it is reference information, and the build log states it in full.
         self.subjectLabel = QtWidgets.QLabel()
-        self.subjectLabel.setWordWrap(True)
+        self.subjectLabel.setWordWrap(False)
         self.subjectLabel.setProperty("cssClass", "muted")
+        self.subjectLabel.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight |
+            QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.subjectLabel.setTextInteractionFlags(
             QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        outer.addWidget(self.subjectLabel)
+        # Never let a long model name widen the page: the label gives up its
+        # width first and elides (refresh_subject re-elides on demand).
+        self.subjectLabel.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred)
+
+        heading_row = QtWidgets.QHBoxLayout()
+        heading_row.setSpacing(12)
+        heading_row.addWidget(convertHeading)
+        heading_row.addStretch(1)
+        heading_row.addWidget(self.subjectLabel)
+        outer.addLayout(heading_row)
 
         # Escape hatch for a multi-module design whose top eSim guessed wrong.
         # The guess (the module nothing else instantiates) is right for
@@ -716,21 +787,21 @@ class NgVeri(QtWidgets.QWidget):
         if code:
             module, ports = extract_ports(code, top=chosen)
         if not module:
-            label.setText(
-                "No design to convert yet. Write one in Author, or open a "
-                ".v file, and it will appear here.")
+            label.setText("No design yet — write one in Author")
+            label.setToolTip(
+                "Write a design in the Author stage, or open a .v file, and "
+                "what a Convert would build appears here.")
             return
 
         ins = sum(1 for mode, _n, _w in ports if mode == "input")
         outs = sum(1 for mode, _n, _w in ports if mode == "output")
 
-        def _count(n, word):
-            return str(n) + " " + word + ("" if n == 1 else "s")
-
-        label.setText(
-            'Will build <b>' + module.lower() + '</b> — ' +
-            _count(ins, "input") + ", " + _count(outs, "output") +
-            '<br/><span style="font-size:9pt;">from ' + path + '</span>')
+        label.setText('<b>' + module.lower() + '</b> · ' + str(ins) +
+                      ' in, ' + str(outs) + ' out')
+        # The full source path is the tooltip, not a second line: it is the
+        # answer to "which file is this?", which is asked far less often than
+        # this page is looked at.
+        label.setToolTip("Will build '" + module.lower() + "' from " + path)
 
     def _sync_top_picker(self, code, modules):
         '''
@@ -1398,6 +1469,87 @@ class NgVeri(QtWidgets.QWidget):
                      str(name) + "': " + str(err))
         self._remove_legacy_dirs(name, log)
 
+    def _preflight_model_name(self, target, model):
+        '''
+            Settle the model's NAME before a single file is written.
+
+            One name means one backend, because the netlister resolves a
+            schematic value to a model by filename alone (Processing indexes
+            library/modelParamXML/**/<value>.xml): two libraries holding the
+            same <name>.xml make that lookup ambiguous and the convert fails.
+
+            That rule was previously enforced at the END of a build, inside
+            KiCad symbol creation -- so a d_cosim user paid an iverilog compile
+            and an NgVeri user paid verilator plus a full ngspice rebuild
+            before being told the name was taken, and the half-built model was
+            left behind in the remove-model dialog with nothing to remove it
+            for. Asking here costs a directory listing.
+
+            A clash with the OTHER Verilog backend is not handled here: that is
+            the same design moving between backends, and
+            _switch_backends_if_needed offers exactly that.
+
+            For a real clash the way out is to build under a free name rather
+            than to refuse. The model name is not the module name -- the
+            wrapper instantiates the module, the model name only labels the
+            block -- so an alternative renames nothing in the user's code.
+            eSim will NOT offer to delete the NGHDL model in its place: that
+            one was built by a different toolchain from different sources, and
+            removing it needs a ghdl.cm rebuild the Verilog page cannot
+            honestly promise. It says where to do that instead.
+
+            Returns True to proceed (possibly under a renamed model), False to
+            abort the build.
+        '''
+        name = CosimConfig.cosim_model_id(getattr(model, "model_stem", ""))
+        if not name:
+            return True
+        own = "NgVeriCosim" if target == "cosim" else "Ngveri"
+        owner = model_registry.owner_of(self._xml_loc, name)
+        if owner in ("", own) or owner in model_registry.VERILOG_DIRS:
+            return True
+
+        log = CosimLog(self.entry_var[0])
+        label = model_registry.library_label(owner)
+        alt = model_registry.free_name(self._xml_loc, name)
+        detail = (
+            "eSim looks a block up in the netlist by its name alone, so one "
+            "name can only ever mean one model. Building a second '%s' would "
+            "make every schematic that uses it ambiguous."
+            % name)
+        if owner == model_registry.NGHDL_DIR:
+            detail += ("\n\nTo free the name instead, remove the VHDL model "
+                       "from Makerchip ▸ NGHDL ▸ Remove Models "
+                       "(that rebuilds ghdl.cm) and convert again.")
+        else:
+            detail += ("\n\nThis name belongs to a model eSim ships, so it "
+                       "cannot be freed.")
+
+        box = Dialogs.make_message_box(
+            self, Dialogs.Icon.Warning, "That model name is taken",
+            "<b>'" + name + "' is already a " + label + " model.</b>",
+            informative_text=detail,
+            buttons=Dialogs.Button.Cancel,
+            default_button=Dialogs.Button.Cancel)
+        build_btn = None
+        if alt:
+            build_btn = box.addButton(
+                "Build as '" + alt + "'",
+                QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            box.setDefaultButton(build_btn)
+        Dialogs.show_modal(box)
+
+        if build_btn is not None and box.clickedButton() is build_btn:
+            model.rename_model(alt)
+            log.warn('"' + name + '" is already a ' + label +
+                     ' model -- building this one as "' + alt +
+                     '" instead. Your Verilog is unchanged; only the block '
+                     'name differs.')
+            return True
+        log.warn('Convert cancelled -- "' + name + '" is already a ' + label +
+                 ' model. Nothing was built.')
+        return False
+
     def _confirm_switch(self, name, from_backend, to_backend):
         '''
             Yes/No dialog shown before replacing an existing model's backend.
@@ -1554,6 +1706,10 @@ class NgVeri(QtWidgets.QWidget):
         self.entry_var[self.count].setReadOnly(1)
         self.entry_var[self.count].setMaximumWidth(1000)
         self.entry_var[self.count].setMaximumHeight(1000)
+        # Enough console to read a build step in, and no more: this is the one
+        # elastic widget on the page, so its minimum sets the floor under which
+        # the whole stage starts scrolling (and hides the progress bar).
+        self.entry_var[self.count].setMinimumHeight(120)
         self.trgrid.addWidget(self.entry_var[self.count], 0, 0)
         self.count += 1
 
@@ -1603,9 +1759,23 @@ class NgVeri(QtWidgets.QWidget):
         # and "muted" QLabel classes are theme-safe (defined in both QSS).
         controls.addSpacing(14)
 
-        convert_caption = QtWidgets.QLabel("CONVERT METHODS")
-        convert_caption.setProperty("cssClass", "caps")
-        controls.addWidget(convert_caption)
+        # Collapsed by default, and that is a layout decision as much as an
+        # editorial one. A word-wrapped paragraph in a 210px column is ~250px
+        # of MINIMUM height, and a panel's minimum is a hard floor on the whole
+        # page: it is what forced the convert stage to scroll in the dock, and
+        # a scrolled convert stage hides the build progress bar exactly when
+        # the user needs it. Folded away, the same copy costs one row and is
+        # one click from being read.
+        self.convertHintToggle = QtWidgets.QToolButton()
+        self.convertHintToggle.setText("Which method?")
+        self.convertHintToggle.setCheckable(True)
+        self.convertHintToggle.setChecked(False)
+        self.convertHintToggle.setAutoRaise(True)
+        self.convertHintToggle.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.convertHintToggle.setArrowType(
+            QtCore.Qt.ArrowType.RightArrow)
+        controls.addWidget(self.convertHintToggle)
 
         self.convertHint = QtWidgets.QLabel(
             "Both convert your Verilog into an ngspice model — same result, "
@@ -1616,7 +1786,9 @@ class NgVeri(QtWidgets.QWidget):
             "If one doesn't complete, use the other.")
         self.convertHint.setWordWrap(True)
         self.convertHint.setProperty("cssClass", "muted")
+        self.convertHint.setVisible(False)
         controls.addWidget(self.convertHint)
+        self.convertHintToggle.toggled.connect(self._toggle_convert_hint)
 
         # Stretch pins everything to the top; empty space collapses below,
         # flush with the console rather than wedged between the widgets.

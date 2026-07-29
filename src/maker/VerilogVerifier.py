@@ -32,8 +32,10 @@ try:
     from .hdl.vcd import parse_vcd_for_plot, to_csv
     from .hdl.ports import (autodump_source, dump_file_name, extract_ports,
                             find_modules, generate_stub_testbench, has_dump,
-                            has_finish, is_self_contained_testbench,
-                            order_modules, strip_comments, testbench_matches,
+                            has_finish, is_generated_testbench,
+                            is_self_contained_testbench, order_modules,
+                            reserved_modules, reserved_name_reason,
+                            strip_comments, testbench_matches,
                             top_module_name)
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
@@ -43,7 +45,9 @@ except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker.hdl.ports import (autodump_source, dump_file_name,
                                  extract_ports, find_modules,
                                  generate_stub_testbench, has_dump, has_finish,
+                                 is_generated_testbench,
                                  is_self_contained_testbench, order_modules,
+                                 reserved_modules, reserved_name_reason,
                                  strip_comments, testbench_matches,
                                  top_module_name)
 
@@ -269,7 +273,6 @@ module tb_counter;
 
 endmodule
 """
-
 
 
 class HdlEditor(QsciScintilla):
@@ -1163,6 +1166,10 @@ class VerilogVerifier(QtWidgets.QWidget):
         # Testbench editor (always pinned to the end)
         self.tb_view = HdlEditor("tb_design.v")
         self.tb_view.filepath = None
+        # The startup template is eSim's, not the user's, so it is replaceable
+        # (see _testbench_is_ours). Remembering it verbatim is what makes the
+        # very first edit the user types count as adoption.
+        self._tb_generated_text = DEFAULT_TB
         self.tb_view.setText(DEFAULT_TB)
         self.editor_tabs.addTab(self.tb_view, "Testbench (tb_design.v)")
         # Disable close button for tb_view
@@ -2051,6 +2058,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         if filepath:
             try:
                 code = self._read_text(filepath)
+                # A testbench the user opened is theirs from this moment on,
+                # even if its text happens to match one eSim generated
+                # earlier: forget the remembered stub so nothing here can
+                # overwrite the file they just chose.
+                self._tb_generated_text = None
                 self.tb_view.setPlainText(code)
                 self.tb_view.filepath = filepath
                 self.editor_tabs.setCurrentIndex(self.editor_tabs.count() - 1)
@@ -2365,7 +2377,9 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.log(f"iverilog: {iverilog}")
 
         sources = self._design_sources()
-        tb_code = self.get_tb_code()
+        if self._report_reserved_names(sources):
+            return
+        tb_code = self._refresh_generated_testbench(sources)
         has_tb = bool(tb_code and tb_code.strip())
 
         tmpdir = tempfile.mkdtemp()
@@ -2431,6 +2445,56 @@ class VerilogVerifier(QtWidgets.QWidget):
         self._start_job(work, done, fail, cancel,
                         busy=[self.btn_syntax, self.btn_simulate],
                         phase="Checking")
+
+    def _report_reserved_names(self, design_sources):
+        """Name a module that collides with the Verilog language itself, and
+        report whether it did (True => do not compile).
+
+        ``module nand`` is a redeclaration of a built-in gate primitive, and
+        iverilog says so as "syntax error" on the module line -- which reads
+        like the design is malformed and sends people hunting through their
+        own code. Rename the module and the same code compiles, which is
+        exactly the kind of thing a tool should be able to explain."""
+        blocked = False
+        for _fname, code in design_sources:
+            for module in reserved_modules(code):
+                self.log("Error: " + reserved_name_reason(module))
+                blocked = True
+        return blocked
+
+    def _refresh_generated_testbench(self, design_sources):
+        """Re-generate the testbench for the current design if -- and only if
+        -- the one on screen is eSim's own and no longer fits.
+
+        Renaming a module is a normal thing to do, and it silently invalidates
+        a generated testbench: the instance still names the old module, so
+        Check Syntax fails against a file the user never wrote. Regenerating
+        eSim's own stub costs nothing and keeps the check about the design.
+        A testbench the user wrote or edited is never regenerated here -- it
+        is reported by _stale_testbench_note instead, which is the honest
+        answer when the two really have diverged.
+
+        Returns the testbench source to compile."""
+        tb_code = self.get_tb_code()
+        if not tb_code.strip():
+            return tb_code
+        defined = set()
+        for _fname, code in design_sources:
+            defined.update(find_modules(code))
+        if testbench_matches(tb_code, defined):
+            return tb_code
+        if not self._testbench_is_ours(tb_code):
+            return tb_code
+        design_code = "\n".join(code for _n, code in design_sources)
+        module_name, ports = extract_ports(design_code)
+        if not module_name:
+            return tb_code
+        fresh = generate_stub_testbench(module_name, ports,
+                                        design_code=design_code)
+        self._set_testbench(fresh)
+        self.log(f"note: the generated testbench was still written for a "
+                 f"different module — regenerated it for '{module_name}'.")
+        return fresh
 
     def _report_compile_errors(self, res, hints=True):
         """Log a failed compile: raw tool output, squiggles in the owning tabs,
@@ -2524,7 +2588,7 @@ class VerilogVerifier(QtWidgets.QWidget):
             return
 
         tb_code = generate_stub_testbench(module_name, ports, design_code=code)
-        self.tb_view.setPlainText(tb_code)
+        self._set_testbench(tb_code)
         # Jump to the testbench tab (always last)
         self.editor_tabs.setCurrentIndex(self.editor_tabs.count() - 1)
         self.log(f"Generated testbench stub for module '{module_name}'.")
@@ -2542,6 +2606,16 @@ class VerilogVerifier(QtWidgets.QWidget):
 
         A testbench that does instantiate this design is always left alone: it
         is the user's, and they may well have written it deliberately.
+
+        So is one that does NOT match but is not eSim's to replace. Only two
+        things may be overwritten here: an empty testbench, and a testbench
+        still carrying eSim's own provenance marker (see
+        ports.is_generated_testbench) -- i.e. the stub eSim wrote, which the
+        user has not touched. Anything else is somebody's work, and the answer
+        to "it no longer matches the design" is to SAY so, not to delete it:
+        rename a module and the previous behaviour silently replaced a
+        hand-written testbench with boilerplate.
+
         Returns the testbench source to compile, or None if one cannot be made.
         """
         tb_code = self.get_tb_code()
@@ -2558,14 +2632,50 @@ class VerilogVerifier(QtWidgets.QWidget):
             self.log("Error: no Verilog module found in the design tabs.")
             return None
 
-        why = ("the testbench is empty" if not tb_code.strip()
-               else f"the testbench does not instantiate '{module_name}'")
+        empty = not tb_code.strip()
+        if not empty and not self._testbench_is_ours(tb_code):
+            self.log(f"Error: your testbench does not instantiate "
+                     f"'{module_name}', so this design would not be driven by "
+                     f"it.")
+            self.log("note: eSim did not touch it — it is yours. Update the "
+                     "instance in the Testbench tab, or press Auto-Generate "
+                     "Testbench to replace it with a generated one.")
+            return None
+
+        why = ("the testbench is empty" if empty
+               else f"the generated testbench does not instantiate "
+                    f"'{module_name}'")
         tb_code = generate_stub_testbench(module_name, ports,
                                           design_code=design_code)
-        self.tb_view.setPlainText(tb_code)
+        self._set_testbench(tb_code)
         self.log(f"note: {why} — generated one for '{module_name}' and used "
                  f"it. Open the Testbench tab to edit or replace it.")
         return tb_code
+
+    def _testbench_is_ours(self, tb_code=None):
+        """True when the testbench on screen is one eSim wrote and the user has
+        not adopted.
+
+        Two independent signals, either of which is enough. The marker comment
+        survives restarts and is visible to the user (deleting that line is a
+        perfectly good way to say "this is mine now"); the remembered text
+        covers a testbench generated in this session whose marker the user has
+        not seen yet."""
+        code = self.get_tb_code() if tb_code is None else tb_code
+        if not code.strip():
+            return True
+        if code.strip() == DEFAULT_TB.strip():
+            return True            # the untouched startup template
+        remembered = getattr(self, "_tb_generated_text", None)
+        if remembered is not None and code.strip() == remembered.strip():
+            return True
+        return is_generated_testbench(code)
+
+    def _set_testbench(self, tb_code):
+        """Put a generated testbench on screen and remember it verbatim, so a
+        later edit by the user is detectable as an edit."""
+        self._tb_generated_text = tb_code
+        self.tb_view.setPlainText(tb_code)
 
     def simulate_and_wave(self):
         if self._job_running():
@@ -2587,6 +2697,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         # _design_sources) so iverilog error output references the tab the user
         # sees and highlight_errors_from_log can find it.
         design_sources = self._design_sources()
+
+        # A module named after a Verilog primitive cannot compile, whichever
+        # button started the run. Said here in eSim's words rather than left to
+        # iverilog's "syntax error" on the module line.
+        if self._report_reserved_names(design_sources):
+            return
 
         # A design that is already a complete testbench (no ports, drives
         # itself) is simulated as-is; wrapping it would instantiate a port-less

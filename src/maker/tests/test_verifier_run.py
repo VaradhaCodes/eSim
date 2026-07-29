@@ -308,12 +308,14 @@ def test_empty_testbench_is_generated_at_simulate_time(verifier):
     assert any("generated one" in m for m in logged)
 
 
-def test_mismatched_testbench_is_replaced_not_compiled(verifier):
-    # A testbench left over from another design fails with "Unknown module
-    # type" against a file the user never wrote.
+def test_a_stale_generated_testbench_is_replaced_not_compiled(verifier):
+    # A testbench eSim generated for a design that has since been renamed
+    # fails with "Unknown module type" against a file the user never wrote.
+    # It is eSim's own, so eSim replaces it rather than reporting it.
+    from maker.hdl.ports import generate_stub_testbench
     sources = _only_design(verifier, _OR_GATE)
     verifier.tb_view.setPlainText(
-        "module tb_counter;\n  counter uut();\nendmodule\n")
+        generate_stub_testbench("counter", [("input", "clk", "")]))
     logged = []
     verifier.log = lambda text, level=None: logged.append(text)
 
@@ -321,6 +323,23 @@ def test_mismatched_testbench_is_replaced_not_compiled(verifier):
 
     assert "or_gate uut" in tb
     assert any("does not instantiate" in m for m in logged)
+
+
+def test_a_mismatched_testbench_of_the_users_is_reported_not_overwritten(
+        verifier):
+    """The line eSim must not cross. A testbench with no provenance marker is
+    somebody's work: renaming a module used to silently replace it with
+    boilerplate, which is the one outcome a user cannot undo."""
+    sources = _only_design(verifier, _OR_GATE)
+    mine = "module tb_counter;\n  counter uut();\nendmodule\n"
+    verifier.tb_view.setPlainText(mine)
+    logged = []
+    verifier.log = lambda text, level=None: logged.append(text)
+
+    assert verifier._ensure_testbench(sources) is None
+    assert verifier.tb_view.toPlainText() == mine
+    assert any("does not instantiate" in m for m in logged)
+    assert any("it is yours" in m for m in logged)
 
 
 def test_a_matching_testbench_is_left_exactly_as_written(verifier):

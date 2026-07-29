@@ -47,7 +47,7 @@ from .hdl.procs import kill_process_tree
 from .CosimLogger import CosimLog
 from .model_teardown import (
     _ensure_modpath, _append_modpath_line, _prune_modpath)
-from .hdl.ports import find_modules, top_module_name
+from .hdl.ports import (find_modules, reserved_name_reason, top_module_name)
 import hdlparse.verilog_parser as vlog
 
 
@@ -817,6 +817,19 @@ class ModelGeneration(QtWidgets.QWidget):
                 "NgVeri stopped: invalid module name '" + str(module) + "'")
             return "Error"
 
+        reason = reserved_name_reason(module)
+        if reason:
+            # Caught here rather than left to the compiler: iverilog reports a
+            # redeclared primitive as a bare "syntax error" on the module line,
+            # which reads as if the design were malformed rather than as "this
+            # name belongs to the language".
+            Dialogs.critical(
+                None, "Error Message", "<b>" + reason + "</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            self.obj_Appconfig.print_error(
+                "NgVeri stopped: reserved module name '" + str(module) + "'")
+            return "Error"
+
         self.model_stem = stem
         self.fname = stem + ext
         self.top_module = module
@@ -824,6 +837,26 @@ class ModelGeneration(QtWidgets.QWidget):
         # run: here it would rename an unrelated identifier in the user's code.
         self._rename_top_to_stem = False
         return "No Error"
+
+    def rename_model(self, stem):
+        '''
+            Build this design under a different MODEL name, leaving the design
+            itself alone. Call after resolve_identity and before anything
+            derives a path from the name.
+
+            Only ``model_stem`` (and the build-copy filename derived from it)
+            moves: ``top_module`` still names the module the wrapper
+            instantiates and verilator is pointed at, and the user's own source
+            is neither renamed nor edited. That separation is what lets eSim
+            answer "that name is already taken" with a build instead of a
+            refusal.
+        '''
+        stem = str(stem or "").strip().lower()
+        if not stem or not self._stem_is_valid(stem):
+            return False
+        self.fname = stem + os.path.splitext(self.fname)[1]
+        self.model_stem = stem
+        return True
 
     def verilogfile(self):
         '''

@@ -28,7 +28,8 @@ import shutil
 import time
 
 from configuration import paths
-from .hdl.ports import find_modules, strip_comments, top_module_name
+from .hdl.ports import (find_modules, is_generated_testbench, strip_comments,
+                        top_module_name)
 
 #: Folder under the workspace that holds every design.
 LIBRARY_DIRNAME = "VerilogLibrary"
@@ -154,6 +155,107 @@ def list_designs(root=None):
         found.append((name, path, mtime))
     found.sort(key=lambda item: item[2], reverse=True)
     return found
+
+
+def _owned_entries(module, root=None):
+    """The file names eSim itself writes inside ``<library>/<module>/``."""
+    return {module + ".v", "tb_" + module + ".v", HISTORY_DIRNAME}
+
+
+def is_untouched_design(module, root=None):
+    """True when ``<library>/<module>/`` holds NOTHING but files eSim wrote.
+
+    The gate on moving a design folder. eSim writes exactly three things into a
+    design folder -- ``<module>.v``, ``tb_<module>.v`` and ``.history/`` -- so
+    anything else in there (a waveform, a second source, notes) was put there
+    by the user, who then gets to keep the folder exactly where they left it.
+    """
+    if not module:
+        return False
+    try:
+        entries = set(os.listdir(design_dir(module, root)))
+    except OSError:
+        return False
+    return bool(entries) and entries <= _owned_entries(module, root)
+
+
+def is_pure_rename(old_text, new_text, old_module, new_module):
+    """True when ``new_text`` is ``old_text`` with the module renamed and
+    nothing else changed.
+
+    This is the whole difference between "the user renamed their design" and
+    "the user replaced it with a different one" -- two edits that look
+    identical from the outside (the content changed, so the design's home
+    changed with it) and must not be treated the same way. A rename should take
+    the folder with it; a replacement must leave the previous design exactly
+    where it is.
+
+    Deliberately exact rather than a similarity score: if the answer is not
+    obviously yes, the caller keeps the old folder, which is never wrong -- it
+    only leaves a folder behind.
+    """
+    if not old_text or not new_text or not old_module or not new_module:
+        return False
+    if old_module == new_module:
+        return False
+    renamed = re.sub(r'\b%s\b' % re.escape(old_module), new_module, old_text)
+    return renamed == new_text
+
+
+def rename_design(old, new, root=None):
+    """Move ``<library>/<old>/`` to ``<library>/<new>/`` when it is safe, and
+    return the new design path (or "" when nothing was moved).
+
+    Renaming the top module renames the design -- that is the whole point of
+    naming a design after its module. Without this, every rename left the
+    previous folder behind, so a design edited three times became three
+    folders, only the last of which was real. The user is then the one who has
+    to work out which ``nand``/``nandg``/``nand_gate`` is their design.
+
+    Deliberately conservative -- it declines rather than merges or overwrites:
+
+    * the destination must not exist (a real design already lives there);
+    * the source must hold only files eSim wrote (is_untouched_design);
+    * the testbench is renamed only when it still carries eSim's provenance
+      marker, so a testbench the user wrote keeps the name they gave it.
+
+    Every refusal degrades to the old behaviour -- the new design is simply
+    written to its new home and the old folder is left untouched -- so this can
+    never be the thing that loses work.
+    """
+    old, new = str(old or "").strip(), str(new or "").strip()
+    if not old or not new or old == new:
+        return ""
+    for name in (old, new):
+        if os.path.basename(name) != name or name in (os.curdir, os.pardir):
+            return ""
+    old_dir, new_dir = design_dir(old, root), design_dir(new, root)
+    if os.path.exists(new_dir) or not os.path.isdir(old_dir):
+        return ""
+    if not is_untouched_design(old, root):
+        return ""
+    try:
+        os.rename(old_dir, new_dir)
+    except OSError:
+        return ""
+    # Inside the moved folder the files still carry the old name.
+    try:
+        os.replace(os.path.join(new_dir, old + ".v"),
+                   os.path.join(new_dir, new + ".v"))
+    except OSError:
+        pass
+    old_tb = os.path.join(new_dir, "tb_" + old + ".v")
+    try:
+        with open(old_tb, encoding="utf-8", errors="replace") as fh:
+            tb_is_ours = is_generated_testbench(fh.read())
+    except OSError:
+        tb_is_ours = False
+    if tb_is_ours:
+        try:
+            os.replace(old_tb, os.path.join(new_dir, "tb_" + new + ".v"))
+        except OSError:
+            pass
+    return design_path(new, root)
 
 
 def remove_design(name, root=None):

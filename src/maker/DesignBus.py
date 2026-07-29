@@ -183,22 +183,58 @@ class DesignBus(QtCore.QObject):
         sense, which is why this is safe to call on a keystroke.
 
         A design eSim filed itself is named after its top module and MOVES when
-        that module changes, so replacing the design replaces its home too (the
-        old folder is left alone -- an autosave must never be able to lose
-        work). A home the user picked themselves, with Save As, is never
-        second-guessed: autosave keeps writing exactly where they put it."""
+        that module changes: the folder is RENAMED where that is provably safe
+        (verilog_library.rename_design), and otherwise the design is simply
+        written to its new home and the old folder left alone -- an autosave
+        must never be able to lose work. A home the user picked themselves,
+        with Save As, is never second-guessed: autosave keeps writing exactly
+        where they put it."""
         if self._autosave_timer is not None:
             self._autosave_timer.stop()
         if not verilog_library.is_saveable(self._content):
             return ""
         target = self._path
         if not target or self._in_library(target):
-            target = verilog_library.design_path(
-                verilog_library.top_module(self._content))
+            module = verilog_library.top_module(self._content)
+            target = verilog_library.design_path(module)
+            if self._path and self._in_library(self._path) \
+                    and target != self._path:
+                moved = self._rename_previous_home(module)
+                if moved:
+                    target = moved
         if target == self._path and not self.is_dirty() \
                 and os.path.isfile(target):
             return target                       # already on disk, unchanged
         return self.save_to_disk(target)
+
+    def _rename_previous_home(self, module):
+        """Move the design's folder to ``module`` when -- and only when -- the
+        design was RENAMED rather than replaced. Returns the new design path,
+        or "".
+
+        A design is named after its top module, so renaming the module renames
+        the design. Left alone, that filed one design under every name it ever
+        had (nand / nandg / nand_gate, only the last of them real) and made the
+        user work out which was which.
+
+        Replacing the design is the case this must not touch: pasting design B
+        over design A also changes the top module, and A has to stay exactly
+        where it is. The two are told apart by content, not by guesswork --
+        is_pure_rename asks whether the new text IS the old text with the
+        module renamed. Anything less certain keeps the old folder, which is
+        never destructive; it only leaves a folder behind.
+        """
+        previous = os.path.basename(
+            os.path.dirname(os.path.abspath(self._path)))
+        try:
+            with open(self._path, encoding="utf-8", errors="replace") as fh:
+                old_text = fh.read()
+        except OSError:
+            return ""
+        if not verilog_library.is_pure_rename(old_text, self._content,
+                                              previous, module):
+            return ""
+        return verilog_library.rename_design(previous, module)
 
     def start_new(self, text=""):
         """Begin a fresh design, keeping whatever is already on disk.

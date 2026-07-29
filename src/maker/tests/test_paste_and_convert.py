@@ -130,18 +130,33 @@ def convert(qapp):
 def test_convert_says_what_it_will_build(author, convert, qapp):
     """This stage used to say nothing at all: the model's name and its ports
     were only revealed by the build log afterwards -- or, when something was
-    wrong, by an error about a file the user had never deliberately named."""
+    wrong, by an error about a file the user had never deliberately named.
+
+    It says it on ONE line, beside the heading. Vertical space here is not
+    decoration: the page sits in a dock behind a scroll area, and rows spent on
+    description are rows that push the build progress bar below the fold."""
     _paste(author, NAND)
     convert.refresh_subject()
     said = convert.subjectLabel.text()
     assert "nand_gate" in said
-    assert "2 inputs" in said and "1 output" in said
+    assert "2 in" in said and "1 out" in said
+    assert "<br" not in said, "the subject line must stay one line"
+
+
+def test_convert_keeps_the_source_path_in_the_tooltip(author, convert, qapp):
+    """The path is reference information -- the answer to "which file is
+    this?", asked far less often than this page is looked at -- so it lives in
+    the tooltip and in the build log rather than on a second line."""
+    path = _paste(author, NAND)
+    convert.refresh_subject()
+    assert path in convert.subjectLabel.toolTip()
 
 
 def test_convert_says_so_when_there_is_nothing_to_build(convert, qapp):
     Maker.verilogFile[0] = ""
     convert.refresh_subject()
-    assert "No design to convert yet" in convert.subjectLabel.text()
+    assert "No design yet" in convert.subjectLabel.text()
+    assert "Author" in convert.subjectLabel.toolTip()
 
 
 def test_the_top_module_picker_stays_hidden_for_one_module(author, convert,
