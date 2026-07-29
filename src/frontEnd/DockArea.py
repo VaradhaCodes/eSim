@@ -1091,8 +1091,9 @@ class DockArea(QtWidgets.QMainWindow):
         so the simulation looked like it had produced nothing and the user had
         to leave fullscreen and hunt for the tab.
         """
-        from frontEnd.FullScreen import (exit_fullscreen, go_fullscreen,
-                                         handover, is_fullscreen)
+        from frontEnd.FullScreen import (FullScreenToggle, exit_fullscreen,
+                                         go_fullscreen, handover,
+                                         is_fullscreen, transfer)
 
         def take_fullscreen(target):
             """Move the editor's fullscreen window onto ``target``, seamlessly
@@ -1118,6 +1119,15 @@ class DockArea(QtWidgets.QMainWindow):
                 old.deleteLater()
             existing._wave_layout.addWidget(plot, 1)
             existing._wave_plot = plot
+            # The outgoing plot carries the FullScreenToggle that OWNS the
+            # fullscreen window (the button lives in the plot's own toolbar),
+            # so deleting it above would strand the window on a deleted owner:
+            # its close path raises, and the user is left staring at an empty
+            # fullscreen rectangle they cannot dismiss. Hand the window to the
+            # incoming plot's button before that can happen.
+            new_toggle = plot.findChild(FullScreenToggle)
+            if new_toggle is not None:
+                transfer(existing, new_toggle)
             existing.setVisible(True)
             existing.raise_()
             if was_full and not is_fullscreen(existing):

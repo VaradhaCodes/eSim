@@ -41,16 +41,81 @@ def _purge(toggle=None):
     """Drop registry entries whose toggle is no longer fullscreen.
 
     Keys are raw C++ pointers, which Qt recycles, so a stale entry could make
-    a brand-new dock look fullscreen. Every read and write prunes first."""
+    a brand-new dock look fullscreen. Every read and write prunes first.
+
+    The TOGGLE itself is checked too, not just its window: a panel can be torn
+    down while it is fullscreen (a re-simulate replaces the plot inside the
+    live waveform tab, taking the button that owns the window with it), and a
+    deleted button keeps its Python attributes -- ``t._win`` still reads back
+    the live window -- so an owner-is-gone entry looked perfectly healthy."""
     for k, t in list(_ACTIVE.items()):
         dead = t is toggle
         if not dead:
             try:
-                dead = t._win is None or sip.isdeleted(t._win)
-            except RuntimeError:
+                dead = (sip.isdeleted(t) or t._win is None
+                        or sip.isdeleted(t._win))
+            except (RuntimeError, AttributeError):
                 dead = True
         if dead:
             del _ACTIVE[k]
+
+
+def _fs_window_of(widget):
+    """The fullscreen wrapper hosting ``widget``, or None.
+
+    Walks the parent chain looking for the marker stamped on the wrapper by
+    :meth:`FullScreenToggle._enter`. Used to recover ownership of a window
+    whose toggle died under it -- at that point the registry entry is already
+    purged, so the window can only be found from the inside."""
+    node = widget
+    while node is not None:
+        try:
+            if getattr(node, "_esim_fs_dock", None) is not None:
+                return node
+            node = node.parentWidget()
+        except RuntimeError:
+            return None
+    return None
+
+
+def _own_window(toggle, win, dock, content):
+    """Point ``toggle`` at ``win`` and make it the registry's owner."""
+    toggle._win, toggle._dock, toggle._content = win, dock, content
+    win._esim_fs_dock, win._esim_fs_content = dock, content
+    # The close handler is bound to a toggle, so it moves with ownership --
+    # otherwise Esc/F11/the window close still call the OLD button.
+    win.closeEvent = toggle._make_close_handler()
+    if _key(dock) is not None:
+        _ACTIVE[_key(dock)] = toggle
+    toggle._set_state(full=True)
+
+
+def transfer(dock, toggle):
+    """Hand a live fullscreen window to ``dock``'s NEW toggle.
+
+    The panel inside a fullscreen window can be rebuilt underneath it: a
+    re-simulate swaps a fresh plot into the live waveform tab, and the plot
+    carries the toggle in its own toolbar. The button that owned the window
+    then dies with the outgoing plot, leaving the window owned by a deleted
+    object -- its close handler raises instead of docking back (so the user is
+    stranded in an empty fullscreen window), the incoming panel's button does
+    nothing, and the next Back-to-Verify hand-off raises too.
+
+    Call this right after replacing content that may be fullscreen. Returns
+    False when there was no fullscreen window to move."""
+    old = _ACTIVE.get(_key(dock))
+    if old is None or toggle is None or sip.isdeleted(toggle):
+        return False
+    win = getattr(old, "_win", None)
+    if win is None or sip.isdeleted(win):
+        _purge()
+        return False
+    win_dock, content = old._dock, old._content
+    if not sip.isdeleted(old):
+        old._win = old._dock = old._content = None
+        old._set_state(full=False)
+    _own_window(toggle, win, win_dock, content)
+    return True
 
 
 def is_fullscreen(dock):
@@ -118,12 +183,7 @@ def handover(src_dock, dst_dock):
     #    ownership -- including the close handler, so Esc/F11 dock IT back
     layout.addWidget(dst_content)
     win.setWindowTitle(dst_dock.windowTitle())
-    dst_toggle._win = win
-    dst_toggle._dock = dst_dock
-    dst_toggle._content = dst_content
-    win.closeEvent = dst_toggle._make_close_handler()
-    _ACTIVE[_key(dst_dock)] = dst_toggle
-    dst_toggle._set_state(full=True)
+    _own_window(dst_toggle, win, dst_dock, dst_content)
     win.raise_()
     return True
 
@@ -166,6 +226,13 @@ class FullScreenToggle(QtWidgets.QToolButton):
 
     # ------------------------------------------------------------------ #
     def _set_state(self, full):
+        # The button can be gone while the window it owned is still up (the
+        # panel was replaced or destroyed mid-fullscreen). This runs from the
+        # close path, so raising here left the window on screen with its
+        # content already docked back -- an empty, unclosable fullscreen
+        # rectangle -- and popped the unhandled-exception dialog.
+        if sip.isdeleted(self):
+            return
         # Purpose-built, theme-aware SVGs (icon_paths) rather than the OS
         # SP_TitleBar* pixmap, which rasterised mushy and read as a window
         # control, not "fullscreen this panel".
@@ -197,6 +264,33 @@ class FullScreenToggle(QtWidgets.QToolButton):
         except RuntimeError:
             pass    # button torn down between the palette event and this tick
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._adopt_if_orphaned()
+
+    def _adopt_if_orphaned(self):
+        """Take over a fullscreen window whose owning toggle has died.
+
+        Safety net for content rebuilt inside a fullscreen window without the
+        rebuild site calling :func:`transfer`: a freshly shown toggle that
+        finds itself inside an ownerless wrapper claims it, so the button, Esc
+        and the close path all work again instead of leaving the user in a
+        window nothing can dismiss."""
+        if self._win is not None:
+            return
+        win = _fs_window_of(self)
+        if win is None:
+            return
+        dock = getattr(win, "_esim_fs_dock", None)
+        content = getattr(win, "_esim_fs_content", None)
+        if (dock is None or sip.isdeleted(dock)
+                or content is None or sip.isdeleted(content)):
+            return
+        owner = _ACTIVE.get(_key(dock))
+        if owner is not None and not sip.isdeleted(owner):
+            return          # a live toggle already owns it
+        _own_window(self, win, dock, content)
+
     def _resolve_host(self):
         """Walk up to the enclosing QDockWidget; the widget just beneath it is
         the content to reparent."""
@@ -219,6 +313,11 @@ class FullScreenToggle(QtWidgets.QToolButton):
     def _enter(self):
         dock, content = self._resolve_host()
         if dock is None or content is None:
+            # No dock above us: either this panel is not in one, or it is
+            # already inside a fullscreen wrapper whose owner died. The latter
+            # is recoverable and is exactly the state that made the button
+            # look broken.
+            self._adopt_if_orphaned()
             return
         self._dock, self._content = dock, content
 
@@ -232,12 +331,9 @@ class FullScreenToggle(QtWidgets.QToolButton):
         for key in ("Escape", "F11"):
             sc = QtGui.QShortcut(QtGui.QKeySequence(key), win)
             sc.activated.connect(win.close)
-        win.closeEvent = self._make_close_handler()
-
-        self._win = win
-        if _key(dock) is not None:
-            _ACTIVE[_key(dock)] = self
-        self._set_state(full=True)
+        # Marks the wrapper so a toggle inside it can find it again if this
+        # one is destroyed while the window is still up (see _fs_window_of).
+        _own_window(self, win, dock, content)
 
         # Size the window to the screen BEFORE showing it. A fresh QWidget has
         # a small default geometry, and showFullScreen() on an unshown widget
@@ -292,5 +388,13 @@ class FullScreenToggle(QtWidgets.QToolButton):
         return _on_close
 
     def _exit(self):
-        if self._win is not None:
-            self._win.close()
+        win = self._win
+        if win is None:
+            return
+        if sip.isdeleted(win):
+            # Wrapper already reaped elsewhere; drop the dangling state.
+            self._win = self._dock = self._content = None
+            _purge(self)
+            self._set_state(full=False)
+            return
+        win.close()

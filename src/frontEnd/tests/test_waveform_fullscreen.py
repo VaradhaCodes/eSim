@@ -16,7 +16,7 @@ The fix is that fullscreen follows the user: it is handed to the panel being
 shown, and handed back on the way out. These tests pin that hand-off.
 """
 import pytest
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtWidgets, sip
 
 from frontEnd import FullScreen
 from frontEnd.DockArea import DockArea
@@ -45,6 +45,15 @@ def area(qapp):
     yield da
     for dock in list(da.findChildren(QtWidgets.QDockWidget)):
         FullScreen.exit_fullscreen(dock)
+    # A test that kills a window's owner on purpose leaves that window with
+    # nothing able to close it. Left behind it is a screen-sized visible
+    # top-level widget, which every later test that walks topLevelWidgets()
+    # then has to grab and paint -- the theme-transition tests both slowed to
+    # a crawl and started failing. Reap them here, not in the product.
+    for tlw in list(qapp.topLevelWidgets()):
+        if getattr(tlw, "_esim_fs_dock", None) is not None:
+            tlw.hide()
+            tlw.deleteLater()
     da.deleteLater()
     qapp.processEvents()
 
@@ -298,6 +307,96 @@ def test_the_handed_over_panel_owns_esc(area, qapp):
     assert not is_fullscreen(wave) and not is_fullscreen(source)
     assert wave.widget() is not None, "the waveform panel did not come back"
     assert source.widget() is not None, "the editor panel was left orphaned"
+
+
+# --- the owner of the window can die under it ----------------------------- #
+# The toggle lives INSIDE the panel it fullscreens (the plot's own toolbar), so
+# replacing that panel destroys the button that owns the window. The window
+# survives: with a deleted owner its close handler raised instead of docking
+# back, leaving an empty fullscreen rectangle over the whole screen that
+# nothing could dismiss, and the next hand-off raised
+# "wrapped C/C++ object of type FullScreenToggle has been deleted".
+
+def _kill(widget):
+    """Destroy a widget now -- what deleteLater does once the loop turns."""
+    widget.setParent(None)
+    sip.delete(widget)
+
+
+def test_a_dead_owner_stops_reporting_fullscreen(area):
+    dock = _mounted_dock(area)
+    go_fullscreen(dock)
+    _kill(FullScreen._ACTIVE[FullScreen._key(dock)])
+
+    # A deleted QToolButton keeps its Python attributes, so the registry entry
+    # still read back a live window and looked perfectly healthy.
+    assert not is_fullscreen(dock)
+    assert exit_fullscreen(dock) is False
+
+
+def test_a_new_toggle_adopts_an_ownerless_fullscreen_window(area, qapp):
+    dock = _mounted_dock(area)
+    go_fullscreen(dock)
+    win = _fs_window(dock)
+    content = win.layout().itemAt(0).widget()
+    _kill(FullScreen._ACTIVE[FullScreen._key(dock)])
+    assert not is_fullscreen(dock)
+
+    fresh = FullScreenToggle()
+    content.layout().addWidget(fresh)
+    fresh.show()
+
+    assert is_fullscreen(dock), "the rebuilt panel's button did not take over"
+    assert _fs_window(dock) is win, "adoption must not build a second window"
+    exit_fullscreen(dock)               # the way out works again
+    qapp.processEvents()
+    assert not is_fullscreen(dock)
+    assert dock.widget() is not None
+
+
+def test_resimulate_hands_the_window_to_the_new_plots_button(area, qapp):
+    source = _mounted_dock(area)
+    flow = _Flow()
+    go_fullscreen(source)
+    area._show_waveform_dock(_panel_with_toggle(), source, flow)
+    qapp.processEvents()
+    wave = area._wave_docks[source]
+    win = _fs_window(wave)
+
+    second = _panel_with_toggle()
+    area._show_waveform_dock(second, source, flow)
+    qapp.processEvents()
+
+    assert (FullScreen._ACTIVE[FullScreen._key(wave)]
+            is second.findChild(FullScreenToggle)), "the new plot's button"
+    assert _fs_window(wave) is win, "the screen was uncovered mid-run"
+
+    exit_fullscreen(wave)
+    qapp.processEvents()
+    assert not is_fullscreen(wave)
+    assert wave.widget() is not None, "the waveform panel did not come back"
+    assert sip.isdeleted(win) or not win.isVisible(), (
+        "the emptied fullscreen window was left covering the screen")
+
+
+def test_back_to_verify_after_a_resimulate_does_not_raise(area, qapp):
+    """The reported sequence: fullscreen Verify -> Simulate -> Simulate again
+    -> Back to Verify. The second run killed the window's owner, so Back went
+    through handover into a deleted button."""
+    source = _mounted_dock(area)
+    flow = _Flow()
+    go_fullscreen(source)
+    area._show_waveform_dock(_panel_with_toggle(), source, flow)
+    qapp.processEvents()
+    wave = area._wave_docks[source]
+    area._show_waveform_dock(_panel_with_toggle(), source, flow)
+    qapp.processEvents()
+
+    area._return_to_verify(source, flow, wave)      # used to raise
+    qapp.processEvents()
+
+    assert is_fullscreen(source), "the editor gets the fullscreen back"
+    assert not is_fullscreen(wave)
 
 
 def test_handover_declines_when_there_is_nothing_to_hand_over(area):
