@@ -95,6 +95,183 @@ def normalise_timescale(text):
     return _TIMESCALE_RE.sub(sharpen, text), coarse
 
 
+#: Name of the generated top module d_cosim actually simulates. ivlng takes the
+#: FIRST root module VVP reports (`vpi_iterate(vpiModule, NULL)` in
+#: tools/nghdl/src/xspice/verilog/vpi.c), and a module that is instantiated is
+#: not a root -- so wrapping the user's design leaves exactly one root and the
+#: choice stops depending on compilation order.
+COSIM_TOP_MODULE = 'esim_cosim_top'
+
+#: The wrapper's two ports. ONE input vector and ONE output vector, whatever
+#: the design underneath looks like -- see cosim_wrapper_source for why.
+IN_PORT = 'esim_d_in'
+OUT_PORT = 'esim_d_out'
+
+
+def parse_connection_info(text):
+    """``[(name, direction, bits), ...]`` from a connection_info.txt body,
+    in the module's own port-declaration order.
+
+    Order is wiring: eSim's netlist lists a block's nodes in this order (the
+    KiCad symbol's pins are built from the same file), so a wrapper that
+    reorders them silently rewires the design."""
+    ports = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        try:
+            bits = int(fields[2])
+        except ValueError:
+            continue
+        if bits > 0:
+            ports.append((fields[0], fields[1].lower(), bits))
+    return ports
+
+
+def port_widths(blocks):
+    """``(input bits, output bits)`` across every block, in netlist order."""
+    ins = sum(b for _l, _m, ports in blocks
+              for _n, d, b in ports if d == 'input')
+    outs = sum(b for _l, _m, ports in blocks
+               for _n, d, b in ports if d == 'output')
+    return ins, outs
+
+
+def cosim_wrapper_source(blocks, timescale='`timescale 1ns/1ps'):
+    """Generate the Verilog top module d_cosim simulates.
+
+    ``blocks`` is ``[(instance_label, module_name, ports), ...]`` where
+    ``ports`` comes from :func:`parse_connection_info`. Returns the source
+    text; the caller compiles it together with the user's own file(s).
+
+    The wrapper does two things.
+
+    **It reads an ``x`` input as logic 1, exactly as the NgVeri (Verilator)
+    backend already does.** NgVeri's generated C is literally
+    ``if (INPUT_STATE(port) == ZERO) 0; else 1;`` -- anything that is not a
+    definite 0 is a 1 -- so NgVeri never sees the ``x`` that XSPICE's
+    adc_bridge emits between ``in_low`` and ``in_high``. Icarus does see it,
+    because it is a real four-state simulator, and IEEE 1364 counts a
+    transition to a higher value as a posedge: a clock ramping through the band
+    arrives as ``0 -> x -> 1``, which is **two** posedges, and the design is
+    clocked twice per analog edge (docs/NGVERI_ACCURACY.md D1). Mapping ``x``
+    to 1 collapses that to ``0 -> 1 -> 1``: one posedge, taken as the voltage
+    crosses ``in_low`` -- the same edge, at the same instant, that NgVeri
+    takes. The two backends then agree, which is the point of d_cosim being an
+    alternative to NgVeri rather than a second opinion.
+
+    It reproduces NgVeri's *mistake* along with its behaviour: an input
+    genuinely sitting at 1.2 V is undefined, and reading it as a confident 1 is
+    wrong. Fixing that means changing the adc_bridge band eSim has emitted
+    since 2.5 -- a maintainer decision, see docs/UPSTREAM_DECISIONS.md item 1.
+    The netlist is left alone.
+
+    The comparison is ``===`` (case equality) and per **bit**, because that is
+    what NgVeri does: each bit carries its own ``INPUT_STATE``. A vector-wide
+    ``==`` would return x and poison the whole port.
+
+    **It presents exactly one input port and one output port**, with every
+    block's ports sliced out of them, so the netlist's node order is the only
+    thing that decides what is wired where. ivlng discovers ports by walking
+    ``vpi_iterate(vpiPort, top)`` and assigning each one a running bit offset
+    (``vpi.c`` ``start_cb``), then finds a bit's owner by scanning those
+    offsets (``icarus_shim.c``). That makes the wiring depend on the order VVP
+    reports ports in -- which is not the order they are declared in, and was
+    observed to vary between compiles of the same source: a three-block design
+    came out correct on one build and with one block's reset wired to a clock
+    on the next. With a single vector there is one port at offset 0 and the
+    mapping is arithmetic, so there is nothing left to vary.
+
+    Node ``j`` of a group is bit ``width - 1 - j`` (``icarus_shim.c`` line 97,
+    "Bit position for big-endian"), so a port occupying consecutive nodes maps
+    to a contiguous slice with its own MSB first -- the convention the
+    single-block netlist already used.
+    """
+    in_bits, out_bits = port_widths(blocks)
+
+    def slices(direction, total):
+        """``{(label, port): "[hi:lo]"}`` for one direction group."""
+        out, taken = {}, 0
+        for label, _module, ports in blocks:
+            for name, pdir, bits in ports:
+                if pdir != direction:
+                    continue
+                high = total - 1 - taken
+                out[(label, name)] = ('[%d:%d]' % (high, high - bits + 1)
+                                      if bits > 1 else '[%d]' % high)
+                taken += bits
+        return out
+
+    in_slice = slices('input', in_bits)
+    out_slice = slices('output', out_bits)
+
+    header, decls = [], []
+    if in_bits:
+        header.append(IN_PORT)
+        decls.append('  input  [%d:0] %s;' % (in_bits - 1, IN_PORT))
+    if out_bits:
+        header.append(OUT_PORT)
+        decls.append('  output [%d:0] %s;' % (out_bits - 1, OUT_PORT))
+
+    instances = []
+    for label, module, ports in blocks:
+        conns = []
+        for name, pdir, _bits in ports:
+            if pdir == 'input':
+                conns.append('.%s(%s_lv%s)'
+                             % (name, IN_PORT, in_slice[(label, name)]))
+            else:
+                conns.append('.%s(%s%s)'
+                             % (name, OUT_PORT, out_slice[(label, name)]))
+        instances.append('  %s %s (\n    %s\n  );'
+                         % (module, 'u_' + label, ',\n    '.join(conns)))
+
+    body = [
+        timescale,
+        '',
+        '/* Generated by eSim. Do not edit -- rebuilt on every conversion.',
+        ' *',
+        ' * Runs every d_cosim block on the schematic in ONE Icarus engine,',
+        ' * and reads an x input as logic 1, which is what the NgVeri',
+        ' * (Verilator) backend does. See',
+        ' * ModelGeneration.cosim_wrapper_source and',
+        ' * docs/NGVERI_ACCURACY.md D1/D2.',
+        ' */',
+        'module %s (%s);' % (COSIM_TOP_MODULE, ', '.join(header)),
+        '',
+    ]
+    body.extend(decls)
+    if in_bits:
+        body.append('')
+        body.append('  wire [%d:0] %s_lv;' % (in_bits - 1, IN_PORT))
+        body.append('  genvar gi;')
+        body.append('  generate')
+        body.append('    for (gi = 0; gi < %d; gi = gi + 1) begin : g_esim_lv'
+                    % in_bits)
+        body.append("      assign %s_lv[gi] = (%s[gi] === 1'b0) "
+                    "? 1'b0 : 1'b1;" % (IN_PORT, IN_PORT))
+        body.append('    end')
+        body.append('  endgenerate')
+    body.append('')
+    body.extend(instances)
+    body.append('')
+    body.append('endmodule')
+    return '\n'.join(body) + '\n'
+
+
+def declared_timescale(text, default='`timescale 1ns/1ps'):
+    """The first ``\\`timescale`` directive in ``text``, or ``default``.
+
+    The wrapper must declare the same one as the design. ivlng derives its tick
+    length from the simulation's global time unit
+    (``vpi_get(vpiTimeUnit, NULL)``), so a wrapper carrying a different
+    timescale could change how fast the design advances -- the D3 failure mode,
+    reintroduced by the fix for D1."""
+    match = _TIMESCALE_RE.search(text)
+    return match.group(0) if match else default
+
+
 class ModelGeneration(QtWidgets.QWidget):
     '''
         Class is used to generate the Ngspice Model
@@ -181,8 +358,27 @@ class ModelGeneration(QtWidgets.QWidget):
         self.release_dir = CosimConfig.nghdl_cfg('NGHDL', 'RELEASE')
         self.src_home = CosimConfig.nghdl_cfg('SRC', 'SRC_HOME')
         self.licensefile = CosimConfig.nghdl_cfg('SRC', 'LICENSE')
-        self.digital_home = os.path.join(
+        # The legacy NgVeri (Verilator) build tree. Every per-model path is
+        # built from `digital_home`, and the d_cosim flow retargets it at its
+        # own sibling tree (use_cosim_tree) so neither backend can ever delete
+        # the other's build. `legacy_home` stays pinned here because
+        # modpath.lst belongs to the legacy tree whichever flow is running.
+        self.legacy_home = os.path.join(
             CosimConfig.digital_model_root(), 'Ngveri')
+        self.digital_home = self.legacy_home
+
+    def use_cosim_tree(self):
+        '''
+            Point this build at the d_cosim tree (<DIGITAL_MODEL>/NgVeriCosim)
+            instead of the legacy Ngveri tree, so the sources, connection_info
+            and vvp of a d_cosim model live somewhere no NgVeri teardown can
+            reach -- and vice versa. Must be called BEFORE verilogfile().
+
+            The per-model directory name needs no special-casing: __init__
+            lowercases self.fname, so model_stem already equals the canonical
+            d_cosim id (CosimConfig.cosim_model_id).
+        '''
+        self.digital_home = CosimConfig.cosim_build_root()
 
     @staticmethod
     def _stem_is_valid(stem):
@@ -759,16 +955,22 @@ class ModelGeneration(QtWidgets.QWidget):
 
     def validate_ports(self):
         '''
+            PARKED -- not called by the build. See docs/UPSTREAM_DECISIONS.md
+            items 2 and 3.
+
             Check the parsed port list against what the NgVeri (Verilator)
             backend can actually represent, and return an error string
             describing the first problem, or None if the model is buildable.
 
-            Call this after getPortInfo() and before any file generation. It
-            exists because both problems it catches used to produce a model
-            that BUILT and RAN and gave wrong numbers with no diagnostic
-            anywhere -- the failure mode this whole path is being hardened
-            against. d_cosim has its own inout group and its own width
-            handling, so this gate is for the legacy NgVeri flow only.
+            Both shapes it catches produce a model that BUILDS and RUNS and is
+            quietly wrong -- but eSim 2.5 built them just the same, so turning
+            either into a refusal takes away something the user could do
+            before. That is a maintainer decision. Kept and tested so the
+            decision can be made on evidence; wire it into
+            NgVeri.addverilog() after getPortInfo() to enable it.
+
+            d_cosim has its own inout handling, so this gate is for the legacy
+            NgVeri flow only.
         '''
         # inout: getPortInfo() files it under input_list because that is what
         # the rest of the legacy flow can drive. The ifspec then declares it
@@ -842,15 +1044,27 @@ class ModelGeneration(QtWidgets.QWidget):
         model = self.model_stem
         src = os.path.abspath(os.path.join(self.modelpath, self.fname))
         # Build the vvp at the ONE canonical location the netlister also
-        # derives (CosimConfig.cosim_vvp_path, keyed by the lowercased model
+        # derives (CosimConfig.cosim_vvp_target, keyed by the lowercased model
         # name). Decoupling it from modelpath's case is what stops the compiled
         # model from going missing at simulation time on case-sensitive
         # filesystems (build wrote <Model>/<Model>, lookup read <model>/<model>).
-        out = CosimConfig.cosim_vvp_path(model.lower())
+        out = CosimConfig.cosim_vvp_target(model)
         if out:
             os.makedirs(os.path.dirname(out), exist_ok=True)
         else:
             out = os.path.abspath(os.path.join(self.modelpath, model.lower()))
+        # A pre-split build of this model left a vvp inside the LEGACY tree,
+        # which cosim_vvp_path still resolves as a fallback. Drop that file (the
+        # file only -- its directory may be a legacy NgVeri build) so the
+        # rebuilt model cannot lose to a stale one at simulation time.
+        stale = CosimConfig.legacy_cosim_vvp_path(model)
+        if stale and stale != out and os.path.isfile(stale):
+            try:
+                os.remove(stale)
+                log.detail("Removed the pre-split vvp at " + stale)
+            except OSError as err:
+                log.warn("Could not remove the pre-split vvp at " + stale +
+                         ": " + str(err))
         log.info("Model:       " + model)
         log.info("Source:      " + src)
         log.info("Output vvp:  " + out)
@@ -929,6 +1143,32 @@ class ModelGeneration(QtWidgets.QWidget):
                 compile_src = tmp_src
                 log.info(note)
 
+            # The design is simulated through a generated wrapper that reads
+            # an x input as logic 1, matching NgVeri bit-for-bit; see
+            # cosim_wrapper_source. Without it, the x window adc_bridge emits
+            # between in_low and in_high reaches Icarus as a second clock edge
+            # and the design counts twice per period.
+            wrapper_src = None
+            try:
+                with open(os.path.join(self.modelpath,
+                                       'connection_info.txt')) as fh:
+                    ports = parse_connection_info(fh.read())
+            except OSError:
+                ports = []
+            if ports:
+                wrapper_text = cosim_wrapper_source(
+                    [(model.lower(), model, ports)],
+                    declared_timescale(prepared))
+                wrapper_src = os.path.join(
+                    os.path.abspath(self.modelpath),
+                    COSIM_TOP_MODULE + '.v')
+                with open(wrapper_src, 'w') as fh:
+                    fh.write(wrapper_text)
+                log.info("Wrapped %d port(s) so an x input reads as logic 1 "
+                         "(matches the NgVeri backend)." % len(ports))
+            else:
+                log.detail("No parsed ports; compiling the design directly.")
+
             # ----- [3/4] Compile -----
             log.phase("[3/4] Compile")
             # -y/-I/-Y: resolve submodules and `include files the user added
@@ -939,15 +1179,20 @@ class ModelGeneration(QtWidgets.QWidget):
             # design compiles exactly as before.
             libdir = os.path.abspath(self.modelpath)
             extra_flags = ["-y", libdir, "-I", libdir, "-Y", ".sv"]
+            # The wrapper goes first so it is unambiguously the root module:
+            # iverilog roots every module nothing instantiates, and the design
+            # is instantiated by the wrapper. ivlng simulates whichever root
+            # VVP reports first (vpi.c start_cb).
+            sources = ([wrapper_src] if wrapper_src else []) + [compile_src]
             cmd = ([iverilog, "-g2012"] + extra_flags
-                   + ["-o", out, compile_src])
+                   + ["-o", out] + sources)
             log.info("$ " + " ".join(shlex.quote(c) for c in cmd))
             start = time.monotonic()
             try:
                 # Same iverilog invocation path as the Verilog Simulator IDE
                 # (hdl.icarus), so both features stay byte-for-byte consistent.
                 res = icarus.run_iverilog(
-                    iverilog, [compile_src], out, extra_flags=extra_flags,
+                    iverilog, sources, out, extra_flags=extra_flags,
                     cwd=os.path.abspath(self.modelpath), timeout=300)
             finally:
                 if tmp_src and os.path.isfile(tmp_src):
@@ -1482,9 +1727,12 @@ and set the load for input ports */
         #   i.e. undefined behaviour, not merely a wrap.
         #
         # Both now work on uint64_t and extract/insert bits instead of
-        # dividing, which is exact for every width up to 64. Wider ports are
-        # rejected up front by validate_ports() -- Verilator represents them as
-        # VlWide, which no integer conversion can carry.
+        # dividing, which is exact for every width up to 64, and bit-identical
+        # to the old code for every width under 32 -- so no result that was
+        # ever well-defined can move. Wider than 64 remains as broken as it was
+        # in 2.5 (Verilator represents those as VlWide, which no integer
+        # conversion can carry); validate_ports() would catch it but is parked,
+        # see docs/UPSTREAM_DECISIONS.md item 3.
         convert_func = '''
         void int2arr''' + self.model_stem + \
             '''(uint64_t num, int array[], int n)
@@ -1625,7 +1873,7 @@ beyond the %d instances this model was built for; skipping it.\\n",
         # Create-if-missing before reading: the list (and its directory) is
         # built lazily, so on a fresh tree a convert that runs before the remove
         # dialog was ever opened used to hit FileNotFoundError here.
-        path = _ensure_modpath(self.digital_home + '/modpath.lst')
+        path = _ensure_modpath(self.legacy_home + '/modpath.lst')
         # The shared appender does exact-LINE membership -- a plain "in text"
         # substring test wrongly treats "divider" as already present because
         # "divider_8bit" contains it, silently dropping the shorter model from
@@ -1634,11 +1882,13 @@ beyond the %d instances this model was built for; skipping it.\\n",
         # "oldmodelnewmodel" (one ghost entry like that makes cmpp abort the
         # ENTIRE build).
         _append_modpath_line(path, self.model_stem)
-        # Self-heal: a stale entry whose build dir was deleted (e.g. the model
-        # was later removed via the d_cosim path, which nuked the shared
-        # <model>/ dir but not this list) makes cmpp abort the ENTIRE Ngveri.cm
-        # build -- "Unable to open <model>/ifspec.ifs". Drop such ghosts now so
-        # one dead entry can't take every other model down with it.
+        # Self-heal: a stale entry whose build dir was deleted (an interrupted
+        # teardown, or a tree removed outside eSim) makes cmpp abort the ENTIRE
+        # Ngveri.cm build -- "Unable to open <model>/ifspec.ifs". Drop such
+        # ghosts now so one dead entry can't take every other model down with
+        # it. (Until the two backends were given separate trees, the usual
+        # source of these was a d_cosim teardown rmtree'ing the shared
+        # <model>/ dir out from under a legacy entry.)
         self.prune_modpathlst()
 
     def prune_modpathlst(self):
@@ -1656,7 +1906,7 @@ beyond the %d instances this model was built for; skipping it.\\n",
             and byte-identical to the NGHDL-side teardown.
         '''
         dropped = _prune_modpath(
-            self.digital_home + '/modpath.lst', self.digital_home)
+            self.legacy_home + '/modpath.lst', self.legacy_home)
         for name in dropped:
             self.clog.warn(
                 'Pruned stale model "' + name + '" from modpath.lst '

@@ -120,3 +120,10 @@ flowchart LR
   generated `cfunc.mod` contract with ngspice is, the silent-wrong-value
   defects that have been fixed in it, and the open work (notably
   `cm_irreversible()` on generated models).
+- [`docs/UPSTREAM_DECISIONS.md`](docs/UPSTREAM_DECISIONS.md) — the defects in
+  eSim's core converter and the NgVeri backend that are **measured, fixed, and
+  deliberately switched off**, because turning them on would change results
+  eSim has produced since 2.5. Read this before wiring any of that code back
+  in. The rule it records: the converter and NgVeri behave as 2.5 did, and
+  d_cosim matches NgVeri bug-for-bug so that swapping backends never changes a
+  number.

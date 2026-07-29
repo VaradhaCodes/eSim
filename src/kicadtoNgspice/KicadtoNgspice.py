@@ -25,7 +25,6 @@ from xml.etree import ElementTree as ET
 from PyQt6 import QtWidgets
 from configuration import Dialogs
 from configuration.Appconfig import Appconfig
-from maker.CosimLogger import CosimLog
 
 from . import Analysis
 from . import Convert
@@ -54,11 +53,14 @@ def _model_types(schematic_info):
 
 
 def _a_devices(schematic_info):
-    """``(model card name, [node lists])`` for every XSPICE a-device line.
+    """``(instance, model card name, [node lists])`` for every XSPICE a-device.
 
-    ``a2 [in1 in2] [out1] u2`` yields ``("u2", [["in1", "in2"], ["out1"]])``.
-    One entry per *instance*: several a-lines may share one ``.model`` card,
-    which is exactly the case a per-instance limit has to count."""
+    ``a2 [in1 in2] [out1] u2`` yields
+    ``("a2", "u2", [["in1", "in2"], ["out1"]])``.
+
+    The instance name is carried because it is the only per-placement identity
+    there is: two placements of one Verilog block share a single ``.model``
+    card, so anything keyed by the card silently merges them."""
     devices = []
     for line in schematic_info:
         s = str(line).strip()
@@ -67,7 +69,9 @@ def _a_devices(schematic_info):
         groups = re.findall(r'\[([^\]]*)\]', s)
         if not groups:
             continue
-        devices.append((s.split()[-1].lower(), [g.split() for g in groups]))
+        parts = s.split()
+        devices.append((parts[0].lower(), parts[-1].lower(),
+                        [g.split() for g in groups]))
     return devices
 
 
@@ -82,7 +86,7 @@ def _get_event_plot_nodes(schematic_info, plot_text):
     model_types = _model_types(schematic_info)
 
     event_nodes = set()
-    for model, groups in _a_devices(schematic_info):
+    for _inst, model, groups in _a_devices(schematic_info):
         mtype = model_types.get(model, '')
         if mtype == 'adc_bridge' and len(groups) >= 2:
             event_nodes.update(groups[1])
@@ -110,14 +114,136 @@ def dcosim_instance_count(schematic_info):
     Counted per a-device, not per ``.model`` card: two instances of the same
     Verilog block share one card and are still two co-simulations."""
     types = _model_types(schematic_info)
-    return sum(1 for model, _ in _a_devices(schematic_info)
+    return sum(1 for _inst, model, _g in _a_devices(schematic_info)
                if types.get(model) == 'd_cosim')
+
+
+#: ``sim_args=["counter"]`` -- the vvp basename ivlng loads for a d_cosim card.
+_SIM_ARGS_RE = re.compile(r'sim_args\s*=\s*\[\s*"([^"]+)"', re.IGNORECASE)
+#: ``lib_args=["libvvp", "ivlng"]`` -- kept verbatim; on Windows it is what
+#: points ivlng at the .vpi staged next to the netlist.
+_LIB_ARGS_RE = re.compile(r'lib_args\s*=\s*\[[^\]]*\]', re.IGNORECASE)
+
+#: Card name of the single device every d_cosim block is merged into.
+MERGED_CARD = 'u_esim_cosim'
+
+
+def dcosim_devices(schematic_info):
+    """``[(instance, card, model, in_nodes, out_nodes), ...]`` for every
+    d_cosim block, in netlist order.
+
+    ``instance`` is the a-device name (``a2``) -- the only per-placement
+    identity in the netlist. ``card`` is the ``.model`` it references and
+    ``model`` the Verilog design behind it, and BOTH are shared when the same
+    block is placed twice, so neither can key a per-block table."""
+    types = _model_types(schematic_info)
+    names = {}
+    for line in schematic_info:
+        s = str(line).strip()
+        if not s.lower().startswith('.model '):
+            continue
+        parts = s.split()
+        if len(parts) >= 3 and types.get(parts[1].lower()) == 'd_cosim':
+            match = _SIM_ARGS_RE.search(s)
+            if match:
+                names[parts[1].lower()] = match.group(1)
+
+    devices = []
+    for inst, card, groups in _a_devices(schematic_info):
+        if types.get(card) != 'd_cosim' or len(groups) < 2:
+            continue
+        devices.append((inst, card, names.get(card, card),
+                        groups[0], groups[1]))
+    return devices
 
 
 #: ``in_low=1.5``, ``in_high = 2.0e0`` -- one adc_bridge threshold parameter.
 def _param_re(name):
     return re.compile(
         r'\b' + name + r'\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)')
+
+
+def merge_dcosim_blocks(schematic_info, project_dir, log=None):
+    """Replace every d_cosim a-device with one device running all of them.
+
+    Returns the rewritten netlist. A netlist with fewer than two d_cosim blocks
+    is returned unchanged -- there is nothing to merge, and the per-model vvp
+    the build already produced is used as-is.
+
+    Icarus's engine is process-global and single-shot, so a second d_cosim
+    device segfaults ngspice (docs/NGVERI_ACCURACY.md D2). One engine running a
+    generated wrapper that instantiates every block lifts that to any number of
+    blocks: see maker/cosim_merge.py. The blocks keep talking to each other
+    through their SPICE nodes, so the schematic is unchanged in meaning.
+    """
+    from maker import cosim_merge
+
+    devices = dcosim_devices(schematic_info)
+    if len(devices) < 2:
+        return list(schematic_info)
+
+    # Keyed by INSTANCE: two placements of one block share a card and a model
+    # name, and keying on either silently gives both copies the same nodes.
+    ports = {}
+    blocks, instances = [], {}
+    for inst, _card, model, in_nodes, out_nodes in devices:
+        if model not in ports:
+            ports[model] = cosim_merge.model_ports(model)
+        blocks.append((inst, model, ports[model]))
+        instances[inst] = (in_nodes, out_nodes)
+
+    ins, outs = cosim_merge.merged_nodes(blocks, instances)
+    cosim_merge.build_merged_vvp(blocks, project_dir, log)
+
+    cards = {card for _i, card, _m, _in, _out in devices}
+    # Drop exactly the a-devices that went into the merge, by name. Matching
+    # on the .model card instead would also delete a d_cosim a-line that
+    # dcosim_devices skipped as malformed -- removing a block from the netlist
+    # is the one outcome worse than refusing the conversion.
+    merged = {inst for inst, _c, _m, _in, _out in devices}
+    lib_args = ''
+    netlist, placed = [], False
+    for line in schematic_info:
+        s = str(line)
+        parts = s.strip().split()
+        if not parts:
+            netlist.append(line)
+            continue
+
+        if (len(parts) >= 3 and parts[0].lower() == '.model'
+                and parts[1].lower() in cards):
+            match = _LIB_ARGS_RE.search(s)
+            if match and not lib_args:
+                lib_args = match.group(0) + ' '
+            continue
+
+        if parts[0].lower() in merged:
+            if not placed:                       # keep the first block's slot
+                netlist.append('a_esim_cosim [%s] [%s] %s'
+                               % (' '.join(ins), ' '.join(outs), MERGED_CARD))
+                placed = True
+            continue
+
+        netlist.append(line)
+
+    card_lines = [
+        '* All Verilog co-simulation blocks run in one Icarus engine (%s)'
+        % ', '.join(sorted(cards)),
+        '.model %s d_cosim simulation="ivlng" %ssim_args=["%s"] '
+        % (MERGED_CARD, lib_args, cosim_merge.MERGED_VVP)]
+
+    # Before .control/.end if the caller handed over a complete netlist:
+    # ngspice stops reading at .end, and a d_cosim a-device whose .model card
+    # never got parsed does not fail -- it simulates, and its outputs are
+    # whatever was left in memory. (createNetlistFile appends its control
+    # block after this runs, so in the normal path either position works; the
+    # point is not to depend on that.)
+    cut = len(netlist)
+    for index, line in enumerate(netlist):
+        if str(line).strip().lower().split(' ')[0] in ('.control', '.end'):
+            cut = index
+            break
+    return netlist[:cut] + card_lines + netlist[cut:]
 
 
 #: ``.model`` categories whose blocks are an HDL simulation behind an XSPICE
@@ -127,8 +253,19 @@ HDL_MODEL_TYPES = ('Ngveri', 'Nghdl', 'NgVeriCosim')
 
 
 def collapse_adc_band_for_hdl(schematic_info, hdl_cards=()):
-    """Give every adc_bridge that feeds an HDL block a single switching
+    """PARKED -- not called by the converter. See docs/UPSTREAM_DECISIONS.md.
+
+    Give every adc_bridge that feeds an HDL block a single switching
     threshold, and return ``(netlist, [(card, in_low, in_high, threshold)])``.
+
+    This is kept, tested and deliberately unwired. It is a genuine fix for a
+    genuine defect -- the measurements are in docs/NGVERI_ACCURACY.md D1/D5 --
+    but it rewrites a netlist parameter eSim has emitted unchanged since 2.5,
+    so it can move the numbers of a schematic the user already considers
+    working. That call belongs to the eSim maintainers. The d_cosim backend
+    reaches the same behaviour without touching the netlist, by reading x as 1
+    the way NgVeri's generated C already does
+    (``ModelGeneration.cosim_wrapper_source``).
 
     XSPICE's adc_bridge is a THREE-state converter: below ``in_low`` it emits
     0, above ``in_high`` it emits 1, and **in between it emits x**. Dumping the
@@ -174,14 +311,14 @@ def collapse_adc_band_for_hdl(schematic_info, hdl_cards=()):
     hdl = {str(c).lower() for c in hdl_cards}
 
     hdl_inputs = set()
-    for model, groups in devices:
+    for _inst, model, groups in devices:
         if (types.get(model) == 'd_cosim' or model in hdl) and groups:
             hdl_inputs.update(groups[0])
     if not hdl_inputs:
         return list(schematic_info), []
 
     feeders = set()
-    for model, groups in devices:
+    for _inst, model, groups in devices:
         if (types.get(model) == 'adc_bridge' and len(groups) >= 2
                 and hdl_inputs.intersection(groups[1])):
             feeders.add(model)
@@ -1305,49 +1442,34 @@ class MainWindow(QtWidgets.QWidget):
         print("=============================================================")
         print("Creating Final netlist")
 
-        # ivlng loads Icarus's libvvp, whose simulation engine is process
-        # global and single-shot. A second d_cosim block in the same netlist
-        # gets "This VVP simulation has already run and can not be reused" and
-        # then ngspice SEGFAULTS with no output file at all. Renaming libvvp
-        # does not help: ivlng.vpi imports the first copy by name. Refuse the
-        # netlist here, where the message can say what to do instead.
-        blocks = dcosim_instance_count(store_schematicInfo)
-        if blocks > 1:
-            raise RuntimeError(
-                "This schematic has %d Verilog co-simulation (d_cosim) "
-                "blocks. Icarus Verilog's engine is loaded once per ngspice "
-                "process, so a second block crashes the simulator. Keep one "
-                "d_cosim block and build the others through NgVeri "
-                "(\"Add Verilog file\"), which has no such limit." % blocks)
+        # Two or more d_cosim blocks become ONE device running a generated
+        # wrapper that instantiates all of them. Icarus's engine is
+        # process-global and single-shot, so a second device would segfault
+        # ngspice -- but the limit is one engine per process, not one block per
+        # schematic. See merge_dcosim_blocks / maker/cosim_merge.py.
+        if dcosim_instance_count(store_schematicInfo) > 1:
+            from maker.CosimLogger import CosimLog
+            from maker.cosim_merge import MergeError
+            log = CosimLog()
+            try:
+                store_schematicInfo = merge_dcosim_blocks(
+                    store_schematicInfo,
+                    os.path.dirname(self.kicadFile), log)
+            except MergeError as exc:
+                log.error(str(exc))
+                raise RuntimeError(str(exc)) from exc
 
-        # Give every adc_bridge feeding an HDL block one switching threshold,
-        # so the x window between in_low and in_high never reaches the digital
-        # side (see collapse_adc_band_for_hdl). Nghdl rows were moved out of
-        # modelList into microcontrollerList during the parse, so both lists
-        # have to be consulted.
-        # getattr, not attribute access: both lists are filled by _loadNetlist,
-        # and createNetlistFile is also reachable on a window that never got
-        # that far. Absent lists mean "no Ngveri/Nghdl blocks known"; d_cosim
-        # blocks are still recognised from the netlist itself.
-        hdl_cards = {
-            str(row[3]) for row in
-            list(getattr(self, 'modelList', []))
-            + list(getattr(self, 'microcontrollerList', []))
-            if len(row) > 6 and str(row[6]) in HDL_MODEL_TYPES}
-        store_schematicInfo, collapsed = collapse_adc_band_for_hdl(
-            store_schematicInfo, hdl_cards)
-        for card, low, high, mid in collapsed:
-            note = (
-                "adc_bridge %s feeds an HDL block, so its in_low/in_high "
-                "(%g/%g) were collapsed to a single %s V threshold. The x "
-                "state between them reaches Icarus as a second clock edge "
-                "(double-clocking the design) and Verilator/GHDL as a "
-                "confident logic 1. Set in_low = in_high in the Ngspice Model "
-                "tab to choose the threshold yourself."
-                % (card, low, high, mid))
-            print(note)
-            self.obj_appconfig.print_warning(note)
-            CosimLog().warn(note)
+        # NOTE: collapse_adc_band_for_hdl() is deliberately NOT called here.
+        # It is measured, tested and parked -- see docs/UPSTREAM_DECISIONS.md
+        # item 1. Rewriting in_low/in_high changes the numbers eSim 2.5
+        # produced for a schematic that already worked, which is a decision for
+        # the eSim maintainers, not for this branch. The netlist therefore
+        # leaves every adc_bridge card exactly as 2.5 wrote it.
+        #
+        # The double-clocking this used to prevent is handled entirely inside
+        # the d_cosim backend instead (ModelGeneration.cosim_wrapper_source),
+        # by reading x as 1 the way NgVeri's generated C already does. To
+        # evaluate the netlist-level fix, call it here.
 
         # To avoid writing optionInfo twice in final netlist
         store_optionInfo = list(self.optionInfo)

@@ -16,14 +16,49 @@ from maker import CosimConfig
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
     """Point config.ini resolution at an isolated HOME and clear any env
-    overrides, then hand back a freshly-reloaded CosimConfig module."""
+    overrides, then hand back a freshly-reloaded CosimConfig module.
+
+    The bundled-toolchain probe is stubbed out too. It reads
+    ``<repo>/library/bin/iverilog``, which is a build-staging artifact: it is
+    untracked, so CI never has it and a developer who has just staged a
+    Windows build always does. Leaving it live made "nothing configured, so
+    resolution is None" pass or fail depending on whose machine ran it.
+    Turning it off here is what makes these tests about the resolution ORDER
+    rather than about the checkout."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     for var in ("ESIM_IVERILOG", "ESIM_VVP", "ESIM_NGSPICE",
                 "ESIM_NGSPICE_GUI", "ESIM_IVERILOG_LIB"):
         monkeypatch.delenv(var, raising=False)
-    importlib.reload(CosimConfig)
+    reload_isolated(CosimConfig, monkeypatch)
     return CosimConfig
+
+
+def reload_isolated(module, monkeypatch):
+    """Re-read config.ini, then re-stub the bundled probe.
+
+    importlib.reload rebinds every module attribute, so it throws away the
+    fixture's stub; a test that reloads to check persistence would silently
+    get the developer's staged toolchain back."""
+    importlib.reload(module)
+    monkeypatch.setattr(module, "_bundled_tool", lambda _name: None)
+    return module
+
+
+def test_a_bundled_toolchain_wins_over_path(tmp_path, monkeypatch):
+    """The behaviour the fixture stubs out, kept under test on its own: an
+    install that ships Icarus under library/bin uses it, whatever is on PATH.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    importlib.reload(CosimConfig)
+    bundled = _make_tool(str(tmp_path / "bundled"), "iverilog")
+    monkeypatch.setattr(CosimConfig, "_bundled_tool",
+                        lambda name: bundled if name == "iverilog" else None)
+    monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
+    _make_tool(str(tmp_path / "elsewhere"), "iverilog")
+
+    assert CosimConfig.iverilog_binary() == bundled
 
 
 def _make_tool(dirpath, name):
@@ -49,11 +84,18 @@ def test_unconfigured_digital_models_use_safe_user_default(fake_home):
     expected = os.path.join(
         os.path.expanduser("~"), ".nghdl", "DigitalModelLibrary")
     assert fake_home.digital_model_root() == expected
-    assert fake_home.cosim_vvp_path("counter") == os.path.join(
+    # d_cosim builds into its own tree, a sibling of the legacy Ngveri one, so
+    # neither backend's teardown can delete the other's build.
+    assert fake_home.cosim_vvp_target("counter") == os.path.join(
+        expected, "NgVeriCosim", "counter", "counter")
+    assert fake_home.legacy_cosim_vvp_path("counter") == os.path.join(
         expected, "Ngveri", "counter", "counter")
+    # Nothing built anywhere -> the reader reports the canonical location.
+    assert fake_home.cosim_vvp_path("counter") == \
+        fake_home.cosim_vvp_target("counter")
 
 
-def test_set_manual_paths_roundtrip(fake_home, tmp_path):
+def test_set_manual_paths_roundtrip(fake_home, tmp_path, monkeypatch):
     bindir = tmp_path / "tool" / "bin"
     iv = _make_tool(str(bindir), "iverilog")
     vv = _make_tool(str(bindir), "vvp")
@@ -62,7 +104,7 @@ def test_set_manual_paths_roundtrip(fake_home, tmp_path):
     assert fake_home.set_manual_paths(iverilog_path=iv, vvp_path=vv) is True
 
     # Re-read config.ini fresh: the persisted paths must win.
-    importlib.reload(fake_home)
+    reload_isolated(fake_home, monkeypatch)
     assert fake_home.iverilog_binary() == iv
     assert fake_home.vvp_binary() == vv
     # IVERILOG_LIB is derived from the iverilog prefix so has_iverilog can work.
@@ -73,7 +115,7 @@ def test_env_override_beats_config(fake_home, tmp_path, monkeypatch):
     cfg_iv = _make_tool(str(tmp_path / "cfg" / "bin"), "iverilog")
     env_iv = _make_tool(str(tmp_path / "env" / "bin"), "iverilog")
     fake_home.set_manual_paths(iverilog_path=cfg_iv)
-    importlib.reload(fake_home)
+    reload_isolated(fake_home, monkeypatch)
     monkeypatch.setenv("ESIM_IVERILOG", env_iv)
     assert fake_home.iverilog_binary() == env_iv
 
@@ -81,12 +123,17 @@ def test_env_override_beats_config(fake_home, tmp_path, monkeypatch):
 def test_vvp_falls_back_next_to_iverilog(fake_home, tmp_path, monkeypatch):
     # Only iverilog is configured; vvp must be discovered alongside it even
     # with nothing on PATH and no explicit VVP key.
+    #
+    # The sibling is looked up as "vvp" + the platform's executable suffix, so
+    # the fixture file has to carry it: a bare "vvp" is not something Windows
+    # would run, and asserting on one only ever passed here by falling through
+    # to a bundled toolchain that happened to be staged in the checkout.
     monkeypatch.setenv("PATH", "")
     bindir = tmp_path / "tool" / "bin"
-    iv = _make_tool(str(bindir), "iverilog")
-    vv = _make_tool(str(bindir), "vvp")
+    iv = _make_tool(str(bindir), "iverilog" + fake_home._EXE)
+    vv = _make_tool(str(bindir), "vvp" + fake_home._EXE)
     fake_home.set_manual_paths(iverilog_path=iv)
-    importlib.reload(fake_home)
+    reload_isolated(fake_home, monkeypatch)
     assert fake_home.vvp_binary() == vv
 
 

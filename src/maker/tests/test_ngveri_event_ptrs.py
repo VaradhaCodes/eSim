@@ -226,6 +226,23 @@ def test_trace_format_matches_the_argument_type(tmp_path):
 
 
 # --------------------------------------------------------------- defect 3
+#
+# validate_ports() is PARKED: it is proven below, but nothing calls it, because
+# refusing a build eSim 2.5 accepted is a maintainer decision
+# (docs/UPSTREAM_DECISIONS.md items 2 and 3). The first test guards the
+# parking; the rest keep the evidence alive for whoever makes that call.
+
+def test_validate_ports_is_not_wired_into_the_build(tmp_path):
+    """NgVeri must build exactly what 2.5 built -- no refusal, no warning, no
+    terminal note. If someone wires the gate back in, this fails and they have
+    to update UPSTREAM_DECISIONS.md deliberately rather than by accident."""
+    import inspect
+    from maker import NgVeri
+
+    source = inspect.getsource(NgVeri.NgVeri.addverilog)
+    assert "validate_ports()" not in source.replace(
+        "# NOTE: model.validate_ports() is deliberately NOT called here.", "")
+
 
 def test_inout_port_is_refused_by_name(tmp_path):
     mg = _mg(tmp_path, ["clk:1", "sda:1"], ["y:1"],

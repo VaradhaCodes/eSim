@@ -129,14 +129,83 @@ def ngspice_codemodel_dir():
     return cand if os.path.isdir(cand) else None
 
 
+def cosim_model_id(model_name):
+    """The ONE canonical identity of a d_cosim model: the stripped, lowercased
+    name. Symbol, param XML, build dir, vvp filename and netlist all key off
+    this, so a case-sensitive filesystem cannot split one model into two.
+
+    Returns "" for a blank name -- callers MUST treat that as "no model" and
+    never join it onto a base path (os.path.join(base, "") collapses to the
+    base directory, which is how a teardown wipes every model at once)."""
+    return str(model_name or "").strip().lower()
+
+
+def cosim_build_root():
+    """Root of the d_cosim build tree: <DIGITAL_MODEL>/NgVeriCosim.
+
+    Deliberately a SIBLING of the legacy Ngveri/ tree, not a subdirectory of
+    it. The two backends used to build into one directory per model name, so
+    tearing down a d_cosim model rmtree'd the Verilator backend's sources for
+    the model of that name (and vice versa) -- a data-loss bug that no amount
+    of guarding fully closes, because on Windows the filesystem compares names
+    case-insensitively while every guard compares them exactly. Separate roots
+    make the collision structurally impossible instead of merely unlikely.
+
+    The legacy tree's layout is untouched: eSim 2.5 NgVeri models stay exactly
+    where they were built."""
+    return os.path.join(digital_model_root(), 'NgVeriCosim')
+
+
+def cosim_build_dir(model_name):
+    """Per-model d_cosim build directory (<cosim root>/<id>), or None for a
+    blank name. This is the directory the teardown may delete -- it holds
+    nothing but d_cosim artifacts."""
+    model_id = cosim_model_id(model_name)
+    return os.path.join(cosim_build_root(), model_id) if model_id else None
+
+
+def cosim_vvp_target(model_name):
+    """Where a d_cosim build MUST write its vvp: <cosim root>/<id>/<id>.
+
+    Distinct from cosim_vvp_path, which also accepts a pre-split model still
+    sitting in the old shared location. Builders and the teardown use this
+    one; readers use cosim_vvp_path."""
+    build_dir = cosim_build_dir(model_name)
+    if not build_dir:
+        return None
+    return os.path.join(build_dir, cosim_model_id(model_name))
+
+
+def legacy_cosim_vvp_path(model_name):
+    """The pre-split vvp location, <DIGITAL_MODEL>/Ngveri/<id>/<id>, shared
+    with the legacy NgVeri build tree.
+
+    Kept only so models built before the trees were separated still simulate
+    and can still be torn down. NOTHING may delete this file's *directory* --
+    it may be a legacy NgVeri build dir. Returns None for a blank name."""
+    model_id = cosim_model_id(model_name)
+    if not model_id:
+        return None
+    return os.path.join(digital_model_root(), 'Ngveri', model_id, model_id)
+
+
 def cosim_vvp_path(model_name):
-    """Canonical location of a model's compiled Icarus vvp, derived from the
-    nghdl config so the build step (ModelGeneration.build_cosim) and the
-    netlister (Convert) agree on ONE path without storing it anywhere. Mirrors
-    ModelGeneration's per-model store: <DIGITAL_MODEL>/Ngveri/<model>/<model>.
-    Returns None if the config is unavailable."""
-    digital_model = digital_model_root()
-    return os.path.join(digital_model, 'Ngveri', model_name, model_name)
+    """A model's compiled Icarus vvp for READERS (the netlister, the simulation
+    staging, cosim_merge): the canonical location if it holds a build, else the
+    pre-split shared location if that one does, else the canonical path so the
+    "not built" error names where the file should be.
+
+    One helper so the build step and every consumer agree on one path without
+    storing it anywhere. Returns None only for a blank name."""
+    target = cosim_vvp_target(model_name)
+    if not target:
+        return None
+    if os.path.isfile(target):
+        return target
+    legacy = legacy_cosim_vvp_path(model_name)
+    if legacy and os.path.isfile(legacy):
+        return legacy
+    return target
 
 
 # --------------------------------------------------------------------------- #

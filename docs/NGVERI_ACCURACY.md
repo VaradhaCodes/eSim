@@ -7,6 +7,15 @@ This document is meant to be readable by someone who was not present for the
 investigation. Everything under "Fixed" is closed; everything under "Open" is a
 usable handoff brief.
 
+**Scope rule.** eSim's core converter and the NgVeri (Verilator) backend behave
+as they did in eSim 2.5. Where 2.5 is wrong, it is measured and written down,
+not changed — see [`UPSTREAM_DECISIONS.md`](UPSTREAM_DECISIONS.md), which lists
+every fix that exists, works, and is deliberately switched off, and why.
+d_cosim is new, so it is fixed freely — but its target is *NgVeri as 2.5
+behaved*, bug for bug, so that swapping backends never changes a number. Some
+entries below therefore describe a defect that is fixed **inside d_cosim only**
+while the same defect is left standing in NgVeri on purpose.
+
 ---
 
 ## Background: how a NgVeri model reaches ngspice
@@ -104,19 +113,30 @@ Both now work on `uint64_t` and extract/insert bits, which is exact for every
 width up to 64. `ESIM_TRACE`'s `%d` on a possibly-64-bit port was corrected to
 `%llu` with an explicit cast.
 
-### N3 — port shapes this backend cannot represent are now refused
+### N3 — port shapes this backend cannot represent — PARKED, not refused
 
-`ModelGeneration.validate_ports()`, called from `NgVeri.addverilog()` before
-any C is generated, rejects by name:
+`ModelGeneration.validate_ports()` rejects two shapes by name:
 
 - **`inout` ports** — `getPortInfo()` files them under inputs because that is
   all the legacy flow can drive; the ifspec then declares `Direction: in` and
-  the driven half never reaches ngspice. (d_cosim has a real `d_inout` group;
-  use it, or split the pin.)
+  the driven half never reaches ngspice. Worse, the port indices shift by the
+  width of the inout, so *every* port is wrong: measured on a probe module, an
+  output declared `assign q = 1'b1;` toggled with the clock.
 - **ports wider than 64 bits** — Verilator represents those as `VlWide`, which
   no integer conversion can carry.
 
-Both previously produced a model that built, ran, and was quietly wrong.
+Both produce a model that builds, runs, and is quietly wrong.
+
+**It is implemented, tested, and NOT called.** eSim 2.5 built these models, and
+refusing a build that used to succeed is a maintainer's decision — as is
+raising a warning where 2.5 was silent. See
+[`UPSTREAM_DECISIONS.md`](UPSTREAM_DECISIONS.md) items 2 and 3; wiring it back
+in is one line in `NgVeri.addverilog()`, and
+`test_validate_ports_is_not_wired_into_the_build` fails if someone does it by
+accident.
+
+d_cosim refuses `inout` outright (`D6`). That is a new backend on a path no 2.5
+schematic can reach, so the rule there is ours to set.
 
 ### Regression tests
 
@@ -179,18 +199,30 @@ wide (measured 6.000441 → 7.000303 = 0.999862 ms): the wrap lands on the
 NgVeri and NGHDL escape the *double* edge only by accident — see `D5`, which
 is the same `U` window doing something else.
 
-**Fix** — `collapse_adc_band_for_hdl()` in
-`src/kicadtoNgspice/KicadtoNgspice.py`. At netlist-generation time, any
-`adc_bridge` whose digital outputs reach an HDL block has `in_low` and
-`in_high` collapsed to their midpoint, and the rewrite is reported in the
-terminal and in `~/.esim/dcosim.log`. Bridges that feed nothing HDL-backed are
-untouched, and a band the user already collapsed is left alone.
+**Fix — `cosim_wrapper_source()` in `src/maker/ModelGeneration.py`.** The design
+is simulated behind a generated wrapper that reads an `x` input as logic **1**,
+per bit, using `===` so the comparison itself cannot return x:
 
-The `in_low`/`in_high` pair describes a *static* datasheet guarantee ("≤1 V is
-low, ≥2 V is high, in between is unspecified"). A real logic input has one
-switching threshold; applying a 1 V-wide indeterminate band to a ramping clock
-is the modelling error, and the band's midpoint is the threshold the user
-implicitly asked for.
+```verilog
+assign esim_d_in_lv[gi] = (esim_d_in[gi] === 1'b0) ? 1'b0 : 1'b1;
+```
+
+That is precisely what NgVeri's generated C already does. The clock arrives as
+`0 → 1 → 1` — one posedge, taken as the voltage crosses `in_low`, which is the
+same edge at the same instant NgVeri takes. **The netlist is not touched**: it
+still says `in_low=1.0 in_high=2.0`, exactly as eSim 2.5 wrote it.
+
+This deliberately inherits NgVeri's *mistake* as well as its behaviour — an
+input at 1.2 V still reads as a confident 1 (see `D5`). Matching the old
+backend bug-for-bug is the requirement: a d_cosim that were "more correct" than
+NgVeri would make a backend swap change the answer, which is exactly what a
+drop-in alternative must never do.
+
+There is also a netlist-level fix — `collapse_adc_band_for_hdl()` in
+`src/kicadtoNgspice/KicadtoNgspice.py`, which rewrites `in_low`/`in_high` to
+their midpoint. It works, it is tested end to end, and it is **parked, not
+wired in**, because it changes a value eSim has emitted since 2.5. See
+`UPSTREAM_DECISIONS.md` item 1.
 
 Verified end to end against the reference run (`.tran 10u 15m`):
 
@@ -198,7 +230,11 @@ Verified end to end against the reference run (`.tran 10u 15m`):
 |---|---|---|
 | NgVeri (== eSim 2.5, byte-identical) | 0, 1, 250, 251 … 255, 0, 1, 2, 3, 4, 5 | rises 9.000 ms |
 | d_cosim, before | 0, 2, 250, 252, 254, 0, 2, 4, 6 … | 6.000 → 7.000 ms |
-| d_cosim, after | 0, 1, 250, 251 … 255, 0, 1, 2, 3, 4, 5 | 9.001 → 10.001 ms |
+| d_cosim, wrapped (netlist unchanged) | 0, 1, 250, 251 … 255, 0, 1, 2, 3, 4, 5 | 9.001 → 10.001 ms |
+| d_cosim, band collapsed (parked) | 0, 1, 250, 251 … 255, 0, 1, 2, 3, 4, 5 | 9.001 → 10.001 ms |
+
+The last two rows are independent cures for the same defect; either alone is
+sufficient. Only the wrapper ships.
 
 ### D2 — a second d_cosim block segfaulted ngspice (HIGH)
 
@@ -214,10 +250,41 @@ the user can act on. Loading a renamed second copy of libvvp does not help:
 `ivlng.vpi` imports the first copy by name, so the second engine's VPI
 callbacks run against the first engine.
 
-**Fix** — `dcosim_instance_count()` refuses the conversion with a message that
-names the limit and the way round it (build the other blocks through NgVeri,
-which has no such restriction). Counted per a-device, because two placements of
-the same Verilog block share one `.model` card and are still two engines.
+**Fix** — the limit is one *engine* per process, not one *block* per schematic,
+so the converter puts every block into a single engine instead of refusing.
+
+`merge_dcosim_blocks()` (`src/kicadtoNgspice/KicadtoNgspice.py`) and
+`src/maker/cosim_merge.py` generate one wrapper module instantiating every
+d_cosim block on the schematic, compile it to one vvp at conversion time, and
+emit **one** d_cosim a-device whose `d_in`/`d_out` vectors are the blocks'
+vectors concatenated. The blocks keep talking to each other, and to the analog
+half, through their SPICE nodes — the wrapper never sees the connections.
+
+Blocks are keyed by **a-device name**, not by `.model` card: two placements of
+the same Verilog block share one card, and keying on it gives both copies the
+same nodes.
+
+Verified end to end: three blocks of two different models in one schematic,
+each counting independently, two of them the same model released from reset
+3 ms apart (`test_three_blocks_of_two_models_run_in_one_simulation`).
+
+### The wrapper has one port per direction, and that is load-bearing
+
+ivlng discovers ports by walking `vpi_iterate(vpiPort, top)` and giving each a
+running bit offset (`vpi.c` `start_cb`), then finds a bit's owner by scanning
+those offsets (`icarus_shim.c`). So the wiring depends on **the order VVP
+reports ports in** — which is not the order they are declared in, and which was
+observed to change between compiles of the same source: an early three-block
+wrapper with one Verilog port per design port came out correct on one build and
+with one block's `rst` wired to a `clk` on the next, giving a counter that
+reset itself at random.
+
+The wrapper therefore declares exactly one input vector and one output vector
+and slices every block's ports out of them. One port per direction means one
+offset, always 0, and pure arithmetic after it — there is nothing left to vary.
+Node `j` of a group is bit `width - 1 - j` (`icarus_shim.c:97`, "Bit position
+for big-endian"), which is the convention the single-block netlist already
+used.
 
 ### D3 — a coarse `` `timescale `` in the user's own source froze the design (HIGH)
 
@@ -237,7 +304,7 @@ trusted whatever the source declared.
 what the design's own `#` delays are expressed in, so leaving it alone keeps
 their meaning exactly; a finer precision can only reduce rounding.
 
-### D5 — NgVeri and NGHDL read any in-band voltage as a confident 1 (HIGH)
+### D5 — NgVeri and NGHDL read any in-band voltage as a confident 1 — PARKED
 
 The same `U` window as `D1`, taken by a two-state backend. Both generators emit
 
@@ -258,19 +325,24 @@ Measured on the real, already-built Verilator `universal_counter_8bit`, holding
 | collapsed to 1.5 V | logic **0** | `1, 2, 3, 4, …` — counts, correct |
 
 A 1.2 V input is unambiguously below a 1.5 V threshold, and the shipped
-configuration gets it backwards. This is why the fix is applied to `Ngveri` and
-`Nghdl` blocks and not just to `NgVeriCosim`.
+configuration gets it backwards.
 
-**What this fix does not buy: better edge timing.** Same model, same clock,
-band vs collapsed — the `cnt_val` sequence is byte-identical
+**This is not fixed, on purpose.** Correcting it means changing the adc_bridge
+band eSim has emitted since 2.5, which moves the numbers for designs users
+already consider working —
+[`UPSTREAM_DECISIONS.md`](UPSTREAM_DECISIONS.md) item 1. NgVeri and NGHDL still
+read 1.2 V as a 1, **and so does d_cosim**, because its wrapper reproduces the
+same rule (`D1`). Reproducing the defect is the requirement: a d_cosim that
+were more correct than NgVeri here would make a backend swap change the answer.
+
+**What collapsing the band would not buy: better edge timing.** Same model,
+same clock, band vs collapsed — the `cnt_val` sequence is byte-identical
 (`0, 1, 250, 251 … 255, 0, 1, 2, 3, 4, 5`), and the digital edge merely moves
 from +0.3 µs to +0.7 µs past the millisecond. Both numbers are dominated by the
 analog-timestep quantisation described below, not by the threshold; which one
 lands nearer its own ideal crossing is an accident of where ngspice's timepoints
-fall. The gains here are the in-band misread above, one threshold instead of
-`in_low` acting in both directions, and cross-backend consistency — a schematic's
-analog half must not change just because the block behind it was rebuilt, which
-is the entire basis of comparing NgVeri against d_cosim.
+fall. The only real gain would be the in-band misread above — which is why this
+is a correctness question for the maintainers rather than a tuning knob.
 
 ### D4 — multi-file designs never built (MEDIUM)
 
@@ -305,32 +377,39 @@ simulation — and `q`, a **constant 1**, toggled with the clock. The port indic
 are off by the width of the inout, so *every* port is wrong, not just the
 bidirectional one.
 
-**Fix** — `build_cosim` now refuses an `inout` module (matching what NgVeri
-already does) and `validate_ports()` no longer recommends d_cosim for it.
-Neither backend supports bidirectional pins; the honest answer is to split the
-pin. Detection reads the direction *field* of `connection_info.txt`, so a port
-named `inout_en` is not mistaken for one.
+**Fix** — `build_cosim` refuses an `inout` module. Detection reads the direction
+*field* of `connection_info.txt`, so a port named `inout_en` is not mistaken for
+one. Neither backend supports bidirectional pins; the honest answer is to split
+the pin.
+
+This is a refusal on the **new** backend only: no eSim 2.5 schematic can be
+using d_cosim, so nothing that worked before stops working. NgVeri keeps
+accepting `inout` and keeps being silently wrong about it, because taking that
+away is a maintainer's decision — `N3` and
+[`UPSTREAM_DECISIONS.md`](UPSTREAM_DECISIONS.md) item 2.
 
 ### Regression tests
 
-- `src/kicadtoNgspice/tests/test_dcosim_netlist.py` — the band collapse
+- `src/kicadtoNgspice/tests/test_dcosim_netlist.py` — the parked band collapse
   (targeting, midpoint, parameter preservation, no-op cases, Ngveri/Nghdl cards
-  by name) and the instance-count guard.
-- `src/kicadtoNgspice/tests/test_dcosim_netlist_write.py` — the same guards
-  driven through the real `MainWindow.createNetlistFile`, asserting the
-  `.cir.out` on disk. Covers the *wiring*, including the `modelList` /
-  `microcontrollerList` lookup a pure-function test cannot reach: a fix that is
-  correct but not plugged in fails here.
+  by name) and the instance count.
+- `src/kicadtoNgspice/tests/test_dcosim_netlist_write.py` — driven through the
+  real `MainWindow.createNetlistFile`, asserting the `.cir.out` on disk. Covers
+  the *wiring*: that the adc_bridge card comes out exactly as 2.5 wrote it, that
+  several blocks become one device with concatenated node vectors, and that a
+  merge which cannot be done correctly writes no netlist at all.
 - `src/maker/tests/test_dcosim_build.py` — the `` `timescale `` table, what
   actually reaches iverilog (library flags, temp copy, user's file untouched),
-  and the `inout` refusal.
-- `src/maker/tests/test_dcosim_simulation.py` — **end to end**: compiles a
-  counter with iverilog, runs it under ngspice + ivlng, and decodes the output
-  bus back into integers. Asserts the defect (2 per clock with the default
-  band), the fix (1 per clock), and that the one-clock strobe is one clock
-  wide. Skipped when the machine has no iverilog/ivlng. This is the only test
-  in the area that can catch "builds, runs, and is wrong", so a change here
-  should be taken through it rather than through the unit tests alone.
+  the `inout` refusal, and the wrapper: one port per direction, `x` read as 1
+  per bit, big-endian node-to-bit mapping, disjoint slices per block.
+- `src/maker/tests/test_dcosim_simulation.py` — **end to end**: compiles with
+  iverilog, runs under ngspice + ivlng, decodes the output bus back into
+  integers. Asserts the defect (2 per clock, compiled bare), the fix (1 per
+  clock, *with the 2.5 netlist unchanged*), the parked netlist-level fix, the
+  one-clock strobe, and three blocks of two models counting independently in
+  one simulation. Skipped when the machine has no iverilog/ivlng. This is the
+  only test in the area that can catch "builds, runs, and is wrong", so a
+  change here should be taken through it rather than through unit tests alone.
 
 ---
 
@@ -392,7 +471,14 @@ co-simulator inside the `STEP_PENDING` branch, replaying the queued inputs.
 
 It changes *when* the model is called, not just what it computes, so it needs
 bench time across a range of schematics rather than a unit test — exactly the
-kind of change that should not ride along with a silent-correctness fix.
+kind of change that should not ride along with a silent-correctness fix. It is
+also core NgVeri behaviour inherited from 2.5, which this branch does not
+change on its own judgement: [`UPSTREAM_DECISIONS.md`](UPSTREAM_DECISIONS.md)
+item 4.
+
+**d_cosim does not have this defect** — its code model already declares
+`cm_irreversible`. That is the one place the new backend is better than the old
+one, and it is better by not having a bug rather than by anything eSim changed.
 
 #### How to verify it
 
@@ -403,12 +489,24 @@ compare the digital output against the same design run with a tiny fixed
 `.tran` step where no rejection occurs. They must match. A `cnt_val` that runs
 slightly fast under the coarse run is the bug.
 
-### Shared model name and build directory between the two backends
+### ~~Shared model name and build directory between the two backends~~ (fixed)
 
-Both backends register a model under the same name and build into
-`tools/nghdl/src/xspice/icm/Ngveri/<model>/`, so removing a d_cosim model
-deletes the Verilator backend's artifacts for a model of the same name. A
-removal in one backend should not be able to delete the other's output.
+The two backends used to build into one directory per model name,
+`<DIGITAL_MODEL>/Ngveri/<model>/`, so removing a d_cosim model deleted the
+Verilator backend's `ifspec.ifs`/`cfunc.mod` for a model of the same name --
+while leaving its compiled `.o` in the release tree, so ngspice kept answering
+for a model whose sources were gone.
+
+d_cosim now builds into a **sibling** tree, `<DIGITAL_MODEL>/NgVeriCosim/`; the
+legacy layout is untouched. Neither teardown can reach the other's tree, so the
+isolation is structural rather than a guard that has to be right every time --
+which matters because on Windows the filesystem compares names
+case-insensitively while every guard in Python compares them exactly. See
+`CosimConfig.cosim_build_root` and `src/maker/tests/test_backend_isolation.py`.
+
+A vvp built before the split still simulates (`cosim_vvp_path` falls back to
+the old location) and is migrated out of the legacy directory before any NgVeri
+teardown deletes it.
 
 ---
 

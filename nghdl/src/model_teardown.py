@@ -157,6 +157,41 @@ def _prune_modpath(path, base, marker="ifspec.ifs"):
     return dropped
 
 
+def _dir_has_name(directory, filename):
+    """True if ``directory`` holds an entry named EXACTLY ``filename``.
+
+    Deliberately not ``os.path.isfile``: on Windows that answers True for
+    ``counter.xml`` when asked about ``Counter.xml``, so a backend probe keyed
+    on a param XML would claim ownership of a name whose XML belongs to a
+    differently-cased model -- and then the wrong dismantler runs. Listing the
+    directory gives the same answer on Windows and Linux."""
+    try:
+        return filename in os.listdir(directory)
+    except OSError:
+        return False
+
+
+def _actual_subdir_name(base, name):
+    """The entry in ``base`` that IS ``name`` on this filesystem: an exact
+    match if there is one, otherwise a unique case-insensitive match (which on
+    Windows is the same directory the OS would open). ``None`` when nothing
+    matches or the fold is ambiguous.
+
+    Teardown deletes by the name the *dialog* showed, which may be a modpath
+    line or a symbol name rather than a directory entry. rmtree on the wrong
+    case is a silent no-op on Linux -- the model comes back on the next
+    listing, and it looks like remove is broken."""
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return None
+    if name in entries:
+        return name
+    low = str(name).strip().lower()
+    folded = [e for e in entries if e.lower() == low]
+    return folded[0] if len(folded) == 1 else None
+
+
 def _resolve_backend(xml_loc, name, cosim_sym=None, nghdl_sym=None):
     """Resolve which backend owns model ``name`` from the on-disk modelParamXML
     layout -- the single source of truth that survives restarts and backend
@@ -170,6 +205,11 @@ def _resolve_backend(xml_loc, name, cosim_sym=None, nghdl_sym=None):
     should not -- one name, one backend -- but a deterministic precedence keeps
     teardown from running the wrong dismantler and silently leaving a model).
 
+    The XML probe lists the directory rather than calling ``os.path.isfile``
+    (see _dir_has_name): Windows' case-insensitive filesystem otherwise hands
+    ownership of "Counter" to the model whose XML is "counter.xml", so the
+    dialog badges a row NgVeri and the d_cosim dismantler runs on it.
+
     ``cosim_sym``/``nghdl_sym`` are optional .kicad_sym paths consulted with the
     SAME precedence when no param XML answers. A model built by an older eSim
     (or half-removed by one) can own a KiCad symbol with no XML beside it; going
@@ -177,10 +217,10 @@ def _resolve_backend(xml_loc, name, cosim_sym=None, nghdl_sym=None):
     dismantler runs, leaving the symbol in KiCad forever -- which is exactly how
     the orphans in eSim_Ngveri / eSim_NgVeriCosim became unremovable."""
     if xml_loc:
-        if os.path.isfile(os.path.join(xml_loc, 'NgVeriCosim',
-                                       name + '.xml')):
+        if _dir_has_name(os.path.join(xml_loc, 'NgVeriCosim'),
+                         name + '.xml'):
             return "cosim"
-        if os.path.isfile(os.path.join(xml_loc, 'Nghdl', name + '.xml')):
+        if _dir_has_name(os.path.join(xml_loc, 'Nghdl'), name + '.xml'):
             return "nghdl"
     if cosim_sym and name in _lib_part_names(cosim_sym):
         return "cosim"
@@ -210,7 +250,7 @@ def _resolve_backend(xml_loc, name, cosim_sym=None, nghdl_sym=None):
 # cmpp inputs (ifspec.ifs / cfunc.mod); release dirs hold their compiled
 # counterparts (ifspec.c / cfunc.c and the .o files next to them).
 _MODEL_DIR_MARKERS = ('ifspec.ifs', 'cfunc.mod', 'ifspec.c', 'cfunc.c',
-                      'sim_main.cpp')
+                      'sim_main.cpp', 'connection_info.txt')
 
 
 def _kicad_symlib():
@@ -278,9 +318,15 @@ def _build_dir_model_names(base):
 
 
 def discover_ngveri_models(digital_home, release_dir, xml_loc,
-                           ngveri_sym=None, cosim_sym=None):
+                           ngveri_sym=None, cosim_sym=None, cosim_home=None):
     """Every Verilog-side model with ANY trace left on disk, as
     ``{name: "NgVeri" | "d_cosim"}`` (the RemoveItemsDialog badge).
+
+    ``cosim_home`` is the d_cosim build tree (<DIGITAL_MODEL>/NgVeriCosim), a
+    SIBLING of ``digital_home``. Scanning it separately is what lets a failed
+    or interrupted d_cosim build -- a directory with sources but no vvp -- be
+    listed and removed at all; it also means a build dir can only ever be
+    attributed to the backend that owns the tree it sits in.
 
     d_cosim evidence is applied last so it wins the badge for a name that shows
     up under both, matching _resolve_backend's precedence -- the badge and the
@@ -299,6 +345,9 @@ def discover_ngveri_models(digital_home, release_dir, xml_loc,
     for name in _lib_part_names(ngveri_sym):
         badges[name] = "NgVeri"
     # --- d_cosim last (wins the badge) ---
+    if cosim_home:
+        for name in _build_dir_model_names(cosim_home):
+            badges[name] = "d_cosim"
     for name in _xml_model_names(xml_loc, 'NgVeriCosim'):
         badges[name] = "d_cosim"
     for name in _lib_part_names(cosim_sym):

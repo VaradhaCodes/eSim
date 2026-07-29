@@ -38,7 +38,8 @@ from . import createkicad
 from . import createkicadCosim
 from .model_teardown import (
     _safe_model_subdir, _resolve_backend, _ensure_modpath,
-    _strip_modpath_line, discover_ngveri_models)
+    _strip_modpath_line, discover_ngveri_models, _MODEL_DIR_MARKERS,
+    _actual_subdir_name)
 from .kicad_symlib import generated_symlib_path, ensure_lib_registered
 from . import CosimConfig
 from .CosimLogger import CosimLog
@@ -175,21 +176,12 @@ class NgVeri(QtWidgets.QWidget):
                 self._flush_build_logs(currentTermLogs)
                 return
             model.getPortInfo()
-            # Refuse the two port shapes the Verilator backend cannot carry
-            # (inout, and anything wider than 64 bits) BEFORE generating a
-            # line of C. Both used to build and run and quietly produce wrong
-            # values, which is the failure mode this path is being hardened
-            # against; a named error beats a silently wrong waveform.
-            port_error = model.validate_ports()
-            if port_error:
-                Dialogs.critical(
-                    self, "Error Message",
-                    "<b>" + port_error + "</b>",
-                    QtWidgets.QMessageBox.StandardButton.Ok)
-                currentTermLogs.append("NgVeri stopped: " + port_error)
-                currentTermLogs.append(self._build_failure_html())
-                self._flush_build_logs(currentTermLogs)
-                return
+            # NOTE: model.validate_ports() is deliberately NOT called here.
+            # It catches two port shapes this backend cannot represent (inout,
+            # and anything wider than 64 bits), both of which build and run and
+            # are quietly wrong -- but eSim 2.5 built them too, and refusing a
+            # build 2.5 accepted is a maintainer decision, not ours. Parked and
+            # documented in docs/UPSTREAM_DECISIONS.md items 2 and 3.
             model.cfuncmod()
             model.ifspecwrite()
             model.sim_main_header()
@@ -389,12 +381,18 @@ class NgVeri(QtWidgets.QWidget):
         # Fast GUI-thread half: the backend-switch prompt, source generation and
         # parse. These are the only dialog-raising steps, so they stay on the
         # GUI thread; abort before spawning a worker if any fails.
+        # Build into the d_cosim tree (<DIGITAL_MODEL>/NgVeriCosim), NOT the
+        # legacy Ngveri tree the two backends used to share. This is what makes
+        # "remove the d_cosim model" incapable of touching a Verilator build of
+        # the same name. Must precede verilogfile(), which creates the dir.
+        model.use_cosim_tree()
+
         try:
             # If this name was previously built via the legacy NgVeri flow,
-            # ASK, then remove that version FIRST -- before verilogfile()
-            # repopulates the shared <model>/ dir with the new source. Doing it
-            # after would rmtree the freshly-copied .v out from under
-            # build_cosim. A declined switch aborts the build.
+            # ASK, then remove that version first so the user ends up with one
+            # backend per name rather than two half-models in KiCad. Since the
+            # trees are now separate this is a clarity guard, not a safety one:
+            # a declined switch aborts the build and nothing is deleted.
             if not self._switch_backends_if_needed("cosim", modelname):
                 return
             if model.verilogfile() == "Error":
@@ -669,7 +667,8 @@ class NgVeri(QtWidgets.QWidget):
         ngveri_sym, cosim_sym = self._sym_paths()
         badges = discover_ngveri_models(
             self.digital_home, self.release_dir, self._xml_loc,
-            ngveri_sym=ngveri_sym, cosim_sym=cosim_sym)
+            ngveri_sym=ngveri_sym, cosim_sym=cosim_sym,
+            cosim_home=CosimConfig.cosim_build_root())
         return list(badges.keys()), badges
 
     def open_remove_models(self):
@@ -677,8 +676,9 @@ class NgVeri(QtWidgets.QWidget):
             Open the searchable, multi-select dialog and tear down whatever the
             user picks. Dispatches each name to the right backend teardown --
             legacy NgVeri (Verilator -> Ngveri.cm) vs d_cosim (Icarus ->
-            eSim_NgVeriCosim) -- since the two share nothing on disk and the
-            wrong teardown silently leaves a model behind.
+            eSim_NgVeriCosim). The two build into separate trees and share
+            nothing on disk, so the wrong teardown cannot delete the other
+            backend's files -- it just silently leaves the model behind.
 
             The teardown itself runs on a worker thread with the same progress
             bar a convert build uses. It used to run inline on the GUI thread,
@@ -865,16 +865,24 @@ class NgVeri(QtWidgets.QWidget):
     def _remove_cosim_model(self, text, log=None):
         '''
             Tear down a d_cosim (Icarus) model: drop its symbol from
-            eSim_NgVeriCosim.kicad_sym + its NgVeriCosim/<name>.xml, remove the
-            compiled vvp, and -- crucially -- strip the model from modpath.lst.
+            eSim_NgVeriCosim.kicad_sym + its NgVeriCosim/<name>.xml, and delete
+            its build directory <DIGITAL_MODEL>/NgVeriCosim/<id>/ (sources,
+            connection_info.txt and the compiled vvp).
 
-            The d_cosim vvp and a legacy NgVeri build share ONE directory
-            (<DIGITAL_MODEL>/Ngveri/<model>/). If this model had ALSO been built
-            via the legacy flow it has a modpath.lst line; rmtree'ing the shared
-            dir here without dropping that line leaves a ghost entry that makes
-            cmpp abort every later Ngveri.cm build. So we always strip the line.
-            Still NO Ngveri.cm rebuild -- d_cosim stays light; the next legacy
-            build (and prune_modpathlst) reconciles ngspice's side.
+            Nothing here can touch the legacy NgVeri backend. The two used to
+            build into ONE directory per model name, so this teardown deleted
+            the Verilator backend's ifspec.ifs/cfunc.mod for a model of the
+            same name, left its compiled .o behind in the release tree, and
+            (because it therefore HAD to) rewrote the legacy modpath.lst. The
+            trees are separate now: this deletes only the d_cosim tree, never
+            reads or rewrites modpath.lst, and cannot leave the legacy backend
+            in a half-removed state.
+
+            The one exception is a model built BEFORE the split, whose vvp sits
+            in the old shared directory. That single FILE is removed; its
+            directory is not, because it may be a legacy NgVeri build dir.
+
+            No Ngveri.cm rebuild -- d_cosim never registered a code model.
 
             `log` is injected by the async removal pipeline (a logger whose GUI
             sink is a queued signal). The default -- writing straight to the
@@ -885,37 +893,31 @@ class NgVeri(QtWidgets.QWidget):
             log = CosimLog(self.entry_var[0])
         log.phase('REMOVE d_cosim model "' + str(text) + '"')
 
-        if not text or not str(text).strip():
+        model_id = CosimConfig.cosim_model_id(text)
+        if not model_id:
             log.warn("Refusing to remove a d_cosim model with a blank name.")
             return
 
         try:
             symbol = createkicadCosim.CosimSchematic()
-            symbol.init(text, "")
+            symbol.init(model_id, "")
             symbol.deleteKicadSymbol()
             log.info("Removed eSim_NgVeriCosim symbol + NgVeriCosim/" +
-                     str(text) + ".xml")
+                     model_id + ".xml")
         except Exception as err:
             log.warn("Could not remove d_cosim KiCad symbol for '" +
-                     str(text) + "': " + str(err))
+                     model_id + "': " + str(err))
 
-        # Drop the model from modpath.lst if present (guarded), so a model that
-        # was built by BOTH flows doesn't leave a build-breaking ghost behind.
-        self._strip_modpathlst(text, log)
-
-        vvp = CosimConfig.cosim_vvp_path(text)
-        if vvp:
-            build_dir = os.path.dirname(vvp)
-            # vvp = <DIGITAL_MODEL>/Ngveri/<text>/<text>, so the build dir's
-            # basename must equal the model name. A blank name would collapse it
-            # to the parent Ngveri/ dir -- bail rather than rmtree all models.
-            if os.path.basename(os.path.normpath(build_dir)) != str(text).strip():
-                log.warn("Refusing to remove unexpected d_cosim build dir: " +
-                         build_dir)
-                build_dir = None
+        # The d_cosim build tree. _safe_model_subdir re-derives it from the
+        # root so a name carrying a separator or resolving outside the root can
+        # never reach rmtree (defence in depth: cosim_model_id already rejects
+        # blanks, and cosim_build_dir joins one component).
+        build_dir = _safe_model_subdir(CosimConfig.cosim_build_root(),
+                                       model_id)
+        if build_dir is None:
+            log.warn("Refusing to remove unsafe d_cosim build dir for model "
+                     "name: " + repr(text))
         else:
-            build_dir = None
-        if build_dir:
             try:
                 shutil.rmtree(build_dir)
                 log.info("Removed build dir: " + build_dir)
@@ -924,7 +926,99 @@ class NgVeri(QtWidgets.QWidget):
             except OSError as err:
                 log.warn("Could not remove d_cosim build dir '" +
                          build_dir + "': " + str(err))
-        log.ok('d_cosim model "' + str(text) + '" removed.')
+
+        # Pre-split leftover: the vvp only, never its directory.
+        stale = CosimConfig.legacy_cosim_vvp_path(model_id)
+        if stale and os.path.isfile(stale):
+            try:
+                os.remove(stale)
+                log.info("Removed the pre-split vvp at " + stale)
+            except OSError as err:
+                log.warn("Could not remove the pre-split vvp at " + stale +
+                         ": " + str(err))
+
+        log.ok('d_cosim model "' + model_id + '" removed.')
+
+    def _remove_legacy_dirs(self, name, log):
+        '''
+            Delete both per-model directories of a legacy NgVeri model:
+
+              * source   <digital_home>/<model>            -- ifspec.ifs (what
+                cmpp reads) plus cfunc/sim_main, and
+              * release  <release>/src/xspice/icm/Ngveri/<model> -- the
+                compiled .o/.a, which otherwise get re-bundled and keep the
+                model answering in ngspice long after its symbol and
+                modpath.lst line are gone.
+
+            Both, always: deleting only the sources is the half-removal that
+            makes a model look deleted and behave alive.
+
+            The directory is resolved by its ACTUAL on-disk name
+            (_actual_subdir_name), because the name being removed comes from a
+            modpath line or a symbol block and need not match the directory's
+            case. rmtree on the wrong case silently does nothing on Linux, and
+            the model reappears in the next listing.
+        '''
+        for label, base in (
+                ("source", self.digital_home),
+                ("release", os.path.join(
+                    self.release_dir or "", "src/xspice/icm/Ngveri"))):
+            on_disk = _actual_subdir_name(base, name) or name
+            model_dir = _safe_model_subdir(base, on_disk)
+            if model_dir is None:
+                log.warn("Refusing to remove unsafe " + label +
+                         " dir for model name: " + repr(name))
+                continue
+            try:
+                shutil.rmtree(model_dir)
+                log.info("Removed " + label + " dir: " + model_dir)
+            except FileNotFoundError:
+                log.detail(label + " dir already absent: " + model_dir)
+            except OSError as err:
+                log.warn("Could not remove " + label + " dir '" +
+                         model_dir + "': " + str(err))
+
+    def _rescue_presplit_vvp(self, name, log):
+        '''
+            Migrate a pre-split d_cosim vvp out of the LEGACY build dir before
+            a legacy teardown deletes that directory.
+
+            Until the backends were given separate trees they built into one
+            directory per model name, so <DIGITAL_MODEL>/Ngveri/<id>/<id> could
+            be a d_cosim artifact sitting inside a Verilator build dir. Removing
+            the NgVeri model then destroyed a d_cosim model that is still listed
+            in KiCad, leaving a symbol that fails at simulation time with
+            nothing on screen to explain it.
+
+            Only fires when the model is still a live d_cosim model (its
+            NgVeriCosim param XML exists) and the canonical location is empty,
+            so it can neither resurrect a removed model nor overwrite a newer
+            build. Best-effort: a failure is logged and the teardown continues.
+        '''
+        model_id = CosimConfig.cosim_model_id(name)
+        if not model_id:
+            return False
+        if not os.path.isfile(os.path.join(self._xml_loc, 'NgVeriCosim',
+                                           model_id + '.xml')):
+            return False
+        stale = CosimConfig.legacy_cosim_vvp_path(model_id)
+        target = CosimConfig.cosim_vvp_target(model_id)
+        if not stale or not target or not os.path.isfile(stale):
+            return False
+        if os.path.exists(target):
+            return False
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.move(stale, target)
+        except OSError as err:
+            log.warn('Could not move the pre-split d_cosim vvp for "' +
+                     model_id + '" out of the NgVeri build dir: ' + str(err) +
+                     ' -- the d_cosim model will need rebuilding.')
+            return False
+        log.info('Moved the d_cosim vvp for "' + model_id + '" to its own '
+                 'tree (' + target + ') so this NgVeri removal cannot delete '
+                 'it.')
+        return True
 
     def _strip_modpathlst(self, text, log=None):
         '''
@@ -958,6 +1052,12 @@ class NgVeri(QtWidgets.QWidget):
             log = CosimLog(self.entry_var[0])
         log.phase('REMOVE NgVeri model "' + str(text) + '"')
 
+        # A model built before the two backends were given separate trees keeps
+        # its d_cosim vvp INSIDE this legacy build dir. Move it to the d_cosim
+        # tree before the rmtree below so tearing down the NgVeri model cannot
+        # take a still-live d_cosim model's only artifact with it.
+        self._rescue_presplit_vvp(text, log)
+
         # Drop the model from modpath.lst (guarded: absent => no crash)
         self._strip_modpathlst(text, log)
 
@@ -973,29 +1073,7 @@ class NgVeri(QtWidgets.QWidget):
             log.warn("Could not remove KiCad symbol for '" +
                      str(text) + "': " + str(err))
 
-        # Drop BOTH per-model dirs:
-        #   * source   <digital_home>/<model>  -- holds ifspec.ifs (what cmpp
-        #     reads) + cfunc/sim_main + the shared d_cosim vvp, and
-        #   * release  <release>/src/xspice/icm/Ngveri/<model>  -- holds the
-        #     compiled .o/.a that otherwise get re-bundled, keeping the model
-        #     answering in ngspice after its symbol/list line are gone.
-        for label, base in (
-                ("source", self.digital_home),
-                ("release", os.path.join(
-                    self.release_dir, "src/xspice/icm/Ngveri"))):
-            model_dir = _safe_model_subdir(base, text)
-            if model_dir is None:
-                log.warn("Refusing to remove unsafe " + label +
-                         " dir for model name: " + repr(text))
-                continue
-            try:
-                shutil.rmtree(model_dir)
-                log.info("Removed " + label + " dir: " + model_dir)
-            except FileNotFoundError:
-                log.detail(label + " dir already absent: " + model_dir)
-            except OSError as err:
-                log.warn("Could not remove " + label + " dir '" +
-                         model_dir + "': " + str(err))
+        self._remove_legacy_dirs(text, log)
 
         log.ok('NgVeri model "' + str(text) + '" files removed.')
         if rebuild:
@@ -1075,12 +1153,51 @@ class NgVeri(QtWidgets.QWidget):
     #  Backend switching (d_cosim <-> legacy NgVeri for the same model)
     # ------------------------------------------------------------------ #
     def _legacy_registered(self, name):
-        '''True if `name` has a legacy NgVeri line in modpath.lst.'''
+        '''
+            True if `name` exists as a legacy NgVeri model.
+
+            Every trace counts, not just the modpath.lst line: a build dir with
+            cmpp inputs, an eSim_Ngveri param XML, or a compiled release dir is
+            just as much "this name is already an NgVeri model", and each one
+            outlives an interrupted teardown or a build that died after
+            creating its directory. Checking modpath.lst alone is what let a
+            d_cosim build silently start on top of a live NgVeri model, since a
+            ghost line is pruned (prune_modpathlst) while the files stay.
+
+            Case-insensitive, because on Windows the filesystem is: a modpath
+            line reading "Counter" and a probe for "counter" name the same
+            directory there, and an exact compare would answer False while
+            rmtree happily deletes it.
+        '''
+        low = str(name).strip().lower()
+        if not low:
+            return False
         try:
             with open(self.digital_home + '/modpath.lst') as f:
-                return any(ln.strip() == str(name) for ln in f)
+                if any(ln.strip().lower() == low for ln in f):
+                    return True
         except OSError:
-            return False
+            pass
+        for base in (self.digital_home,
+                     os.path.join(self.release_dir or "",
+                                  "src/xspice/icm/Ngveri")):
+            try:
+                entries = os.listdir(base)
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.lower() != low:
+                    continue
+                if any(os.path.exists(os.path.join(base, entry, marker))
+                       for marker in _MODEL_DIR_MARKERS):
+                    return True
+        try:
+            if any(n.lower() == low + '.xml'
+                   for n in os.listdir(os.path.join(self._xml_loc, 'Ngveri'))):
+                return True
+        except OSError:
+            pass
+        return False
 
     def _purge_legacy_registration(self, name, log):
         '''
@@ -1089,6 +1206,10 @@ class NgVeri(QtWidgets.QWidget):
             so a d_cosim create stays independent of the Verilator toolchain.
             prune_modpathlst() keeps later legacy builds safe.
         '''
+        # Same pre-split rescue as _remove_ngveri_model: this runs while
+        # switching a model TO d_cosim, so a vvp left in the legacy dir by an
+        # older eSim must survive the rmtree below.
+        self._rescue_presplit_vvp(name, log)
         self._strip_modpathlst(name, log)
         try:
             symbol = createkicad.AutoSchematic()
@@ -1098,23 +1219,7 @@ class NgVeri(QtWidgets.QWidget):
         except Exception as err:
             log.warn("Could not remove eSim_Ngveri symbol for '" +
                      str(name) + "': " + str(err))
-        for label, base in (
-                ("source", self.digital_home),
-                ("release", os.path.join(
-                    self.release_dir, "src/xspice/icm/Ngveri"))):
-            d = _safe_model_subdir(base, name)
-            if d is None:
-                log.warn("Refusing to remove unsafe " + label +
-                         " dir for model name: " + repr(name))
-                continue
-            try:
-                shutil.rmtree(d)
-                log.info("Removed " + label + " dir: " + d)
-            except FileNotFoundError:
-                pass
-            except OSError as err:
-                log.warn("Could not remove " + label + " dir '" +
-                         d + "': " + str(err))
+        self._remove_legacy_dirs(name, log)
 
     def _confirm_switch(self, name, from_backend, to_backend):
         '''
@@ -1144,11 +1249,11 @@ class NgVeri(QtWidgets.QWidget):
             must then abort the build).
         '''
         log = CosimLog(self.entry_var[0])
-        low = str(name).lower()
+        low = CosimConfig.cosim_model_id(name)
+        if not low:
+            return True
         if target == "ngveri":
-            cosim_xml = os.path.join(
-                self._xml_loc, 'NgVeriCosim', low + '.xml')
-            if not os.path.isfile(cosim_xml):
+            if not self._cosim_registered(low):
                 return True
             if not self._confirm_switch(low, "d_cosim", "NgVeri (Verilator)"):
                 log.warn('Switch cancelled -- "' + low + '" kept as a d_cosim '
@@ -1159,21 +1264,37 @@ class NgVeri(QtWidgets.QWidget):
             self._remove_cosim_model(low)
             return True
         elif target == "cosim":
-            if not (self._legacy_registered(name) or
-                    self._legacy_registered(low)):
+            if not self._legacy_registered(low):
                 return True
-            reg = name if self._legacy_registered(name) else low
-            if not self._confirm_switch(reg, "NgVeri (Verilator)", "d_cosim"):
-                log.warn('Switch cancelled -- "' + str(reg) + '" kept as a '
+            if not self._confirm_switch(low, "NgVeri (Verilator)", "d_cosim"):
+                log.warn('Switch cancelled -- "' + low + '" kept as a '
                          'NgVeri model. d_cosim build aborted.')
                 return False
-            log.phase('SWITCH backend: NgVeri -> d_cosim for "' +
-                      str(reg) + '"')
+            log.phase('SWITCH backend: NgVeri -> d_cosim for "' + low + '"')
             log.info("Removing existing NgVeri version first "
                      "(no Ngveri.cm rebuild).")
-            self._purge_legacy_registration(reg, log)
+            self._purge_legacy_registration(low, log)
             return True
         return True
+
+    def _cosim_registered(self, name):
+        '''
+            True if `name` exists as a d_cosim model: a param XML under
+            NgVeriCosim/, or a build dir in the d_cosim tree. Mirrors
+            _legacy_registered -- both must count every trace, or a build
+            starts on top of a live model of the other backend.
+        '''
+        model_id = CosimConfig.cosim_model_id(name)
+        if not model_id:
+            return False
+        try:
+            if any(n.lower() == model_id + '.xml' for n in
+                   os.listdir(os.path.join(self._xml_loc, 'NgVeriCosim'))):
+                return True
+        except OSError:
+            pass
+        build_dir = CosimConfig.cosim_build_dir(model_id)
+        return bool(build_dir) and os.path.isdir(build_dir)
 
     def _lint_off_path(self):
         '''Path to library/tlv/lint_off.txt, anchored to the install root.'''

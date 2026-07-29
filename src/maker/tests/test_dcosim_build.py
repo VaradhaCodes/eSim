@@ -189,3 +189,123 @@ def test_a_module_with_no_port_file_still_builds(cosim):
     model, recorded = cosim
     write_source(model, "`timescale 1ns/1ps\nmodule counter; endmodule\n")
     assert model.build_cosim() != "Error"
+    assert recorded.calls[0]["srcs"] == [
+        os.path.abspath(os.path.join(model.modelpath, "counter.v"))]
+
+
+# --------------------------------------------------------------------------- #
+# The x-as-1 wrapper
+#
+# adc_bridge emits x between in_low and in_high, Icarus counts 0->x and x->1 as
+# two posedges, and the design is clocked twice per analog edge. NgVeri never
+# sees it, because its generated C reads anything that is not a definite 0 as a
+# 1. The wrapper makes d_cosim do the same, so the netlist can stay exactly as
+# eSim 2.5 wrote it. See docs/NGVERI_ACCURACY.md D1.
+# --------------------------------------------------------------------------- #
+def test_the_design_is_compiled_behind_a_generated_wrapper(cosim):
+    model, recorded = cosim
+    src = write_source(model,
+                       "`timescale 1ns/1ps\nmodule counter; endmodule\n")
+    write_ports(model, ["clk input 1", "q output 1"])
+    assert model.build_cosim() != "Error"
+
+    srcs = recorded.calls[0]["srcs"]
+    # Wrapper first: it must be the root module VVP reports, and iverilog
+    # roots whatever nothing instantiates.
+    assert os.path.basename(srcs[0]) == \
+        ModelGeneration.COSIM_TOP_MODULE + ".v"
+    assert srcs[1] == src
+
+
+def test_the_wrapper_reads_x_as_one_per_bit(cosim):
+    model, recorded = cosim
+    write_source(model, "`timescale 1ns/1ps\nmodule counter; endmodule\n")
+    write_ports(model, ["clk input 1", "data input 8", "q output 4"])
+    assert model.build_cosim() != "Error"
+
+    text = recorded.source_text
+    # === (case equality), so the comparison itself cannot return x, and one
+    # assign per BIT, because each bit carries its own state -- a vector-wide
+    # == would poison the whole port.
+    assert "=== 1'b0) ? 1'b0 : 1'b1" in text
+    assert "gi < 9" in text          # clk + data[8], every input bit
+    # Outputs are passed straight through: nothing on the way out is x.
+    assert ".q(esim_d_out[3:0])" in text
+
+
+def test_the_wrapper_has_exactly_one_port_per_direction(cosim):
+    """ivlng discovers ports by walking vpi_iterate(vpiPort, top) and gives
+    each a running bit offset, so which node reaches which port depends on the
+    order VVP reports them in -- which is not declaration order, and was seen
+    to change between compiles of the same source. One vector per direction
+    leaves a single port at offset 0 and pure arithmetic after it."""
+    model, recorded = cosim
+    write_source(model, "`timescale 1ns/1ps\nmodule counter; endmodule\n")
+    write_ports(model, ["clk input 1", "rst input 1", "q output 1"])
+    assert model.build_cosim() != "Error"
+
+    text = recorded.source_text
+    assert "module %s (%s, %s);" % (
+        ModelGeneration.COSIM_TOP_MODULE,
+        ModelGeneration.IN_PORT, ModelGeneration.OUT_PORT) in text
+    assert text.count("input  [") == 1
+    assert text.count("output [") == 1
+    # Node j of a group is bit (width - 1 - j): big-endian, icarus_shim.c:97.
+    assert ".clk(esim_d_in_lv[1])" in text
+    assert ".rst(esim_d_in_lv[0])" in text
+
+
+def test_the_wrapper_carries_the_designs_own_timescale(cosim):
+    """ivlng derives its tick length from the simulation's global time unit,
+    so a wrapper with a different timescale could change how fast the design
+    advances -- the D3 failure, reintroduced by the D1 fix."""
+    model, recorded = cosim
+    write_source(model, "`timescale 1us/1ps\nmodule counter; endmodule\n")
+    write_ports(model, ["clk input 1", "q output 1"])
+    assert model.build_cosim() != "Error"
+
+    assert recorded.source_text.startswith("`timescale 1us/1ps")
+
+
+def test_a_sharpened_timescale_reaches_the_wrapper_too(cosim):
+    model, recorded = cosim
+    write_source(model, "`timescale 1ms/1ms\nmodule counter; endmodule\n")
+    write_ports(model, ["clk input 1", "q output 1"])
+    assert model.build_cosim() != "Error"
+
+    assert recorded.source_text.startswith("`timescale 1ms/1ps")
+
+
+# --------------------------------------------------------------------------- #
+# cosim_wrapper_source in isolation
+# --------------------------------------------------------------------------- #
+def test_nodes_map_to_bits_big_endian_in_netlist_order():
+    """The netlist lists the d_in nodes then the d_out nodes, each group in
+    port-declaration order, and node j of a group is bit (width - 1 - j)."""
+    text = ModelGeneration.cosim_wrapper_source(
+        [("m", "m", [("q", "output", 1), ("clk", "input", 1),
+                     ("d", "input", 4), ("r", "output", 2)])])
+    assert "input  [4:0] esim_d_in;" in text     # clk + d[4]
+    assert "output [2:0] esim_d_out;" in text    # q + r[2]
+    assert ".clk(esim_d_in_lv[4])" in text       # first input node -> top bit
+    assert ".d(esim_d_in_lv[3:0])" in text
+    assert ".q(esim_d_out[2])" in text           # first output node -> top bit
+    assert ".r(esim_d_out[1:0])" in text
+
+
+def test_several_blocks_take_disjoint_slices():
+    """Two placements of one block get their own bits, in schematic order."""
+    ports = [("clk", "input", 1), ("q", "output", 1)]
+    blocks = [("a1", "counter", ports), ("a2", "counter", ports)]
+    text = ModelGeneration.cosim_wrapper_source(blocks)
+
+    assert "counter u_a1 (" in text and "counter u_a2 (" in text
+    assert ".clk(esim_d_in_lv[1])" in text and ".q(esim_d_out[1])" in text
+    assert ".clk(esim_d_in_lv[0])" in text and ".q(esim_d_out[0])" in text
+    assert ModelGeneration.port_widths(blocks) == (2, 2)
+
+
+def test_connection_info_lines_that_are_not_ports_are_skipped():
+    assert ModelGeneration.parse_connection_info(
+        "\n\tclk   input   1\ngarbage\n\tq  output  x\n\tz input 0\n") == \
+        [("clk", "input", 1)]
