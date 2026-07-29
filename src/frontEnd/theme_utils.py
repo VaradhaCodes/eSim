@@ -876,6 +876,32 @@ def transition_active():
     return _TRANSITION_ACTIVE
 
 
+# Set ESIM_THEME_DEBUG=1 to trace why a flip dissolved or cut, per window, into
+# ~/.esim/theme_debug.log. Off by default and costs one env lookup per flip.
+_DEBUG = bool(os.environ.get("ESIM_THEME_DEBUG"))
+
+
+def _dbg(message):
+    if not _DEBUG:
+        return
+    try:
+        path = os.path.join(os.path.expanduser("~"), ".esim", "theme_debug.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("%.3f %s\n" % (
+                QtCore.QDateTime.currentMSecsSinceEpoch() / 1000.0, message))
+    except Exception:
+        pass
+
+
+def _dbg_name(widget):
+    try:
+        return "%s/%s %dx%d" % (type(widget).__name__, widget.objectName(),
+                                widget.width(), widget.height())
+    except RuntimeError:
+        return "<deleted>"
+
+
 class _ThemeFadeOverlay(QtWidgets.QWidget):
     """Cross-dissolves a snapshot of the old theme into one of the new.
 
@@ -1066,6 +1092,7 @@ def _begin_theme_transition(app, animate=True):
     theme apply can never strand a window with painting switched off.
     """
     state = {"windows": [], "finished": False}
+    _dbg("--- begin transition animate=%s ---" % animate)
     for tlw in app.topLevelWidgets():
         try:
             if not tlw.isVisible() or tlw.isMinimized():
@@ -1078,7 +1105,11 @@ def _begin_theme_transition(app, animate=True):
         if animate and not _has_web_surface(tlw):
             try:
                 _discard_overlay(getattr(tlw, "_esim_theme_overlay", None))
+                started = QtCore.QElapsedTimer()
+                started.start()
                 pixmap = tlw.grab()
+                _dbg("  %s before-grab null=%s %dms" % (
+                    _dbg_name(tlw), pixmap.isNull(), started.elapsed()))
                 if not pixmap.isNull():
                     overlay = _ThemeFadeOverlay(tlw, pixmap)
                     overlay._esim_owner = tlw
@@ -1090,8 +1121,11 @@ def _begin_theme_transition(app, animate=True):
                     # be served until after it, leaving the window uncovered
                     # for the frame the new theme lands in.
                     overlay.repaint()
-            except Exception:
+            except Exception as exc:
+                _dbg("  %s before-grab RAISED %r" % (_dbg_name(tlw), exc))
                 overlay = None
+        elif animate:
+            _dbg("  %s skipped: web surface" % _dbg_name(tlw))
         try:
             tlw.setUpdatesEnabled(False)
             # Tells the icon loop in _apply_theme_impl to leave this window's
@@ -1132,6 +1166,7 @@ def _finish_theme_transition(state, fade=True):
     if state.get("finished"):
         return
     state["finished"] = True
+    _dbg("--- finish fade=%s (%d windows) ---" % (fade, len(state["windows"])))
     global _TRANSITION_ACTIVE
     _TRANSITION_ACTIVE = False
     for tlw, overlay in state["windows"]:
@@ -1152,8 +1187,14 @@ def _finish_theme_transition(state, fade=True):
                 # The overlay has to step out of the way for the grab: it
                 # renders children too, and it is holding the old theme.
                 overlay.hide()
+                started = QtCore.QElapsedTimer()
+                started.start()
                 after = tlw.grab()
-                if not _snapshot_is_degenerate(after):
+                degenerate = _snapshot_is_degenerate(after)
+                _dbg("  %s after-grab null=%s degenerate=%s %dms" % (
+                    _dbg_name(tlw), after.isNull(), degenerate,
+                    started.elapsed()))
+                if not degenerate:
                     overlay.set_after(after)
                 overlay.show()
                 overlay.raise_()
@@ -1169,9 +1210,13 @@ def _finish_theme_transition(state, fade=True):
             continue
         if overlay is not None and fade and overlay._after is not None:
             # Caption lands mid-dissolve.
+            _dbg("  %s -> FADE" % _dbg_name(tlw))
             _sync_titlebar_to_fade(tlw)
             _fade_out_overlay(overlay)
         else:
+            _dbg("  %s -> CUT (overlay=%s fade=%s after=%s)" % (
+                _dbg_name(tlw), overlay is not None, fade,
+                overlay is not None and overlay._after is not None))
             # Hard cut (motion off, grab failed, watchdog): the caption has to
             # switch with it, or the window keeps the outgoing theme's bar.
             try:
@@ -1294,6 +1339,8 @@ def _apply_theme_impl(app):
     # or an accent change repolishes just the same but is not what the eye is
     # tracking, and freezing paint through those would cost responsiveness on
     # the zoom slider for nothing.
+    _dbg("apply: once=%s was_dark=%s is_dark=%s enabled=%s" % (
+        _THEME_APPLIED_ONCE, was_dark, is_dark, _transition_enabled(app)))
     if _THEME_APPLIED_ONCE and was_dark != is_dark and _transition_enabled(app):
         try:
             from frontEnd import motion as _motion
