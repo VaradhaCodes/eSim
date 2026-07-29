@@ -57,7 +57,7 @@ jobs:
             unzip -l "$zip" | grep -qE "/$junk\$" \
               && { echo "::error::$junk leaked into $zip"; exit 1; }
           done
-          for junk in windows code docs patches scripts; do
+          for junk in windows code docs scripts; do
             unzip -l "$zip" | grep -qE "/$junk/" \
               && { echo "::error::$junk/ leaked into $zip"; exit 1; }
           done
@@ -68,6 +68,15 @@ jobs:
             unzip -l "$zip" | grep -qE "/$need\$" \
               || { echo "::error::$need missing from $zip"; exit 1; }
           done
+          # patches/ngspice IS shipped, and this is the check that says so.
+          # install-nghdl.sh applies every patches/ngspice/*.patch to the
+          # extracted simulator tree (apply_esim_patches), and it does that
+          # from the release tree, not from git -- but it skips silently when
+          # the directory is absent. So an empty patches/ here does not fail
+          # the install, it ships a simulator missing the d_cosim
+          # operating-point fix. Fail the release instead.
+          unzip -l "$zip" | grep -qE "/patches/ngspice/.+\.patch\$" \
+            || { echo "::error::patches/ngspice/*.patch missing from $zip -- the simulator would ship unpatched"; exit 1; }
           echo "OK: $zip is clean and complete"
 
       - name: Publish the Release
