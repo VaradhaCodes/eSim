@@ -267,7 +267,14 @@ class Source(QtWidgets.QWidget):
                     label = QtWidgets.QLabel(line[4])
                     pwlgrid.addWidget(label, self.row, 0)
                     self.entry_var[self.count] = QtWidgets.QLineEdit()
-                    self.entry_var[self.count].setMaximumWidth(150)
+                    # Every other source type takes a single short scalar, so
+                    # 150px is enough there. A pwl value is a whole
+                    # "t1 v1 t2 v2 ..." sequence, which ran off the end of a
+                    # 150px box while typing; give this one field a wider box.
+                    # Only the cap is raised: the field still takes whatever
+                    # width is left over, so a narrow window shrinks it rather
+                    # than forcing a horizontal scrollbar.
+                    self.entry_var[self.count].setMaximumWidth(700)
                     pwlgrid.addWidget(self.entry_var[self.count], self.row, 1)
                     self.entry_var[self.count].setText("")
 
@@ -281,6 +288,8 @@ class Source(QtWidgets.QWidget):
                                     .setText(child[0].text)
                     except Exception:
                         pass
+                    # Show a restored value from its start, not its tail.
+                    self.entry_var[self.count].setCursorPosition(0)
 
                     self.row = self.row + 1
                     self.end = self.count
