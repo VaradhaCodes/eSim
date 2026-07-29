@@ -44,15 +44,26 @@
 
 nghdl="nghdl-simulator"
 
-# Apply every eSim patch under <repo>/patches to the extracted simulator tree.
+# Apply every simulator patch shipped beside this script to the extracted
+# tree. Two layouts carry the same patches and both must work: a standalone
+# NGHDL checkout keeps them next to the tarball they patch (patches/ngspice),
+# and inside an eSim tree NGHDL sits in nghdl/, one level below eSim's own
+# patches/ngspice. First layout that exists wins.
 # Idempotent: a patch that is already applied is detected with a reverse dry
 # run and skipped, so re-running the installer over a patched tree is a no-op.
 # Missing patch directory is not an error (a source drop may not carry one);
 # a patch that neither applies nor is already applied IS an error, because
 # silently building an unpatched simulator is how a fixed bug comes back.
 apply_esim_patches() {
-    local dir="$src_dir/../patches/ngspice" p
-    [ -d "$dir" ] || return 0
+    local dir="" cand p
+    for cand in "$src_dir/patches/ngspice" "$src_dir/../patches/ngspice"; do
+        if [ -d "$cand" ]; then
+            dir="$cand"
+            break
+        fi
+    done
+    [ -n "$dir" ] || return 0
+    log "Applying simulator patches from $dir"
     for p in "$dir"/*.patch; do
         [ -f "$p" ] || continue
         if patch -p1 --dry-run --silent <"$p" >/dev/null 2>&1; then
@@ -287,9 +298,9 @@ installNGHDL() {
     #
     # One delta is NOT baked in and is applied here, so that it stays a
     # readable diff for review rather than an opaque change inside a binary
-    # tarball: patches/0002 makes a d_cosim block evaluate at the operating
-    # point, so it agrees with an equivalent NgVeri model at t=0. See the
-    # patch header and docs/NGVERI_ACCURACY.md.
+    # tarball: patches/ngspice/0002 makes a d_cosim block evaluate at the
+    # operating point, so it agrees with an equivalent NgVeri model at t=0.
+    # See the patch header and patches/ngspice/README.md.
     apply_esim_patches
 
     # Verilator runtime objects for Ngveri.cm: the icm makefile links

@@ -12,6 +12,13 @@ They live here rather than being baked into the tarball so that each change to
 the simulator stays a readable diff that a reviewer can check, instead of an
 opaque difference inside a binary blob.
 
+The [NGHDL repository](https://github.com/VaradhaCodes/nghdl) carries the same
+directory next to the tarball it patches, so that a standalone NGHDL install
+(`install-nghdl.sh --install`, without eSim) is patched too. `nghdl/install-
+nghdl.sh` looks for `patches/ngspice` beside itself first and falls back to
+this directory, which is what an eSim checkout hits. Change a patch in one
+place and mirror it to the other.
+
 Do not put patches for any other tree here. `patches/` itself holds patches
 against the eSim/ngspice-ghdl Python sources, which are a different tree with
 different paths; mixing them would make every patch fail to apply.
