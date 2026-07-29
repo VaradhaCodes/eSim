@@ -275,6 +275,30 @@ endmodule
 """
 
 
+#: The "// --- name.v ---" separator get_design_code() puts in front of each
+#: block, as a pattern that matches a whole run of them at the top of a block.
+_BLOCK_BANNER_RE = re.compile(r'\A(?:[ \t]*//[ \t]*---[ \t].*?[ \t]---[ \t]*\r?\n)+')
+
+
+def _strip_block_banner(code):
+    """``code`` without any separator banners already at the top of it.
+
+    get_design_code() labels each block with ``// --- <tab name> ---`` so that
+    a multi-file design stays readable once the blocks are concatenated. That
+    labelled text is also what collect_into_bus() pushes into the DesignBus,
+    which autosaves it to the Verilog library, which loads it back into the
+    editor -- so every trip round that loop used to add another banner line to
+    the user's own source. Real designs came back with six copies of the same
+    comment stacked at the top of the file.
+
+    Stripping first makes the labelling idempotent while keeping it. A leading
+    comment of the same shape that the user wrote themselves is absorbed into
+    the banner for that block, which is a fair trade against unbounded growth
+    in a file they own.
+    """
+    return _BLOCK_BANNER_RE.sub('', code or '')
+
+
 class HdlEditor(QsciScintilla):
     """In-memory Verilog/VHDL editor tab built on QsciScintilla.
 
@@ -2168,7 +2192,7 @@ class VerilogVerifier(QtWidgets.QWidget):
 
     def get_design_code(self):
         code_blocks = []
-        
+
         # Fallback if hierarchy is empty (e.g. startup glitches)
         if self.hierarchy_list.count() == 0 and hasattr(self, 'design_views'):
             for editor in self.design_views:
@@ -2179,10 +2203,12 @@ class VerilogVerifier(QtWidgets.QWidget):
         for i in range(self.hierarchy_list.count()):
             name = self.hierarchy_list.item(i).data(QtCore.Qt.ItemDataRole.UserRole)
             # Find the corresponding tab
-            for j in range(self.editor_tabs.count()): 
+            for j in range(self.editor_tabs.count()):
                 if self.editor_tabs.tabText(j) == name and self.editor_tabs.widget(j) in getattr(self, 'design_views', []):
                     editor = self.editor_tabs.widget(j)
-                    code_blocks.append(f"// --- {name} ---\n{editor.toPlainText()}\n")
+                    code_blocks.append(
+                        f"// --- {name} ---\n"
+                        f"{_strip_block_banner(editor.toPlainText())}\n")
                     break
         return "\n".join(code_blocks)
 

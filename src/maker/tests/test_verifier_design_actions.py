@@ -102,3 +102,50 @@ def test_read_text_falls_back_on_non_utf8(tmp_path):
     text = VerilogVerifier._read_text(str(f))
     assert "module m" in text
     assert "Jos" in text
+
+
+# --- block banners do not stack ------------------------------------------
+#
+# get_design_code() labels each block with "// --- <tab name> ---" so a
+# multi-file design stays readable once concatenated. That labelled text is
+# also what collect_into_bus() pushes into the DesignBus, which autosaves it
+# and loads it back into the editor -- so each trip used to add another banner
+# to the user's own source. Real library files reached seven stacked copies.
+
+def test_strip_block_banner_removes_a_whole_run():
+    from maker.VerilogVerifier import _strip_block_banner
+    stacked = ("// --- a.v ---\n" * 3) + "module m;\nendmodule\n"
+    assert _strip_block_banner(stacked) == "module m;\nendmodule\n"
+
+
+def test_strip_block_banner_handles_a_renamed_block():
+    from maker.VerilogVerifier import _strip_block_banner
+    stacked = "// --- old.v ---\n// --- new.v ---\nmodule m;\nendmodule\n"
+    assert _strip_block_banner(stacked) == "module m;\nendmodule\n"
+
+
+@pytest.mark.parametrize("code", [
+    "module m;\nendmodule\n",                        # nothing to strip
+    "`timescale 1ns/1ps\n// --- a.v ---\nmodule m;\n",  # not at the top
+    "//------------\nmodule m;\n",                   # an ordinary divider
+    "",
+])
+def test_strip_block_banner_leaves_other_code_alone(code):
+    from maker.VerilogVerifier import _strip_block_banner
+    assert _strip_block_banner(code) == code
+
+
+def test_get_design_code_is_idempotent_through_the_editor(verifier):
+    """Feeding get_design_code()'s own output back into the tab -- which is
+    what the DesignBus autosave/reload loop does -- must not grow the file."""
+    verifier.close_tab(0)
+    verifier.add_module_tab("only.v", "module only; endmodule")
+    verifier.auto_detect_hierarchy()
+
+    editor = verifier.design_views[-1]
+    for _ in range(5):
+        code = verifier.get_design_code()
+        editor.setText(code)
+
+    assert code.count("// --- only.v ---") == 1
+    assert "module only" in code
