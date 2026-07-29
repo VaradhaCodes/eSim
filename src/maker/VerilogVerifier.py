@@ -27,21 +27,25 @@ from codeEditor import lexers, theme
 # instead of maintaining a second, PATH-only locator that misses prefix builds.
 try:
     from . import CosimConfig
+    from . import verilog_library
     from .hdl import icarus, jobs
     from .hdl.vcd import parse_vcd_for_plot, to_csv
     from .hdl.ports import (autodump_source, dump_file_name, extract_ports,
                             find_modules, generate_stub_testbench, has_dump,
                             has_finish, is_self_contained_testbench,
-                            order_modules, strip_comments, testbench_matches)
+                            order_modules, strip_comments, testbench_matches,
+                            top_module_name)
 except ImportError:  # launched with src/ on sys.path (absolute-import style)
     from maker import CosimConfig
+    from maker import verilog_library
     from maker.hdl import icarus, jobs
     from maker.hdl.vcd import parse_vcd_for_plot, to_csv
     from maker.hdl.ports import (autodump_source, dump_file_name,
                                  extract_ports, find_modules,
                                  generate_stub_testbench, has_dump, has_finish,
                                  is_self_contained_testbench, order_modules,
-                                 strip_comments, testbench_matches)
+                                 strip_comments, testbench_matches,
+                                 top_module_name)
 
 # Wall-clock caps for the toolchain so a runaway testbench (e.g. a clock with
 # no $finish) can't hang the worker thread indefinitely. Generous: this tool's
@@ -548,18 +552,33 @@ class PinnedTabBar(QtWidgets.QTabBar):
         # snap-back.
         limit = self.tabRect(self._pinned()).left() - width
         self._ghost_x = max(0, min(cursor_x - self._grab_dx, max(0, limit)))
-        # Swap on centre-crosses-centre, against the immediate neighbour only.
+        # Swap once the LEADING EDGE of the carried tab passes the neighbour's
+        # midpoint, against the immediate neighbour only.
+        #
+        # Not the carried tab's centre against the neighbour's centre: those
+        # are (width_self + width_other) / 2 apart, but the ghost is clamped so
+        # it cannot cross the pinned tab, and the clamp bites first whenever the
+        # carried tab is the WIDER of the two. A tab with a long label could
+        # then never be dragged past a shorter last neighbour at all -- the
+        # drag simply did nothing, with no way to tell why. Leading edge vs
+        # midpoint is reachable in both directions whatever the widths.
+        #
         # Hit-testing the cursor instead (tabAt) thrashes: right after a swap
         # the pointer is still inside the tab it just displaced, so the pair
-        # would trade places again on the very next mouse move.
-        centre = self._ghost_x + width // 2
+        # would trade places again on the very next mouse move. Measuring from
+        # the ghost keeps that property -- after a swap the carried tab has
+        # fully covered its neighbour, so the reverse test cannot also be true.
         current = self._drag_index
-        if (current + 1 < self._pinned()
-                and centre > self.tabRect(current + 1).center().x()):
-            self._swap_with(current + 1)
-        elif (current > 0
-                and centre < self.tabRect(current - 1).center().x()):
-            self._swap_with(current - 1)
+        if current + 1 < self._pinned():
+            nxt = self.tabRect(current + 1)
+            if self._ghost_x + width > nxt.x() + nxt.width() // 2:
+                self._swap_with(current + 1)
+                self.update()
+                return
+        if current > 0:
+            prev = self.tabRect(current - 1)
+            if self._ghost_x < prev.x() + prev.width() // 2:
+                self._swap_with(current - 1)
         self.update()
 
     def _swap_with(self, target):
@@ -1082,7 +1101,8 @@ class VerilogVerifier(QtWidgets.QWidget):
         self.editor_tabs.tabBar().tabMoved.connect(self._on_tab_moved)
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.tabCloseRequested.connect(self.close_tab)
-        self.editor_tabs.tabBarDoubleClicked.connect(self.rename_tab)
+        # Double-click used to open the rename dialog. Tab names come from the
+        # code now, so there is nothing here to rename by hand.
         # Track the last-active design tab so auto_generate_tb knows which module to target
         self._last_active_design_idx = None
         def _on_tab_changed(idx):
@@ -1427,6 +1447,11 @@ class VerilogVerifier(QtWidgets.QWidget):
     def add_module_tab(self, name=None, content="", filepath=None):
         if not name:
             name = f"module_{len(self.design_views) + 1}.v"
+        # The code decides the label, not the other way round: a tab called
+        # design.v holding `module counter` taught users that the two names
+        # were separate things they had to reconcile, which is exactly the
+        # confusion that made renaming a tab look like it should do something.
+        name = self._module_tab_name(content) or name
         name = self._unique_tab_name(name)
 
         # Name the editor after the tab so the lexer (Verilog vs VHDL) is chosen
@@ -1442,7 +1467,39 @@ class VerilogVerifier(QtWidgets.QWidget):
         tb_index = self.editor_tabs.count() - 1 if self.editor_tabs.count() > 0 else 0
         self.editor_tabs.insertTab(tb_index, editor, name)
         self.editor_tabs.setCurrentWidget(editor)
+        editor.setToolTip(
+            "Named after the module in this file. Rename the module in the "
+            "code and the tab follows.")
+        # Keep following the code as it is edited, exactly as the testbench tab
+        # already does (update_tb_tab_name).
+        editor.textChanged.connect(
+            lambda e=editor: self.update_module_tab_name(e))
 
+        self.update_hierarchy_list()
+
+    @staticmethod
+    def _module_tab_name(code):
+        """``<top module>.v`` for ``code``, or "" when nothing parses yet.
+
+        Name only (top_module_name), not extract_ports: this runs on every
+        keystroke, and hdlparse's port pass is heavy enough to be felt as
+        typing lag on a large design."""
+        name = top_module_name(code or "")
+        return f"{name}.v" if name else ""
+
+    def update_module_tab_name(self, editor):
+        """Re-label a design tab after the module it now contains.
+
+        Silent while the design is being typed and has no readable module --
+        the tab simply keeps its current name rather than flickering through
+        half-written ones."""
+        idx = self.editor_tabs.indexOf(editor)
+        if idx < 0 or idx == self.editor_tabs.count() - 1:
+            return                          # gone, or the pinned testbench
+        wanted = self._module_tab_name(editor.toPlainText())
+        if not wanted or wanted == self.editor_tabs.tabText(idx):
+            return
+        self.editor_tabs.setTabText(idx, self._unique_tab_name(wanted))
         self.update_hierarchy_list()
 
     def _on_tab_moved(self, _from, _to):
@@ -1490,25 +1547,21 @@ class VerilogVerifier(QtWidgets.QWidget):
                 self._last_active_design_idx -= 1
         self.update_hierarchy_list()
         
-    def rename_tab(self, index):
-        if index == self.editor_tabs.count() - 1:
-            return # Don't rename testbench
-        current_name = self.editor_tabs.tabText(index)
-        new_name, ok = QtWidgets.QInputDialog.getText(self, "Rename Module", "Enter new module name:", text=current_name)
-        if ok and new_name.strip():
-            self.editor_tabs.setTabText(index, new_name.strip())
-            self.update_hierarchy_list()
+    # NOTE: there is deliberately no "Rename Module" action any more. It only
+    # ever called setTabText -- it did not touch the module in the code, the
+    # file on disk, or the model the design builds into -- so renaming a tab
+    # looked like it had worked and changed nothing at all. Tab labels are now
+    # derived from the code (update_module_tab_name), which makes renaming the
+    # module in the source the one way to rename anything, and makes it rename
+    # everything.
 
     def show_tab_context_menu(self, pos):
         index = self.editor_tabs.tabBar().tabAt(pos)
         if index >= 0 and index < self.editor_tabs.count() - 1: # Prevent operations on testbench
             menu = QtWidgets.QMenu(self)
-            rename_action = menu.addAction("Rename Module")
             delete_action = menu.addAction("Delete Module")
             action = menu.exec(self.editor_tabs.tabBar().mapToGlobal(pos))
-            if action == rename_action:
-                self.rename_tab(index)
-            elif action == delete_action:
+            if action == delete_action:
                 self.close_tab(index)
 
     def hierarchy_single_clicked(self, item):
@@ -1520,33 +1573,23 @@ class VerilogVerifier(QtWidgets.QWidget):
                 break
 
     def hierarchy_double_clicked(self, item):
-        name = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        # Find index in editor_tabs
-        for i in range(self.editor_tabs.count()):
-            if self.editor_tabs.tabText(i) == name:
-                self.rename_tab(i)
-                break
+        """Double-click focuses the module's tab (it used to open the rename
+        dialog that could not actually rename anything)."""
+        self.hierarchy_single_clicked(item)
 
     def show_hierarchy_context_menu(self, pos):
         item = self.hierarchy_list.itemAt(pos)
         if item:
             name = item.data(QtCore.Qt.ItemDataRole.UserRole)
             menu = QtWidgets.QMenu(self)
-            rename_action = menu.addAction("Rename Module")
             delete_action = menu.addAction("Delete Module")
             action = menu.exec(self.hierarchy_list.mapToGlobal(pos))
-            if action:
+            if action == delete_action:
                 # Find index in editor_tabs
-                index = -1
                 for i in range(self.editor_tabs.count()):
                     if self.editor_tabs.tabText(i) == name:
-                        index = i
+                        self.close_tab(i)
                         break
-                if index != -1:
-                    if action == rename_action:
-                        self.rename_tab(index)
-                    elif action == delete_action:
-                        self.close_tab(index)
 
     def move_hierarchy_item(self, item, direction):
         row = self.hierarchy_list.row(item)
@@ -2763,6 +2806,27 @@ class VerilogVerifier(QtWidgets.QWidget):
         self._rendered_content = code
         self.log(f"Loaded design: {name}")
 
+    def save_testbench_to_library(self):
+        """Keep the testbench in the same folder as the design it drives.
+
+        Deliberately NOT part of collect_into_bus, which must stay purely
+        in-memory. Ownership inside a design folder is split and never
+        overlaps: the DesignBus writes ``<module>.v`` (which already contains
+        every design tab, concatenated by get_design_code), and this writes
+        ``tb_<module>.v``. The untouched default template is skipped, so a
+        design the user never wrote a testbench for does not get somebody
+        else's boilerplate filed next to it."""
+        if self.bus is None:
+            return ""
+        module = verilog_library.top_module(self.bus.get_content())
+        if not module:
+            return ""
+        tb = self.tb_view.toPlainText()
+        if not tb.strip() or tb.strip() == DEFAULT_TB.strip():
+            return ""
+        return verilog_library.write_text(
+            verilog_library.sibling_path(module, "tb_%s.v" % module), tb)
+
     def collect_into_bus(self):
         """Push the design under test into the shared design (in memory; NO
         disk). Called when this stage is left. Skips the untouched default
@@ -2781,10 +2845,11 @@ class VerilogVerifier(QtWidgets.QWidget):
         module_name, _ = extract_ports(code)
         if not module_name:
             return
+        # Just the in-memory push. The bus gives the design its home in the
+        # Verilog library off its own autosave -- named from the module, and
+        # re-derived every time the module changes, which the old
+        # "set a path once, only if there isn't one" rule never did. That is
+        # what left a design permanently filed under the first name it ever
+        # had, however many times it was replaced afterwards.
         self.bus.set_content(code)
-        if not self.bus.path:
-            dest = os.path.join(
-                os.path.expanduser("~"), "eSim-Workspace",
-                "verified_verilog", f"{module_name}.v")
-            self.bus.set_path(dest)
         self._rendered_content = code

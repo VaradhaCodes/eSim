@@ -7,6 +7,7 @@ Convert), and the external-edit watch is echo-proof -- it ignores any disk
 event whose bytes match what we last wrote, so our own writes never nag.
 """
 import hashlib
+import os
 
 import pytest
 
@@ -109,8 +110,24 @@ def test_materialize_noop_when_fresh(bus, tmp_path):
     assert f.stat().st_mtime_ns == mtime
 
 
-def test_materialize_without_path_returns_empty(bus):
+def test_materialize_gives_a_pathless_design_a_home(bus):
+    """A design authored in eSim and never saved must still reach Convert.
+
+    It used to return "" here -- no path, so nothing written, so Convert
+    reported "No Verilog File Chosen" and the design could not be built at all
+    without first writing a correctly-named .v in some other editor. Now the
+    autosave files it under its own module name and materialize hands back
+    that path."""
     bus.set_content("module a; endmodule")
+    home = bus.materialize()
+    assert home.endswith(os.path.join("VerilogLibrary", "a", "a.v"))
+    assert os.path.isfile(home)
+
+
+def test_materialize_still_returns_empty_for_an_unnameable_design(bus):
+    """Nothing to name it after -> nothing written, and no crash. The design
+    stays in memory; Convert's parse failure is the error that helps."""
+    bus.set_content("// just a comment, no module here\n")
     assert bus.materialize() == ""
 
 

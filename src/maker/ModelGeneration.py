@@ -47,7 +47,16 @@ from .hdl.procs import kill_process_tree
 from .CosimLogger import CosimLog
 from .model_teardown import (
     _ensure_modpath, _append_modpath_line, _prune_modpath)
+from .hdl.ports import find_modules, top_module_name
 import hdlparse.verilog_parser as vlog
+
+
+#: A top module called this carries no identity of its own. It is what
+#: sandpiper emits for EVERY TLV design, and the conventional name of a
+#: hand-written wrapper, so it can never distinguish one model from another.
+#: resolve_identity() falls back to the file name for it, which is also what
+#: keeps verilogfile()'s `top` -> stem rewrite meaningful.
+GENERIC_TOP_MODULE = 'top'
 
 
 #: ``1ns`` / ``100 ps`` -- a Verilog time literal, as magnitude and unit.
@@ -337,6 +346,18 @@ class ModelGeneration(QtWidgets.QWidget):
         # rewrites fname .tlv->.sv but preserves this stem, so setting it once
         # here is safe.
         self.model_stem = os.path.splitext(self.fname)[0]
+        # The module verilator should elaborate as top, in its declared case.
+        # Until resolve_identity() reads the source this mirrors the stem --
+        # which is exactly right for the fallback paths (TLV, a design whose
+        # top really is called `top`), because those rewrite the module TO the
+        # stem in the copied source.
+        self.top_module = self.model_stem
+        # Whether verilogfile() should still rewrite a standalone `top` token
+        # in a .sv to the file stem. True preserves the historical behaviour
+        # for every caller that never resolves an identity; resolve_identity()
+        # clears it once the source names its own top, where rewriting `top`
+        # would corrupt an unrelated identifier in the user's code.
+        self._rename_top_to_stem = True
         print("Verilog/SystemVerilog/TL Verilog filename is : ", self.fname)
 
         # Diagnostic tally for the whole pipeline (see _classify_stderr): what
@@ -722,6 +743,88 @@ class ModelGeneration(QtWidgets.QWidget):
             self.line.emit('<span style="' + style + '">' +
                            html.escape(ln) + '</span>')
 
+    def resolve_identity(self, prefer=None):
+        '''
+            Name this model after the top MODULE in the source, not after the
+            file that happens to hold it. Call once, before anything derives a
+            path or a prompt from the name; returns "No Error"/"Error".
+
+            ``prefer`` names a module to build instead of the automatically
+            chosen top, and is ignored unless the source actually defines it.
+            The automatic choice (the module no sibling instantiates) is right
+            for essentially every design, but it is a heuristic, and a user who
+            can see it guessed wrong needs a way to say so that does not
+            involve rearranging their code.
+
+            eSim copies the design into its own build tree, so the copy can be
+            called whatever the pipeline needs -- the user's own file is never
+            read for its name again, and never renamed. That is what removes
+            the old "File name and module name are not same" refusal: there is
+            no longer anything for the two names to disagree about.
+
+            Three cases fall back to the file stem, which is the historical
+            behaviour and still correct:
+
+            * ``.tlv`` -- sandpiper has not run yet, and what it emits is
+              always ``module top``. There is no authored name to read.
+            * a top module literally called ``top`` (see GENERIC_TOP_MODULE).
+            * a source no parser can read a module out of. Reporting THAT is
+              verilogParse's job, where the message can talk about ports;
+              failing here would only trade one confusing error for another.
+
+            The name is lowercased because every downstream consumer already
+            treats the model id as lowercase (the KiCad symbol, the d_cosim
+            vvp id, modpath.lst). ``top_module`` keeps the declared case, for
+            the one consumer that needs it: verilator's --top-module.
+        '''
+        ext = os.path.splitext(self.fname)[1]
+        if ext == ".tlv":
+            return "No Error"
+
+        try:
+            with open(self.file, 'r', errors='replace') as fh:
+                code = fh.read()
+        except OSError as err:
+            Dialogs.critical(
+                None, "Error Message",
+                "<b>Error: could not read '" + str(self.file) + "': " +
+                str(err) + "</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            self.obj_Appconfig.print_error(
+                "NgVeri stopped: unreadable source " + str(self.file))
+            return "Error"
+
+        module = top_module_name(code)
+        if prefer and prefer in find_modules(code):
+            module = prefer
+        if not module or module == GENERIC_TOP_MODULE:
+            return "No Error"
+
+        stem = module.lower()
+        if not self._stem_is_valid(stem):
+            # A Verilog identifier is already [A-Za-z_]\w*, so this only fires
+            # for an escaped identifier (\bus[0] ). Name the module, not the
+            # file: the file name has nothing to do with the problem anymore.
+            Dialogs.critical(
+                None, "Error Message",
+                "<b>Error: '" + str(module) + "' cannot be used as a model "
+                "name. Use only letters, digits and underscore, and do not "
+                "start with a digit -- the module name becomes a C function, "
+                "an HDL entity and a make target. Rename the module in your "
+                "code and try again.</b>",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            self.obj_Appconfig.print_error(
+                "NgVeri stopped: invalid module name '" + str(module) + "'")
+            return "Error"
+
+        self.model_stem = stem
+        self.fname = stem + ext
+        self.top_module = module
+        # The source names its own top, so the `top` -> stem rewrite must not
+        # run: here it would rename an unrelated identifier in the user's code.
+        self._rename_top_to_stem = False
+        return "No Error"
+
     def verilogfile(self):
         '''
             Reading the file and performing operations and
@@ -769,9 +872,14 @@ class ModelGeneration(QtWidgets.QWidget):
             with open(self.modelpath + self.fname, 'r') as read_verilog:
                 verilog_data = read_verilog.readlines()
         is_sv = os.path.splitext(self.fname)[1] == ".sv"
+        # Only when the identity CAME from the file name (TLV output, or a
+        # design whose top really is `top`). When resolve_identity() read a
+        # real module name out of the source, `top` in that source is some
+        # other identifier and renaming it would corrupt the user's design.
+        rename_top = is_sv and self._rename_top_to_stem
         with open(self.modelpath + self.fname, 'w') as f:
             for item in verilog_data:
-                if is_sv:
+                if rename_top:
                     # Rename the SV top module to the file's stem. A bare
                     # substring replace mangled any identifier CONTAINING
                     # "top" (stop, laptop, top_val); a word-boundary regex
@@ -890,16 +998,25 @@ class ModelGeneration(QtWidgets.QWidget):
                                 p.name, p.mode, p.port_number))
                     break
         if matched is None:
+            # NOT a name mismatch any more -- resolve_identity() names the
+            # model after this very source, so the only way to get here is
+            # hdlparse failing to read a module the identity parser could.
+            # Say that, instead of sending the user off to rename a file that
+            # has nothing to do with it.
+            found = ", ".join(str(m.name) for m in vlog_mods)
             Dialogs.critical(
                 None,
                 "Error Message",
-                "<b>Error: File name and module \
-                name are not same. Please ensure that they are same</b>",
+                "<b>Error: could not read the ports of module '" +
+                str(modname) + "'.</b><br/><br/>"
+                "eSim parsed this design as: " + (found or "(nothing)") +
+                ".<br/>Check the module header and port declarations for a "
+                "syntax error, then try again.",
                 QtWidgets.QMessageBox.StandardButton.Ok)
 
             self.obj_Appconfig.print_info(
-                'NgVeri stopped due to file \
-                name and module name not matching error')
+                "NgVeri stopped: could not read the ports of module '" +
+                str(modname) + "'")
             return "Error"
         if make_symbol:
             modelname = str(matched.name)
@@ -1952,6 +2069,20 @@ beyond the %d instances this model was built for; skipping it.\\n",
             "-LDFLAGS", "-static", "--x-assign", "fast",
             "--x-initial", "fast", "--noassert", "--bbox-sys", "-Wall",
         ] + wno + [
+            # Pin the generated class/file prefix to OUR model stem. Verilator
+            # names its output after the top module as DECLARED, so a design
+            # whose module is `NAND_Gate` produced VNAND_Gate.mk while the make
+            # step below (and sim_main's #include) looked for Vnand_gate.mk --
+            # which a case-insensitive Windows filesystem hides and Linux does
+            # not. With --prefix the two cannot drift apart.
+            "--prefix", "V" + model,
+            # Elaborate the SAME module the ifspec was generated from. The
+            # generated sim_main drives the ports eSim parsed off our top; if
+            # verilator picks a different root out of a multi-module file --
+            # which it is free to do -- those ports do not exist and the build
+            # fails somewhere far less obvious. Naming it makes the two agree
+            # by construction.
+            "--top-module", self.top_module,
             "--cc", "--exe", "--no-MMD", "--Mdir", ".", "-CFLAGS", "-fPIC",
             "-output-split", "0", "sim_main_" + model + ".cpp", "--autoflush",
             "-DBSV_RESET_FIFO_HEAD", "-DBSV_RESET_FIFO_ARRAY", self.fname,

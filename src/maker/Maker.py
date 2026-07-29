@@ -28,15 +28,18 @@
 
 # importing the files and libraries
 import hdlparse.verilog_parser as vlog
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration import Dialogs
 from configuration import paths
 from configuration.Appconfig import Appconfig
+from frontEnd.theme_utils import zoom_px, on_zoom_changed
 import os
 import re
 import shutil
 from os.path import expanduser
 from .DesignBus import DesignBus
+from . import verilog_library
+from .hdl.ports import top_module_name
 from .VerilogVerifier import HdlEditor
 home = expanduser("~")
 
@@ -130,15 +133,22 @@ class Maker(QtWidgets.QWidget):
     def _render_from_bus(self, text):
         """Show the shared design's current text + path. Guarded against the
         editor's own textChanged echoing back into the bus."""
+        previous = self.verilogfile
         self.verilogfile = self.bus.path if self.bus is not None else ""
         self._applying = True
         try:
             if self.entry_var[1].toPlainText() != text:
                 self.entry_var[1].setText(text)
             self.entry_var[0].setText(
-                self.verilogfile or "(no file yet — use Save to create one)")
+                self.verilogfile or
+                "(saved automatically once your design names a module)")
         finally:
             self._applying = False
+        # The design moved to a different file -- either it was just named for
+        # the first time, or its module was renamed and it followed. Re-read
+        # the library so the list and its "current" marker keep up.
+        if self.verilogfile != previous:
+            self.refresh_library_list()
 
     def closeEvent(self, event):
         if self.bus is not None and self._owns_bus:
@@ -155,7 +165,11 @@ class Maker(QtWidgets.QWidget):
             )[0]
         )
         if self.verilogfile == "":
-            self.verilogfile = self.entry_var[0].text()
+            # Cancelled: fall back to the design already open. Read it from the
+            # bus, NOT from the path label -- when no design has a file yet
+            # that label holds placeholder prose, which used to be handed on as
+            # if it were a path.
+            self.verilogfile = self.bus.path if self.bus is not None else ""
 
         if self.verilogfile == "":
             reply = Dialogs.critical(
@@ -179,20 +193,112 @@ class Maker(QtWidgets.QWidget):
 
         # Loading routes through the shared design; the bus reads the file,
         # mirrors the slot, arms the external-edit watch, and renders the editor.
-        self.bus.load_from_disk(self.verilogfile)
+        # imported=True: this is a file of the user's own, so eSim takes a
+        # library copy and never writes back to the original unless asked.
+        self.bus.load_from_disk(self.verilogfile, imported=True)
 
     def load_verilog(self, filepath):
-        self.bus.load_from_disk(filepath)
+        self.bus.load_from_disk(filepath, imported=True)
+
+    NEW_MODULE_STUB = (
+        "module {name} (\n"
+        "    input  clk,\n"
+        "    input  rst,\n"
+        "    output reg out\n"
+        ");\n\n"
+        "  always @(posedge clk) begin\n"
+        "    if (rst)\n"
+        "      out <= 0;\n"
+        "    else\n"
+        "      out <= ~out;\n"
+        "  end\n\n"
+        "endmodule\n"
+    )
+
+    def new_module(self):
+        '''
+            Start a new design from a named stub.
+
+            Before this there was no way to begin a design inside eSim at all:
+            the editor opened empty, Save could not create a file (it had
+            nothing to name one after and reported "please check if it is
+            chosen"), and Convert had no path to build. The only working route
+            was to write a correctly-named .v somewhere else and open it, which
+            made the built-in editor decorative.
+        '''
+        if self.bus is None:
+            return
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New Verilog Module", "Module name:", text="my_module")
+        if not ok:
+            return
+        name = name.strip()
+        if not re.fullmatch(r'[A-Za-z_]\w*', name):
+            Dialogs.warning(
+                self, "New Verilog Module",
+                "<b>'" + name + "' is not a usable module name.</b><br/><br/>"
+                "Use letters, digits and underscore, and do not start with a "
+                "digit -- the module name becomes the model name, a C "
+                "function and a make target.",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+            return
+        # start_new flushes the design being replaced, so the one on screen is
+        # safely on disk before it is swapped out.
+        self.bus.start_new(self.NEW_MODULE_STUB.format(name=name))
+        self.refresh_library_list()
 
     # This function is used to save the edited file in eSim
     def save(self):
+        '''
+            Persist the design now.
+
+            Rarely needed -- the design autosaves into the Verilog library
+            under its own module name -- so this exists for the two cases
+            autosave deliberately does not cover: a design with no parseable
+            module yet (ask where to put it), and a design imported from a file
+            of the user's own (mirror the edit back to that file, which nothing
+            else in eSim ever writes).
+        '''
         if self.bus is None:
             return
         self.bus.set_content(self.entry_var[1].toPlainText())
-        if not self.bus.save_to_disk():
+        target = self.bus.flush_autosave() or self.bus.save_to_disk()
+        if not target:
+            target = self.save_as()
+            if not target:
+                return
+        origin = self.bus.mirror_to_origin()
+        if origin:
+            self.obj_Appconfig.print_info(
+                'Saved ' + target + ' (and back to ' + origin + ')')
+        else:
+            self.obj_Appconfig.print_info('Saved ' + target)
+        self.refresh_library_list()
+
+    def save_as(self):
+        '''
+            Ask where to put the design and write it there. Returns the path,
+            or "" if the user cancelled. From then on the design lives where
+            they chose -- autosave writes there and stops renaming it after the
+            module, since that home was a decision, not a default.
+        '''
+        if self.bus is None:
+            return ""
+        module = verilog_library.top_module(self.bus.get_content())
+        start = self.bus.path or os.path.join(
+            verilog_library.library_root(), (module or "design") + ".v")
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Verilog Design", start,
+            "Verilog Files (*.v *.sv);;All Files (*)")
+        if not path:
+            return ""
+        written = self.bus.save_to_disk(path)
+        if not written:
             Dialogs.critical(
                 self, "Error Message",
-                "Error in saving verilog file. Please check if it is chosen.")
+                "Could not write <b>" + path + "</b>. Check that the folder "
+                "exists and is writable.")
+        return written
 
     # This is used to run the makerchip-app
     def runmakerchip(self):
@@ -233,8 +339,6 @@ class Maker(QtWidgets.QWidget):
                     text = code
                     filename = '.'.join(
                         self.verilogfile.split('.')[:-1]) + ".tlv"
-                    file = os.path.basename('.'.join(
-                        self.verilogfile.split('.')[:-1]))
                     # Word-boundary strip of the standalone wire/reg keywords;
                     # the old spaced-substring replace still mangled tokens at
                     # line-start or tab-adjacent (out_reg, wire_sel).
@@ -242,26 +346,32 @@ class Maker(QtWidgets.QWidget):
                     vlog_ex = vlog.VerilogExtractor()
                     vlog_mods = vlog_ex.extract_objects_from_source(code)
 
-                    # Find the module matching the file name up front. An empty
-                    # or failed parse, or a name mismatch, is now reported
-                    # clearly here instead of crashing later on a loop variable
-                    # referenced after its loop.
+                    # Wrap the design's TOP module, whatever the file is
+                    # called. This used to require the file name and the module
+                    # name to match, which meant pasting a design in and
+                    # pressing this button could only ever fail. An empty or
+                    # failed parse is still reported clearly here rather than
+                    # crashing later on a loop variable referenced after its
+                    # loop.
+                    top_name = top_module_name(text)
                     module = None
                     for m in vlog_mods:
-                        if m.name.lower() == file.lower():
+                        if top_name and m.name == top_name:
                             module = m
                             break
+                    if module is None and vlog_mods:
+                        module = vlog_mods[-1]
                     if module is None:
                         Dialogs.critical(
                             self,
                             "Error Message",
-                            "<b>Error: File name and module \
-                            name are not same. Please \
-                            ensure that they are same.</b>",
+                            "<b>Error: no Verilog module could be read from "
+                            "this design.</b><br/><br/>Check it for a syntax "
+                            "error, then try again.",
                             QtWidgets.QMessageBox.StandardButton.Ok)
                         self.obj_Appconfig.print_info(
-                            'NgVeri stopped due to file \
-name and module name not matching error')
+                            'Makerchip stopped: no parseable module in the '
+                            'current design')
                         return
 
                     with open(
@@ -277,48 +387,34 @@ Verilog Code Starts Here:\n''' + \
 Starts here:\n\tmodule top(input \
 logic clk, input logic reset, input logic [31:0] cyc_cnt, \
 output logic passed, output logic failed);\n'''
-                    print(file)
-                    for m in vlog_mods:
-                        if m.name.lower() == file.lower():
-                            for p in m.ports:
-                                if str(
-                                        p.name) != "clk" and str(
-                                        p.name) != "reset" and str(
-                                        p.name) != "cyc_cnt" and str(
-                                        p.name) != "passed" and str(
-                                        p.name) != "failed":
-                                    string += '\t\tlogic ' + p.data_type\
-                                     + " " + p.name + ";//" + p.mode + "\n"
+                    print(module.name)
+                    # The three passes below all describe the SAME module, so
+                    # they read it straight off `module` instead of re-scanning
+                    # vlog_mods for a file-name match each time.
+                    reserved = ("clk", "reset", "cyc_cnt", "passed", "failed")
+                    for p in module.ports:
+                        if str(p.name) not in reserved:
+                            string += '\t\tlogic ' + p.data_type\
+                                + " " + p.name + ";//" + p.mode + "\n"
                     string += "//The $random() can be replaced \
 if user wants to assign values\n"
-                    for m in vlog_mods:
-                        if m.name.lower() == file.lower():
-                            for p in m.ports:
-                                if str(
-                                        p.mode) == "input" or str(
-                                        p.mode) == "inout":
-                                    if str(
-                                            p.name) != "clk" and str(
-                                            p.name) != "reset" and str(
-                                            p.name) != "cyc_cnt" and str(
-                                            p.name) != "passed" and str(
-                                            p.name) != "failed":
-                                        string += '\t\tassign ' + p.name\
-                                         + " = " + "$random();\n"
+                    for p in module.ports:
+                        if str(p.mode) in ("input", "inout") \
+                                and str(p.name) not in reserved:
+                            string += '\t\tassign ' + p.name\
+                                + " = " + "$random();\n"
 
-                    for m in vlog_mods:
-                        if m.name.lower() == file.lower():
-                            string += '\t\t' + m.name + " " + m.name + '('
-                            i = 0
-                            for p in m.ports:
-                                i = i + 1
-                                string += "."+p.name+"("+p.name+")"
-                                if i == len(m.ports):
-                                    string += ");\n\t\n\\TLV\n//\
+                    string += '\t\t' + module.name + " " + module.name + '('
+                    i = 0
+                    for p in module.ports:
+                        i = i + 1
+                        string += "."+p.name+"("+p.name+")"
+                        if i == len(module.ports):
+                            string += ");\n\t\n\\TLV\n//\
 Add \\TLV here if desired\
                                      \n\\SV\nendmodule\n\n"
-                                else:
-                                    string += ", "
+                        else:
+                            string += ", "
                     # Write the .tlv only now that generation has fully
                     # succeeded, so a failure/return above never leaves a
                     # half-written, corrupt file on disk.
@@ -396,7 +492,17 @@ Please check if verilog file is chosen.")
         self.optionsgroupbtn.addButton(self.verifier_btn)
         self.verifier_btn.clicked.connect(self.open_verifier)
 
+        self.newoption = QtWidgets.QPushButton("New Verilog Module")
+        self.newoption.setToolTip(
+            "Start a new design. It is saved automatically under its own "
+            "module name in your Verilog Library.")
+        self.optionsgroupbtn.addButton(self.newoption)
+        self.newoption.clicked.connect(self.new_module)
+
         self.addoptions = QtWidgets.QPushButton("Add Top Level Verilog Model")
+        self.addoptions.setToolTip(
+            "Open a .v file of your own. eSim works on a copy in your Verilog "
+            "Library; your original file is only written when you press Save.")
         self.optionsgroupbtn.addButton(self.addoptions)
         self.addoptions.clicked.connect(self.addverilog)
 
@@ -419,7 +525,7 @@ Please check if verilog file is chosen.")
         # Lay the buttons out in contiguous, equally-stretched columns. Taller
         # min-height gives the labels room to breathe (the old 32px buttons made
         # the centred text look cramped on wide cards).
-        action_btns = [self.verifier_btn, self.addoptions,
+        action_btns = [self.verifier_btn, self.newoption, self.addoptions,
                        self.saveoption, self.runoptions]
         if not makerchipTOSAccepted(False):
             self.acceptTOS = QtWidgets.QPushButton("Accept Makerchip TOS")
@@ -476,7 +582,7 @@ Please check if verilog file is chosen.")
     # This function adds the other parts of widget like text box
     def creategroup(self):
         self.trbox = QtWidgets.QGroupBox()
-        self.trbox.setTitle(".tlv file")
+        self.trbox.setTitle("Design")
         # Stack the fields vertically with section headers above each one.
         # The old two-column grid put the labels in column 0 next to a tall
         # editor in column 1, so ".tlv code" floated halfway down the left edge
@@ -486,15 +592,18 @@ Please check if verilog file is chosen.")
         self.trgrid.setSpacing(6)
         self.trbox.setLayout(self.trgrid)
 
-        path_header = QtWidgets.QLabel("Path to .tlv file")
+        path_header = QtWidgets.QLabel("Saved to")
         path_header.setProperty("cssClass", "caps")
         self.trgrid.addWidget(path_header)
 
         self.count = 0
         self.entry_var[self.count] = QtWidgets.QLabel()
         # Placeholder so the row isn't a blank gap before the file is saved.
+        # It says what WILL happen rather than telling the user to press Save,
+        # which used to be advice they could not act on -- Save could not
+        # create a file for a design that had never had one.
         self.entry_var[self.count].setText(
-            "(no file yet — use Save to create one)")
+            "(saved automatically once your design names a module)")
         self.entry_var[self.count].setProperty("cssClass", "muted")
         self.trgrid.addWidget(self.entry_var[self.count])
         self.count += 1
@@ -502,7 +611,7 @@ Please check if verilog file is chosen.")
         # Border/title styling comes from the global Aurora QGroupBox QSS so
         # the group reads with the same gradient hairline as the rest of eSim.
 
-        code_header = QtWidgets.QLabel(".tlv code")
+        code_header = QtWidgets.QLabel("Verilog code")
         code_header.setProperty("cssClass", "caps")
         self.trgrid.addSpacing(4)
         self.trgrid.addWidget(code_header)
@@ -512,7 +621,15 @@ Please check if verilog file is chosen.")
         # exposes toPlainText/setText aliases so existing call sites are
         # unchanged.
         self.entry_var[self.count] = HdlEditor("design.v")
-        self.trgrid.addWidget(self.entry_var[self.count], 1)
+        # Editor on the left, the library on the right: the designs already
+        # saved are what a user reaches for most often after "what am I editing
+        # right now", so they belong on the same screen rather than behind a
+        # file dialog.
+        editor_row = QtWidgets.QHBoxLayout()
+        editor_row.setSpacing(12)
+        editor_row.addWidget(self.entry_var[self.count], 1)
+        editor_row.addWidget(self.createLibraryPanel())
+        self.trgrid.addLayout(editor_row, 1)
         # Author edits stream into the shared design (see _on_editor_changed).
         self.entry_var[self.count].textChanged.connect(self._on_editor_changed)
         self.count += 1
@@ -521,3 +638,116 @@ Please check if verilog file is chosen.")
         # the group reads with the same gradient hairline as the rest of eSim.
 
         return self.trbox
+
+    # ------------------------------------------------------------------ #
+    #  My Verilog Designs -- the library panel
+    #
+    #  Named to keep it distinct from Convert's "Remove Verilog Models…",
+    #  which removes COMPILED models from ngspice. This lists source designs.
+    # ------------------------------------------------------------------ #
+    def createLibraryPanel(self):
+        panel = QtWidgets.QWidget()
+        column = QtWidgets.QVBoxLayout(panel)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+
+        caption = QtWidgets.QLabel("MY VERILOG DESIGNS")
+        caption.setProperty("cssClass", "caps")
+        column.addWidget(caption)
+
+        self.libraryList = QtWidgets.QListWidget()
+        self.libraryList.setToolTip(
+            "Every design you have written in eSim, newest first.\n"
+            "Double-click to open one.")
+        self.libraryList.itemDoubleClicked.connect(self.open_from_library)
+        self.libraryList.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.libraryList.customContextMenuRequested.connect(
+            self.show_library_context_menu)
+        column.addWidget(self.libraryList, 1)
+
+        self.libraryFolderBtn = QtWidgets.QPushButton("Open folder")
+        self.libraryFolderBtn.setToolTip(
+            "Show the library folder in your file manager")
+        self.libraryFolderBtn.clicked.connect(self.open_library_folder)
+        column.addWidget(self.libraryFolderBtn)
+
+        # The buttons and rows here take their metrics from the QSS, which
+        # scales with zoom, so the column that holds them has to as well --
+        # same reason as the NgVeri control column.
+        on_zoom_changed(panel, lambda z, w=panel: w.setFixedWidth(zoom_px(210, z)))
+        self.refresh_library_list()
+        return panel
+
+    def refresh_library_list(self):
+        '''Re-read the library from disk and show it, newest design first.'''
+        widget = getattr(self, 'libraryList', None)
+        if widget is None:
+            return
+        current = self.bus.path if self.bus is not None else ""
+        widget.clear()
+        for name, path, _mtime in verilog_library.list_designs():
+            item = QtWidgets.QListWidgetItem(name)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, path)
+            item.setToolTip(path)
+            if current and os.path.normcase(path) == os.path.normcase(current):
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            widget.addItem(item)
+        if widget.count() == 0:
+            empty = QtWidgets.QListWidgetItem(
+                "(nothing saved yet)")
+            empty.setFlags(QtCore.Qt.ItemFlag.NoItemFlags)
+            widget.addItem(empty)
+
+    def open_from_library(self, item):
+        path = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if not path or self.bus is None:
+            return
+        # NOT imported=True: this file already IS the library copy, so there is
+        # no original elsewhere to mirror back to.
+        self.bus.load_from_disk(path)
+        self.refresh_library_list()
+
+    def show_library_context_menu(self, pos):
+        item = self.libraryList.itemAt(pos)
+        if item is None:
+            return
+        path = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if not path:
+            return
+        menu = QtWidgets.QMenu(self)
+        open_action = menu.addAction("Open")
+        remove_action = menu.addAction("Remove from library…")
+        action = menu.exec(self.libraryList.mapToGlobal(pos))
+        if action == open_action:
+            self.open_from_library(item)
+        elif action == remove_action:
+            self.remove_from_library(item.text())
+
+    def remove_from_library(self, name):
+        reply = Dialogs.question(
+            self, "Remove design",
+            "Delete <b>" + str(name) + "</b> and everything in its folder "
+            "(its testbench and history too)?<br/><br/>"
+            "This does not remove any model already built from it.",
+            QtWidgets.QMessageBox.StandardButton.Yes |
+            QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No)
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        if not verilog_library.remove_design(name):
+            Dialogs.warning(
+                self, "Remove design",
+                "Could not remove <b>" + str(name) + "</b>.",
+                QtWidgets.QMessageBox.StandardButton.Ok)
+        self.refresh_library_list()
+
+    def open_library_folder(self):
+        root = verilog_library.library_root()
+        try:
+            os.makedirs(root, exist_ok=True)
+        except OSError:
+            pass
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(root))

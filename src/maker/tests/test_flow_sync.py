@@ -149,7 +149,10 @@ def test_author_binds_and_renders_the_bus():
 
 def test_old_watchdog_machinery_removed():
     src = _read(_MAKER)
+    # Exact definitions, not prefixes: "def refresh" also matches any honest
+    # later method whose name merely starts that way (refresh_library_list),
+    # which would make this guard fail for a reason it does not care about.
     for dead in ("toggle_flag", "import watchdog", ".Observer(",
-                 "def refresh", "def refresh_change"):
+                 "def refresh(", "def refresh_change("):
         assert dead not in src, \
             f"dead disk-as-IPC machinery still in Maker.py: {dead!r}"

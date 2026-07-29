@@ -26,14 +26,38 @@ def _hierarchy_names(w):
             for i in range(w.hierarchy_list.count())]
 
 
-def test_duplicate_tab_names_are_disambiguated(verifier):
-    # Default design tab is 'design.v'; loading another 'design.v' must not
-    # collide (the hierarchy + serialiser key on the tab label).
-    verifier.add_module_tab("design.v", "module a; endmodule")
+def test_tab_is_named_after_the_module_it_holds(verifier):
+    """Tab labels come from the code, not from whatever the caller called the
+    tab. The default tab used to read 'design.v' while holding `module
+    counter`, which taught users that the file name and the module name were
+    two things they had to keep in step by hand."""
+    assert verifier.editor_tabs.tabText(0) == "counter.v"
+    verifier.add_module_tab("ignored.v", "module nand_gate; endmodule")
     names = [verifier.editor_tabs.tabText(i)
              for i in range(verifier.editor_tabs.count())]
-    assert names.count("design.v") == 1
-    assert "design (2).v" in names
+    assert "nand_gate.v" in names
+    assert "ignored.v" not in names
+
+
+def test_renaming_the_module_renames_its_tab(verifier):
+    """The one way to rename anything is to rename the module in the code --
+    and then it renames everything, tab included."""
+    editor = verifier.design_views[0]
+    editor.setText("module half_adder(input a, output s);\nendmodule\n")
+    assert verifier.editor_tabs.tabText(
+        verifier.editor_tabs.indexOf(editor)) == "half_adder.v"
+
+
+def test_duplicate_tab_names_are_disambiguated(verifier):
+    # Two tabs really can define the same module (the same design pasted
+    # twice). The hierarchy + serialiser key on the tab label, so the second
+    # one must not silently take the first one's identity.
+    verifier.add_module_tab("a.v", "module a; endmodule")
+    verifier.add_module_tab("a.v", "module a; endmodule")
+    names = [verifier.editor_tabs.tabText(i)
+             for i in range(verifier.editor_tabs.count())]
+    assert names.count("a.v") == 1
+    assert "a (2).v" in names
 
 
 def test_auto_detect_orders_parent_before_child(verifier):

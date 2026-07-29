@@ -38,8 +38,11 @@ def _press_and_move(bar, index, dx, steps=6):
     start = bar.tabRect(index).center()
     QTest.mousePress(bar, LEFT, pos=start)
     x = start.x()
-    for _ in range(steps):
-        x += dx // steps
+    for step in range(1, steps + 1):
+        # Interpolate to the exact endpoint rather than adding dx // steps each
+        # time: the floor lost up to `steps` pixels, so a drag calculated to
+        # just clear the neighbour's centre could fall a few pixels short.
+        x = start.x() + round(dx * step / steps)
         QTest.mouseMove(bar, QtCore.QPoint(x, start.y()))
     return QtCore.QPoint(x, start.y())
 
@@ -47,6 +50,20 @@ def _press_and_move(bar, index, dx, steps=6):
 def _drag_tab(bar, index, dx, steps=6):
     end = _press_and_move(bar, index, dx, steps)
     QTest.mouseRelease(bar, LEFT, pos=end)
+
+
+def _past_neighbour(bar, a, b):
+    """Drag distance that carries tab ``a``'s leading edge past tab ``b``'s
+    midpoint -- the swap threshold, computed from real geometry.
+
+    Derived rather than assumed from a tab width: the old
+    ``bar.tabRect(1).width()`` only cleared the threshold while the two labels
+    happened to be about equally wide, so it broke the moment a label got
+    longer."""
+    a_rect, b_rect = bar.tabRect(a), bar.tabRect(b)
+    target = b_rect.x() + b_rect.width() // 2
+    lead = a_rect.x() + a_rect.width()
+    return (target - lead) + 4
 
 
 def _tab_labels(w):
@@ -92,11 +109,11 @@ def test_the_drag_is_painted_by_the_bar_not_by_qt(verifier):
 def test_dragging_with_the_mouse_reorders_the_tabs(verifier):
     verifier.add_module_tab("second.v", "module second; endmodule")
     bar = verifier.editor_tabs.tabBar()
-    assert _tab_labels(verifier)[:2] == ["design.v", "second.v"]
+    assert _tab_labels(verifier)[:2] == ["counter.v", "second.v"]
 
-    _drag_tab(bar, 0, bar.tabRect(1).width())
+    _drag_tab(bar, 0, _past_neighbour(bar, 0, 1))
 
-    assert _tab_labels(verifier)[:2] == ["second.v", "design.v"]
+    assert _tab_labels(verifier)[:2] == ["second.v", "counter.v"]
 
 
 def test_a_drag_does_not_thrash_back_and_forth(verifier):
@@ -107,10 +124,10 @@ def test_a_drag_does_not_thrash_back_and_forth(verifier):
     moves = []
     bar.tabMoved.connect(lambda f, t: moves.append((f, t)))
 
-    _drag_tab(bar, 0, bar.tabRect(1).width(), steps=12)
+    _drag_tab(bar, 0, _past_neighbour(bar, 0, 1), steps=12)
 
     assert len(moves) == 1
-    assert _tab_labels(verifier)[:2] == ["second.v", "design.v"]
+    assert _tab_labels(verifier)[:2] == ["second.v", "counter.v"]
 
 
 def test_a_drag_to_the_far_right_stops_at_the_testbench(verifier):
@@ -126,15 +143,15 @@ def test_a_drag_to_the_far_right_stops_at_the_testbench(verifier):
 def test_dragging_a_design_tab_reorders_tabs_and_design_views(verifier):
     verifier.add_module_tab("second.v", "module second; endmodule")
     before = _tab_labels(verifier)
-    assert before[:2] == ["design.v", "second.v"]
+    assert before[:2] == ["counter.v", "second.v"]
 
     verifier.editor_tabs.tabBar().moveTab(0, 1)
 
-    assert _tab_labels(verifier)[:2] == ["second.v", "design.v"]
+    assert _tab_labels(verifier)[:2] == ["second.v", "counter.v"]
     # design_views mirrors the bar: last-added is no longer last on screen.
     assert [verifier.editor_tabs.indexOf(v) for v in verifier.design_views] == [0, 1]
     assert verifier.editor_tabs.tabText(
-        verifier.editor_tabs.indexOf(verifier.design_views[-1])) == "design.v"
+        verifier.editor_tabs.indexOf(verifier.design_views[-1])) == "counter.v"
 
 
 def test_testbench_tab_is_re_pinned_last(verifier):
@@ -178,15 +195,15 @@ def test_pinned_tab_refuses_to_start_a_drag(verifier):
 def test_move_arrows_reorder_the_hierarchy(verifier):
     verifier.add_module_tab("second.v", "module second; endmodule")
     verifier.add_module_tab("third.v", "module third; endmodule")
-    assert _hierarchy_names(verifier) == ["design.v", "second.v", "third.v"]
+    assert _hierarchy_names(verifier) == ["counter.v", "second.v", "third.v"]
 
     verifier.move_hierarchy_item(verifier.hierarchy_list.item(2), "up")
-    assert _hierarchy_names(verifier) == ["design.v", "third.v", "second.v"]
+    assert _hierarchy_names(verifier) == ["counter.v", "third.v", "second.v"]
     # Selection follows the row that moved, so the next click continues it.
     assert verifier.hierarchy_list.currentRow() == 1
 
     verifier.move_hierarchy_item(verifier.hierarchy_list.item(1), "down")
-    assert _hierarchy_names(verifier) == ["design.v", "second.v", "third.v"]
+    assert _hierarchy_names(verifier) == ["counter.v", "second.v", "third.v"]
 
 
 def test_move_at_the_ends_is_a_no_op(verifier):
@@ -214,7 +231,7 @@ def test_rows_keep_their_item_widgets_after_a_reorder(verifier):
     # The whole reason the drop is intercepted: a model-level move would have
     # destroyed these widgets and left blank rows.
     verifier.add_module_tab("second.v", "module second; endmodule")
-    verifier.apply_hierarchy_order(["second.v", "design.v"], 0)
+    verifier.apply_hierarchy_order(["second.v", "counter.v"], 0)
 
     for row in range(verifier.hierarchy_list.count()):
         widget = verifier.hierarchy_list.itemWidget(
@@ -232,7 +249,7 @@ def test_ctrl_arrow_keys_reorder(verifier):
         QtCore.Qt.KeyboardModifier.ControlModifier)
     verifier.hierarchy_list.keyPressEvent(event)
 
-    assert _hierarchy_names(verifier) == ["second.v", "design.v"]
+    assert _hierarchy_names(verifier) == ["second.v", "counter.v"]
 
 
 def test_drop_row_math():
@@ -255,7 +272,7 @@ def test_reorder_survives_a_hidden_panel(verifier):
     verifier.hide()
     assert not verifier.hierarchy_list.isVisible()
 
-    verifier.apply_hierarchy_order(["second.v", "design.v"], 0)
+    verifier.apply_hierarchy_order(["second.v", "counter.v"], 0)
 
-    assert _hierarchy_names(verifier) == ["second.v", "design.v"]
+    assert _hierarchy_names(verifier) == ["second.v", "counter.v"]
     assert verifier._hierarchy_anim is None

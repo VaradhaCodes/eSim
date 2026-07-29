@@ -53,15 +53,17 @@ def test_design_sources_names_are_unique_after_sanitising(verifier):
 
 
 def test_error_squiggle_survives_spaced_duplicate_label(verifier):
+    # Same module in two tabs -> the second is labelled 'alu (2).v', whose
+    # space and parens must not reach a compile filename.
     verifier.add_module_tab("alu.v", "module alu; endmodule")
-    verifier.add_module_tab("alu.v", "module alu2; endmodule")   # -> 'alu (2).v'
+    verifier.add_module_tab("alu.v", "module alu; endmodule // second copy")
     labels = [verifier.editor_tabs.tabText(i)
               for i in range(verifier.editor_tabs.count())]
     assert "alu (2).v" in labels
 
     verifier._design_sources()
     safe = [n for n in verifier._compile_editors if n != "alu.v"
-            and verifier._compile_editors[n].toPlainText().startswith("module alu2")]
+            and "second copy" in verifier._compile_editors[n].toPlainText()]
     assert safe, "duplicate tab should get its own sanitised compile name"
     name = safe[0]
     assert " " not in name and "(" not in name

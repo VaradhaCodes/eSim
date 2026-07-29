@@ -16,10 +16,26 @@
 #                   edits (e.g. the file opened in another editor).
 #
 #                   Disk writes still happen, but only on purpose: an explicit
-#                   Save, and a lazy materialize right before Convert (whose
-#                   toolchain reads a real file path). They are echo-proof: the
-#                   sha256 of the bytes we last wrote is remembered, so the
-#                   watch ignores any disk event whose content matches it.
+#                   Save, a lazy materialize right before Convert (whose
+#                   toolchain reads a real file path), and a debounced autosave
+#                   into the Verilog library. They are echo-proof: the sha256 of
+#                   the bytes we last wrote is remembered, so the watch ignores
+#                   any disk event whose content matches it.
+#
+#                   The autosave is what gives a design authored in eSim a file
+#                   at all. Without it the editor could produce a design that
+#                   existed only in memory: Save had nothing to name a file
+#                   after, materialize had no path to write, and Convert
+#                   reported "No Verilog File Chosen" for a design plainly on
+#                   screen. It writes under the design's own top module name,
+#                   and re-derives that name whenever the module changes -- so
+#                   replacing the design replaces its home instead of leaving it
+#                   filed under the first name it ever had.
+#
+#                   Two things it must never do, both tested: overwrite a file
+#                   the user opened from their own project (eSim copies that
+#                   into the library and mirrors back only on an explicit Save),
+#                   and overrule a home the user chose with Save As.
 #
 #  ORGANIZATION: eSim Team at FOSSEE, IIT Bombay
 # =========================================================================
@@ -42,6 +58,13 @@ except ImportError:
     _HAS_WATCHDOG = False
 from PyQt6 import QtCore
 from PyQt6.QtCore import pyqtSignal
+
+from . import verilog_library
+
+#: Quiet period after the last edit before the design is written to the
+#: library. Long enough that typing does not thrash the disk, short enough that
+#: a design is on disk before the user has finished reading what they pasted.
+AUTOSAVE_MS = 1500
 
 
 def _hash_bytes(data):
@@ -103,6 +126,11 @@ class DesignBus(QtCore.QObject):
         self._observer = None
         self._handler = None
         self._watch_file = None
+        # Where this design was imported from, when it came from a file of the
+        # user's own. eSim works on its library copy from then on and NEVER
+        # writes here by itself; only an explicit Save mirrors back to it.
+        self.origin_path = ""
+        self._autosave_timer = None
 
     # ------------------------------------------------------------------ #
     #  In-memory model (no disk)
@@ -116,7 +144,81 @@ class DesignBus(QtCore.QObject):
         if text == self._content:
             return
         self._content = text
+        self._arm_autosave()
         self.contentChanged.emit(text)
+
+    # ------------------------------------------------------------------ #
+    #  Autosave to the Verilog library
+    #
+    #  Every stage edits the design through set_content, so hanging the
+    #  autosave off that one method gives Author, Verify and anything added
+    #  later the same behaviour for free -- and keeps it out of
+    #  collect_into_bus, which must stay pure in-memory (writing disk on a
+    #  stage switch is what made the old watchdog nag on every tab change).
+    # ------------------------------------------------------------------ #
+    def _arm_autosave(self):
+        """(Re)start the quiet-period timer after an edit."""
+        if self._autosave_timer is None:
+            # Built lazily: a DesignBus can be constructed in a test with no
+            # event loop, where a timer would never fire anyway.
+            self._autosave_timer = QtCore.QTimer(self)
+            self._autosave_timer.setSingleShot(True)
+            self._autosave_timer.timeout.connect(self.flush_autosave)
+        self._autosave_timer.start(AUTOSAVE_MS)
+
+    def _in_library(self, path):
+        """True when ``path`` is a file eSim filed away itself."""
+        if not path:
+            return False
+        root = os.path.normcase(os.path.abspath(verilog_library.library_root()))
+        return os.path.normcase(os.path.abspath(path)).startswith(root)
+
+    def flush_autosave(self):
+        """Write the design to its home now, if it is ready to be written.
+
+        Called on the quiet-period timer and at every milestone that wants the
+        design on disk (entering Convert, leaving Verify, closing). Returns the
+        path written, or "" when there was nothing worth writing -- an
+        unparseable or half-typed design simply stays in memory until it makes
+        sense, which is why this is safe to call on a keystroke.
+
+        A design eSim filed itself is named after its top module and MOVES when
+        that module changes, so replacing the design replaces its home too (the
+        old folder is left alone -- an autosave must never be able to lose
+        work). A home the user picked themselves, with Save As, is never
+        second-guessed: autosave keeps writing exactly where they put it."""
+        if self._autosave_timer is not None:
+            self._autosave_timer.stop()
+        if not verilog_library.is_saveable(self._content):
+            return ""
+        target = self._path
+        if not target or self._in_library(target):
+            target = verilog_library.design_path(
+                verilog_library.top_module(self._content))
+        if target == self._path and not self.is_dirty() \
+                and os.path.isfile(target):
+            return target                       # already on disk, unchanged
+        return self.save_to_disk(target)
+
+    def start_new(self, text=""):
+        """Begin a fresh design, keeping whatever is already on disk.
+
+        The current design is flushed first, so starting a new one never
+        discards the last edit of the old one, and then the bus is detached
+        from its file: the new design earns its own home from its own module
+        name at the next autosave, rather than inheriting the previous
+        design's."""
+        self.flush_autosave()
+        self._stop_watch()
+        self._path = ""
+        self.origin_path = ""
+        self._saved_hash = ""
+        self._content = ""
+        self._mirror_slot()
+        self.set_content(text)
+        if not text:
+            self.contentChanged.emit("")
+        return self._path
 
     @property
     def path(self):
@@ -138,8 +240,14 @@ class DesignBus(QtCore.QObject):
     # ------------------------------------------------------------------ #
     #  Disk I/O  (the ONLY place that reads/writes the design file)
     # ------------------------------------------------------------------ #
-    def load_from_disk(self, path):
-        """Read an existing .v as THE design (explicit Open / Reload)."""
+    def load_from_disk(self, path, imported=False):
+        """Read an existing .v as THE design (explicit Open / Reload).
+
+        ``imported=True`` marks a file of the user's own, opened from wherever
+        they keep it. eSim takes a copy into the library and works on THAT from
+        then on, so nothing eSim does in the background can rewrite a file
+        sitting in someone's project folder. The original is remembered as
+        ``origin_path`` and is only ever written by an explicit Save."""
         if not path or not os.path.isfile(path):
             return ""
         try:
@@ -150,10 +258,24 @@ class DesignBus(QtCore.QObject):
         self._content = data.decode("utf-8", errors="replace")
         self._path = path
         self._saved_hash = _hash_bytes(data)
+        if imported:
+            self.origin_path = path
+            # Place the library copy EXPLICITLY rather than via flush_autosave:
+            # autosave deliberately keeps writing to whatever path is already
+            # set (so it can never hijack a home the user chose with Save As),
+            # and at this instant that path is still the user's own file --
+            # which is the one file eSim must not write behind their back.
+            copy = verilog_library.save_design(self._content)
+            if copy:
+                self._path = copy
+                self._saved_hash = _hash_bytes(self._content.encode("utf-8"))
+            # No parseable module: nothing to name a copy after. The design
+            # stays pointed at the file it came from, and materialize() refuses
+            # to rewrite it (Convert's parse error is the useful message).
         self._mirror_slot()
         self._start_watch()
         self.contentChanged.emit(self._content)
-        return path
+        return self._path
 
     def save_to_disk(self, path=None):
         """Persist the in-memory content. Sole writer of the design file."""
@@ -179,12 +301,39 @@ class DesignBus(QtCore.QObject):
         """Ensure disk reflects the in-memory content, then return the path.
         Used right before Convert, which reads a real file. No-op when disk
         already matches what we hold."""
+        # Settle the autosave first: that is what gives a design authored in
+        # eSim a real file at all, which is what Convert could never get before
+        # (no path -> nothing written -> "No Verilog File Chosen").
+        home = self.flush_autosave()
+        if home:
+            return home
         if not self._path:
             return ""
+        if self._path == self.origin_path:
+            # An imported design eSim could not name yet (no parseable module).
+            # Building from the file as it sits is right; rewriting the user's
+            # own file behind their back is not. Convert will report the parse
+            # failure itself, which is the error that actually helps.
+            return self._path if os.path.isfile(self._path) else ""
         fresh = _hash_bytes(self._content.encode("utf-8")) == self._saved_hash
         if fresh and os.path.isfile(self._path):
             return self._path
         return self.save_to_disk()
+
+    def mirror_to_origin(self):
+        """Write the design back to the file it was imported from, if any.
+
+        Only an explicit Save calls this. Autosave and materialize stay inside
+        the library, so the file the user opened changes when -- and only when
+        -- they ask for it to."""
+        if not self.origin_path or self.origin_path == self._path:
+            return ""
+        try:
+            with open(self.origin_path, "wb") as fh:
+                fh.write(self._content.encode("utf-8"))
+        except OSError:
+            return ""
+        return self.origin_path
 
     # ------------------------------------------------------------------ #
     #  Legacy compat: keep Maker.verilogFile[filecount] == path
@@ -209,7 +358,9 @@ class DesignBus(QtCore.QObject):
             return
         if self._observer is not None and self._watch_file == self._path:
             return                      # already watching the right file
-        self.close()
+        # _stop_watch, NOT close(): close() flushes the autosave, which writes
+        # the file, which re-enters _start_watch.
+        self._stop_watch()
         watch_dir = os.path.dirname(self._path) or "."
         if not os.path.isdir(watch_dir):
             return
@@ -234,7 +385,16 @@ class DesignBus(QtCore.QObject):
         self.externalChange.emit(self._path)
 
     def close(self):
-        """Stop the watch. Call from the owner's teardown."""
+        """Persist any pending edit, then stop the watch. Owner's teardown.
+
+        The flush is what makes closing eSim mid-thought safe: the design is in
+        memory until the quiet-period timer fires, and a close would otherwise
+        beat the timer to it."""
+        self.flush_autosave()
+        self._stop_watch()
+
+    def _stop_watch(self):
+        """Tear the observer down without touching disk."""
         if self._observer is not None:
             try:
                 self._observer.stop()

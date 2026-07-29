@@ -278,15 +278,34 @@ def _ports_regex(clean, module_name):
     return ports
 
 
-def extract_ports(verilog_code):
+def top_module_name(verilog_code):
+    """Name of the top module in ``verilog_code``, or '' when none is found.
+
+    The cheap half of :func:`extract_ports`: pure regex over comment-stripped
+    source, with no hdlparse pass. Everything that only needs the design's
+    *identity* -- the tab label, the library filename, the model name -- should
+    use this. hdlparse is heavy enough that calling the full extractor from a
+    keystroke handler is felt as typing lag on a large design."""
+    names = find_modules(verilog_code or "")
+    if not names:
+        return ""
+    return _pick_top(verilog_code, names)
+
+
+def extract_ports(verilog_code, top=None):
     """``(top_module_name, ports)`` for ``verilog_code``. ``ports`` is a list of
     ``(mode, name, width)`` where ``width`` is '' or a range like ``'[3:0]'``.
     The *top* module is chosen when several are present. Returns ``(None, [])``
-    when no module is found."""
-    names = find_modules(verilog_code)
-    if not names:
+    when no module is found.
+
+    ``top`` names a module to describe instead of the automatically chosen one,
+    and is ignored unless the source defines it -- so a caller can pass a stale
+    or user-supplied name without having to check it first."""
+    module_name = top_module_name(verilog_code)
+    if top and top in find_modules(verilog_code or ""):
+        module_name = top
+    if not module_name:
         return None, []
-    module_name = _pick_top(verilog_code, names)
     ports = _ports_hdlparse(verilog_code, module_name)
     if not ports:
         ports = _ports_regex(strip_comments(verilog_code), module_name)

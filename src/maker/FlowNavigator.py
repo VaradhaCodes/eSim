@@ -392,6 +392,12 @@ class FlowNavigator(QtWidgets.QWidget):
                 self.obj_Verifier.collect_into_bus()
             except Exception:
                 pass
+            # The design's own file is the bus's job (autosave); its testbench
+            # is the verifier's, and this is the moment both are settled.
+            try:
+                self.obj_Verifier.save_testbench_to_library()
+            except Exception:
+                pass
 
     def _sync_in(self, stage):
         """Show the shared design in the stage becoming visible. Author renders
@@ -403,6 +409,11 @@ class FlowNavigator(QtWidgets.QWidget):
                 self.obj_Verifier.render_from_bus()
             elif stage == CONVERT:
                 self.bus.materialize()
+                if self.obj_NgVeri is not None:
+                    # Materialize first, then describe: the subject line reads
+                    # the design off disk, so it must not run before the design
+                    # has been written there.
+                    self.obj_NgVeri.refresh_subject()
         except Exception:
             pass
 
@@ -486,6 +497,8 @@ class FlowNavigator(QtWidgets.QWidget):
 
     def closeEvent(self, event):
         if self.bus is not None:
+            # close() flushes the pending autosave before stopping the watch,
+            # so a design still inside the quiet period is not lost on exit.
             self.bus.close()
         super().closeEvent(event)
 

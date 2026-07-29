@@ -120,6 +120,16 @@ flowchart LR
   generated `cfunc.mod` contract with ngspice is, the silent-wrong-value
   defects that have been fixed in it, and the open work (notably
   `cm_irreversible()` on generated models).
+- **Verilog design identity.** A model is named after the **top module in the
+  design**, never after the file holding it (`ModelGeneration.resolve_identity`).
+  eSim copies the design into its own build tree, so that copy is named for the
+  pipeline and the user's file name is irrelevant — which is why there is no
+  longer any "file name and module name are not same" refusal to hit. Three
+  cases still take the name from the file, deliberately: `.tlv` (sandpiper has
+  not run and always emits `module top`), a top module literally called `top`,
+  and a source no parser can read. Designs live in
+  `<workspace>/VerilogLibrary/<module>/`, written by `DesignBus`'s debounced
+  autosave (`maker/verilog_library.py`).
 - [`docs/UPSTREAM_DECISIONS.md`](docs/UPSTREAM_DECISIONS.md) — the defects in
   eSim's core converter and the NgVeri backend that are **measured, fixed, and
   deliberately switched off**, because turning them on would change results

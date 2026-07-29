@@ -42,9 +42,11 @@ from .model_teardown import (
     _actual_subdir_name)
 from .kicad_symlib import generated_symlib_path, ensure_lib_registered
 from . import CosimConfig
+from . import verilog_library
 from .CosimLogger import CosimLog
 from .RemoveItemsDialog import RemoveItemsDialog
 from .hdl.jobs import BackgroundJob
+from .hdl.ports import extract_ports, find_modules, top_module_name
 import os
 import shutil
 from configuration.Appconfig import Appconfig
@@ -130,11 +132,11 @@ class NgVeri(QtWidgets.QWidget):
                 self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
-                Please choose a verilog file in Makerchip Tab</b>",
+                Write or open a design in the Author stage first.</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
             self.obj_Appconfig.print_error(
                 'No Verilog File Chosen. '
-                'Please choose a verilog file in Makerchip Tab'
+                'Write or open a design in the Author stage first.'
             )
             return
 
@@ -144,7 +146,16 @@ class NgVeri(QtWidgets.QWidget):
         if not model.require_legacy_toolchain():
             self.entry_var[0].append(currentTermLogs.toHtml())
             return
-        file = os.path.splitext(os.path.basename(self.fname))[0]
+        # Resolve the model's identity from the SOURCE before anything derives
+        # a name from it. The backend-switch prompt below, the build dirs and
+        # the KiCad symbol all key off this name, so asking about (or tearing
+        # down) a model named after the file would target the wrong one.
+        if model.resolve_identity(
+                prefer=self.selected_top_module()) == "Error":
+            self._flush_build_logs(currentTermLogs)
+            return
+        self._snapshot_source(model)
+        file = model.model_stem
         # If this name was previously built via d_cosim, ASK, then remove that
         # version first so the switch to the legacy NgVeri flow is clean. A
         # declined switch aborts the build.
@@ -213,6 +224,24 @@ class NgVeri(QtWidgets.QWidget):
         self._build_job.finished.connect(self._build_job.deleteLater)
         self._build_job.start()
 
+    @staticmethod
+    def _snapshot_source(model):
+        '''
+            Keep a dated copy of the source a Convert was run on, under the
+            design's .history/ folder.
+
+            Only on Convert -- not on every autosave. A build is a decision the
+            user made, so one snapshot per build reads as a list of the versions
+            that actually became models, which is the thing worth pointing at
+            later. Snapshotting keystrokes would bury that in noise. Failures
+            are ignored: this is a courtesy, never a reason to stop a build.
+        '''
+        try:
+            with open(model.file, 'r', errors='replace') as fh:
+                verilog_library.snapshot(model.model_stem, fh.read())
+        except OSError:
+            pass
+
     def _legacy_build_pipeline(self, model):
         '''
             The slow half of the legacy NgVeri build, run on a BackgroundJob
@@ -249,7 +278,10 @@ class NgVeri(QtWidgets.QWidget):
                 color:#00FF00;\"> Model Created Successfully!
                 </p>
             ''')
-            placedName = os.path.splitext(
+            # The name the model was actually built under -- resolved from the
+            # design's top module, not from the file it arrived in.
+            model = getattr(self, '_build_model', None)
+            placedName = getattr(model, 'model_stem', None) or os.path.splitext(
                 os.path.basename(self.fname))[0].lower()
             logs.append(
                 '<p style="color:#00AA00; font-weight:600;">'
@@ -339,6 +371,9 @@ class NgVeri(QtWidgets.QWidget):
         self._set_convert_buttons_enabled(True)
         self._build_model = None
         self._build_logs = None
+        # The build may have renamed the design's home (the model is named
+        # from its top module), so re-read what the next convert would target.
+        self.refresh_subject()
 
     def addverilog_cosim(self):
         '''
@@ -363,20 +398,26 @@ class NgVeri(QtWidgets.QWidget):
                 Maker.verilogFile[self.filecount] == "":
             Dialogs.critical(
                 self, "Error Message",
-                "<b>Error: No Verilog File Chosen. Please choose a "
-                "verilog file in Makerchip Tab</b>",
+                "<b>Error: No Verilog File Chosen. Write or open a "
+                "design in the Author stage first.</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
             return
 
         self.fname = Maker.verilogFile[self.filecount]
         currentTermLogs = QtWidgets.QTextEdit()
         model = ModelGeneration.ModelGeneration(self.fname, currentTermLogs)
-        # Canonical model identity = lowercased basename. The symbol, param
-        # XML, compiled vvp, picker entry and netlist all key off THIS one
-        # name, so the build location matches the netlister's lookup (a
-        # case-sensitive filesystem otherwise loses the vvp at sim time).
-        modelname = os.path.splitext(
-            os.path.basename(self.fname))[0].lower()
+        # Canonical model identity = the lowercased TOP MODULE in the source.
+        # The symbol, param XML, compiled vvp, picker entry and netlist all key
+        # off THIS one name, so the build location matches the netlister's
+        # lookup (a case-sensitive filesystem otherwise loses the vvp at sim
+        # time). Resolved before use_cosim_tree/verilogfile, both of which
+        # build paths out of it.
+        if model.resolve_identity(
+                prefer=self.selected_top_module()) == "Error":
+            self._flush_build_logs(currentTermLogs)
+            return
+        self._snapshot_source(model)
+        modelname = model.model_stem
 
         # Fast GUI-thread half: the backend-switch prompt, source generation and
         # parse. These are the only dialog-raising steps, so they stay on the
@@ -468,11 +509,11 @@ class NgVeri(QtWidgets.QWidget):
                 self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
-                Please choose a verilog file in Makerchip Tab</b>",
+                Write or open a design in the Author stage first.</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
             self.obj_Appconfig.print_error(
-                'No Verilog File Chosen. Please choose \
-                 a verilog file in Makerchip Tab')
+                'No Verilog File Chosen. Write or open \
+                 a design in the Author stage first.')
             return
 
         self.fname = Maker.verilogFile[self.filecount]
@@ -490,11 +531,11 @@ class NgVeri(QtWidgets.QWidget):
                 self,
                 "Error Message",
                 "<b>Error: No Verilog File Chosen. \
-                Please choose a verilog file in Makerchip Tab</b>",
+                Write or open a design in the Author stage first.</b>",
                 QtWidgets.QMessageBox.StandardButton.Ok)
             self.obj_Appconfig.print_error(
-                'No Verilog File Chosen. Please choose \
-                a verilog file in Makerchip Tab')
+                'No Verilog File Chosen. Write or open \
+                a design in the Author stage first.')
             return
         self.fname = Maker.verilogFile[self.filecount]
         model = ModelGeneration.ModelGeneration(self.fname, self.entry_var[0])
@@ -531,6 +572,40 @@ class NgVeri(QtWidgets.QWidget):
         convertHeading = QtWidgets.QLabel("Convert Verilog to Ngspice")
         convertHeading.setProperty("cssClass", "heading")
         outer.addWidget(convertHeading)
+
+        # What is about to be built, named from the design's own top module.
+        # This stage used to say nothing at all: the model's name, its ports
+        # and its source were only revealed by the build log afterwards -- or,
+        # when something was wrong, by an error about a file the user had never
+        # deliberately named.
+        self.subjectLabel = QtWidgets.QLabel()
+        self.subjectLabel.setWordWrap(True)
+        self.subjectLabel.setProperty("cssClass", "muted")
+        self.subjectLabel.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        outer.addWidget(self.subjectLabel)
+
+        # Escape hatch for a multi-module design whose top eSim guessed wrong.
+        # The guess (the module nothing else instantiates) is right for
+        # essentially every design, so this row stays hidden until there is
+        # genuinely more than one module to choose between -- an always-visible
+        # picker would imply a decision the user does not normally have to make.
+        self.topRow = QtWidgets.QWidget()
+        top_row = QtWidgets.QHBoxLayout(self.topRow)
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
+        top_label = QtWidgets.QLabel("Build which module?")
+        top_label.setProperty("cssClass", "muted")
+        top_row.addWidget(top_label)
+        self.topModuleBox = QtWidgets.QComboBox()
+        self.topModuleBox.setToolTip(
+            "The design's top module. eSim picks the one nothing else "
+            "instantiates; change it only if that guess is wrong.")
+        self.topModuleBox.currentIndexChanged.connect(
+            lambda _i: self.refresh_subject())
+        top_row.addWidget(self.topModuleBox, 1)
+        self.topRow.setVisible(False)
+        outer.addWidget(self.topRow)
 
         expanding = QtWidgets.QSizePolicy.Policy.Expanding
         fixed = QtWidgets.QSizePolicy.Policy.Fixed
@@ -606,6 +681,108 @@ class NgVeri(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Fixed)
 
         return self.optionsbox
+
+    def refresh_subject(self):
+        '''
+            Re-read the current design and say what a Convert would build:
+            the model name, its ports, and the file it comes from. Called when
+            this stage is shown, so it always describes what is on screen now.
+
+            The name here is derived exactly the way the build derives it (the
+            design's top module), so what this line promises and what the build
+            produces cannot drift apart.
+
+            Describes only -- it never enables or disables the convert buttons.
+            Those belong to the build, which greys them out for the duration
+            and hands them back in its epilogue. A second owner would fight it,
+            and a design this function merely failed to READ would leave the
+            user locked out of a build that would have worked.
+        '''
+        label = getattr(self, 'subjectLabel', None)
+        if label is None:
+            return
+        path = self._current_verilog_fname()
+        code = ""
+        if path:
+            try:
+                with open(path, 'r', errors='replace') as fh:
+                    code = fh.read()
+            except OSError:
+                code = ""
+
+        modules = find_modules(code) if code else []
+        chosen = self._sync_top_picker(code, modules)
+        module, ports = ("", [])
+        if code:
+            module, ports = extract_ports(code, top=chosen)
+        if not module:
+            label.setText(
+                "No design to convert yet. Write one in Author, or open a "
+                ".v file, and it will appear here.")
+            return
+
+        ins = sum(1 for mode, _n, _w in ports if mode == "input")
+        outs = sum(1 for mode, _n, _w in ports if mode == "output")
+
+        def _count(n, word):
+            return str(n) + " " + word + ("" if n == 1 else "s")
+
+        label.setText(
+            'Will build <b>' + module.lower() + '</b> — ' +
+            _count(ins, "input") + ", " + _count(outs, "output") +
+            '<br/><span style="font-size:9pt;">from ' + path + '</span>')
+
+    def _sync_top_picker(self, code, modules):
+        '''
+            Refill the "build which module?" picker for the current design and
+            return the module to describe -- which is also the one that will be
+            built.
+
+            The box always SHOWS the module that will actually be built, never
+            merely a list to choose from. Letting it settle on its own first
+            entry while the build used a different module would recreate, one
+            level up, the exact defect this whole change removes: the interface
+            naming one thing and the build producing another.
+
+            A choice the user made survives a trip to another stage and back,
+            and heals itself when it stops making sense: if the design is
+            replaced and the chosen module is no longer in it, the automatic
+            pick takes over rather than naming a module that is not there.
+        '''
+        box = getattr(self, 'topModuleBox', None)
+        if box is None:
+            return None
+        previous = box.currentText()
+        box.blockSignals(True)
+        box.clear()
+        box.addItems(modules)
+        # Only offer the choice when there IS one.
+        self.topRow.setVisible(len(modules) > 1)
+        chosen = previous if previous in modules else top_module_name(code)
+        if chosen:
+            box.setCurrentText(chosen)
+        box.blockSignals(False)
+        return chosen or None
+
+    def selected_top_module(self):
+        '''
+            The module a Convert will build, or None to let eSim choose.
+
+            Safe to pass straight to resolve_identity: the picker is kept in
+            step with the description, so this is never a module other than the
+            one the user was just told about.
+        '''
+        box = getattr(self, 'topModuleBox', None)
+        if box is None or not self.topRow.isVisible():
+            return None
+        return box.currentText() or None
+
+    def showEvent(self, event):
+        '''Describe the current design every time this stage comes forward --
+        the design may well have been rewritten in Author or Verify since the
+        last look.'''
+        super().showEvent(event)
+        self.refresh_subject()
 
     def _sym_paths(self):
         '''
