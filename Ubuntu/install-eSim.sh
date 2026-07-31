@@ -1161,6 +1161,17 @@ uninstall_eSim() {
                /usr/share/kicad 2>/dev/null || true
     sudo rm -f /etc/apt/sources.list.d/kicad* 2>/dev/null || true
 
+    # Deleting the library FILES above leaves their REGISTRATIONS behind: every
+    # eSim_* row eSim added to ~/.config/kicad/<ver>/sym-lib-table still points
+    # at a path that no longer exists, and a KiCad the user reinstalls later
+    # then reports a missing library on every schematic. Unregister them with
+    # the same helper the Windows uninstaller runs. NOT sudo: the table is per
+    # user, and under sudo $HOME would be root's.
+    if [ -f "$eSim_Home/windows/uninstall_cleanup.py" ] && command -v python3 >/dev/null 2>&1; then
+        python3 "$eSim_Home/windows/uninstall_cleanup.py" \
+                --esim-root "$eSim_Home" --purge-user-data || true
+    fi
+
     log "Removing SKY130 PDK"
     sudo rm -rf /usr/share/local/sky130_fd_pr
 

@@ -250,6 +250,14 @@ Filename: "{app}\eSim.exe"; Description: "Launch eSim"; \
     Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
+; NOTE: the per-user cleanup (KiCad sym-lib-table, ~\.esim, ~\.nghdl) is NOT
+; here. It needs the user's answer to a prompt, and it must run as a specific
+; account -- neither of which this section can do: `runasoriginaluser` is a
+; [Run]-only flag ("Parameter Flags includes a flag that is not supported in
+; this section"), and its [Code] twin refuses too ("Internal error: Cannot
+; call EXECASORIGINALUSER function during Uninstall"). Both verified against
+; Inno 6.3.3. See RunUserCleanup in [Code].
+;
 ; Clean up the exclusion earlier installer versions added (current installer
 ; adds none). Harmless no-op when absent.
 Filename: "powershell.exe"; RunOnceId: "RemoveEsimDefenderExclusion"; \
@@ -257,6 +265,11 @@ Filename: "powershell.exe"; RunOnceId: "RemoveEsimDefenderExclusion"; \
     Flags: runhidden
 
 [UninstallDelete]
+; Belt and braces for the biggest runtime-written trees. The [Code] sweep
+; below removes ALL of {app}; these entries stay because they cost nothing and
+; still fire on a tree the sweep declines to touch (marker files missing, e.g.
+; someone deleted eSim.exe by hand before uninstalling).
+;
 ; Compiled artifacts the app writes inside its own tree at runtime.
 Type: filesandordirs; Name: "{app}\library\modelParamXML\Ngveri"
 Type: filesandordirs; Name: "{app}\library\modelParamXML\NgVeriCosim"
@@ -268,10 +281,268 @@ Type: filesandordirs; Name: "{app}\tools\nghdl"
 ; Bundled KiCad writes caches inside its own tree at runtime (fp-info-cache,
 ; regenerated .pyc under bin\Lib); sweep it too.
 Type: filesandordirs; Name: "{app}\tools\kicad"
-; NOTE: per-user state (~/.esim, ~/.nghdl) is deliberately NOT deleted here:
-; the uninstaller runs as one user but state exists per user; and models the
-; user built (kicad_symbols) may be wanted across reinstalls.
 
-; No [Code] KiCad detection anymore: KiCad ships inside this installer at
-; tools\kicad (see the design notes above), so there is nothing to detect,
-; offer or download after this exe finishes.
+; =============================================================================
+; [Code] -- what the uninstall log alone cannot clean.
+;
+; Inno removes exactly what it installed. eSim adds to that tree AFTER the
+; install log is written, so a plain uninstall used to leave the install
+; folder standing with hundreds of files in it:
+;
+;   * __pycache__: the [Run] compileall above, plus every later launch,
+;     writes .pyc for modules whose stage counterpart had none (windows\,
+;     parts of python\Lib) -- unlogged, so never deleted.
+;   * Examples\: simulating a bundled example writes beside it --
+;     <name>.cir.out, analysis, plot_data_*.txt, *.raw, *_Previous_Values.xml,
+;     <name>-cache.lib, -rescue.lib.
+;   * library\SubcircuitLibrary, library\deviceModelLibrary: subcircuits and
+;     device models the user adds land in the install tree.
+;   * tools\nghdl, tools\kicad, library\modelParamXML: covered above.
+;
+; and per-user state the installer never created and cannot see:
+;
+;   * ~\.esim, ~\.nghdl (windows_bootstrap.py writes these on every launch)
+;   * %APPDATA%\kicad\<ver>\sym-lib-table rows whose uri points INTO the tree
+;     being deleted -- left behind, KiCad reports a missing library on every
+;     schematic the user opens afterwards.
+;
+; So the uninstall gains two steps:
+;   usUninstall     -- ask about the user's own data, then run
+;                      windows\uninstall_cleanup.py while the bundled python
+;                      is still on disk (nothing has been deleted yet).
+;   usPostUninstall -- SweepDir removes whatever the log playback left, i.e.
+;                      every file eSim wrote after installation, and a
+;                      detached cmd takes the emptied folders afterwards.
+;
+; Safety: the sweep is a recursive delete of a user-chosen directory, so it
+; runs only when {app} still carries an eSim marker file AND is not a system
+; directory or a drive root AND this user's workspace is not inside it (a
+; workspace under the install tree cancels the sweep outright -- leftover
+; files are a nuisance, deleted schematics are not recoverable). Directory
+; reparse points (junctions/symlinks) are unlinked, never followed. If
+; anything is refused (eSim or KiCad still running, files open in a terminal)
+; the user is told which folder to remove by hand rather than being left to
+; discover it.
+; =============================================================================
+[Code]
+var
+  SweepWanted: Boolean;
+  PurgeUserData: Boolean;
+
+function NormDir(const Dir: String): String;
+begin
+  Result := Lowercase(RemoveBackslashUnlessRoot(Trim(Dir)));
+end;
+
+// True for anything a recursive delete must never be pointed at: a drive root
+// and the well-known shared/system directories. Someone who installs eSim into
+// a folder they also keep other things in still loses only that folder -- the
+// marker check below is what guards against that, and the [Setup] default
+// (SystemDrive\FOSSEE\eSim) is a dedicated one.
+function IsProtectedDir(const Dir: String): Boolean;
+var
+  D: String;
+  Guards: TArrayOfString;
+  I: Integer;
+begin
+  D := NormDir(Dir);
+  Result := True;
+  if Length(D) <= 3 then Exit;                      // 'c:' / 'c:\'
+  SetArrayLength(Guards, 10);
+  Guards[0] := ExpandConstant('{win}');
+  Guards[1] := ExpandConstant('{sys}');
+  Guards[2] := ExpandConstant('{pf}');
+  Guards[3] := ExpandConstant('{pf32}');
+  Guards[4] := ExpandConstant('{commonpf}');
+  Guards[5] := ExpandConstant('{commonappdata}');
+  Guards[6] := ExpandConstant('{userappdata}');
+  Guards[7] := ExpandConstant('{localappdata}');
+  Guards[8] := ExpandConstant('{userdocs}');
+  Guards[9] := ExpandConstant('{%USERPROFILE}');
+  for I := 0 to GetArrayLength(Guards) - 1 do
+    if (Guards[I] <> '') and (NormDir(Guards[I]) = D) then Exit;
+  Result := False;
+end;
+
+// Is this really an eSim install root? Checked while the files are still
+// there, i.e. at the start of usUninstall. unins000.dat counts: the running
+// uninstaller lives in the app dir (UninstallFilesDir), so its presence means
+// this directory is one Setup created.
+function LooksLikeEsimInstall(const Dir: String): Boolean;
+var
+  D: String;
+begin
+  D := AddBackslash(Dir);
+  Result := FileExists(D + 'eSim.exe') or FileExists(D + 'esim.bat') or
+            FileExists(D + 'VERSION') or FileExists(D + 'unins000.dat');
+end;
+
+// eSim's workspace defaults to ~\eSim-Workspace, well outside the install
+// tree -- but the picker lets the user put it anywhere, including inside the
+// install folder. Sweeping then takes their schematics with it. Read the
+// workspace this user chose (~\.esim\workspace.txt, "<check> <path>") and, if
+// it is under the tree, refuse to sweep at all: leaving files behind is a
+// nuisance, deleting someone's projects is not recoverable.
+function WorkspaceInsideApp(const AppDir: String): Boolean;
+var
+  Raw: AnsiString;
+  Line, WS: String;
+  P: Integer;
+begin
+  Result := False;
+  if not LoadStringFromFile(ExpandConstant('{%USERPROFILE}') +
+                            '\.esim\workspace.txt', Raw) then Exit;
+  Line := Trim(String(Raw));
+  P := Pos(' ', Line);
+  if P = 0 then Exit;
+  WS := Trim(Copy(Line, P + 1, Length(Line)));
+  if WS = '' then Exit;
+  Result := CompareText(NormDir(Copy(WS, 1, Length(AppDir))),
+                        NormDir(AppDir)) = 0;
+end;
+
+function AskPurgeUserData(): Boolean;
+var
+  Home: String;
+begin
+  if UninstallSilent then begin
+    Result := False;                      { silent uninstall keeps user data }
+    Exit;
+  end;
+  Home := ExpandConstant('{%USERPROFILE}');
+  Result := MsgBox(
+    'Remove your personal eSim data as well?' #13#10 #13#10 +
+    Home + '\.esim' #13#10 +
+    '    settings, and the KiCad symbol libraries holding every NgVeri /' #13#10 +
+    '    NGHDL model you have built' #13#10 +
+    Home + '\.nghdl' #13#10 +
+    '    simulator paths' #13#10 #13#10 +
+    'Choose No to keep them -- a later eSim install picks them up again.' #13#10 +
+    'Your projects and workspace folder are not touched either way.',
+    mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+end;
+
+// The per-user half: unregister eSim's rows from the KiCad sym-lib-table
+// (always -- they point into the tree that is about to go, and KiCad reports a
+// missing library on every schematic opened afterwards if they stay), and
+// delete ~\.esim + ~\.nghdl when the user said yes.
+//
+// This runs as the account performing the uninstall. Inno offers no way to be
+// anyone else here: `runasoriginaluser` is a [Run]-only flag and
+// ExecAsOriginalUser refuses during uninstall (both verified on 6.3.3). That
+// account IS the user in the normal case (they elevate their own uninstall),
+// and it is exactly the profile the prompt named. On a shared machine
+// uninstalled by a DIFFERENT admin, every other user's ~\.esim and KiCad table
+// are simply left alone -- untouched, never half-cleaned.
+//
+// Best effort -- an uninstall must not fail because a config file was
+// read-only; the script itself never returns non-zero without --strict.
+procedure RunUserCleanup(const AppDir: String);
+var
+  Py, Script, Params: String;
+  ResultCode: Integer;
+begin
+  Py := AddBackslash(AppDir) + 'python\pythonw.exe';
+  Script := AddBackslash(AppDir) + 'windows\uninstall_cleanup.py';
+  if not (FileExists(Py) and FileExists(Script)) then Exit;
+  Params := '"' + Script + '" --esim-root "' +
+            RemoveBackslashUnlessRoot(AppDir) + '"';
+  if PurgeUserData then Params := Params + ' --purge-user-data';
+  Exec(Py, Params, AppDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+// Delete everything in Dir except the running uninstaller. Returns the number
+// of entries that refused to go.
+function SweepDir(const Dir: String): Integer;
+var
+  FR: TFindRec;
+  Base, P: String;
+  IsDir, IsLink: Boolean;
+begin
+  Result := 0;
+  Base := AddBackslash(Dir);
+  if not FindFirst(Base + '*', FR) then Exit;
+  try
+    repeat
+      if (FR.Name <> '.') and (FR.Name <> '..') and
+         (Pos('unins', Lowercase(FR.Name)) <> 1) then begin
+        P := Base + FR.Name;
+        IsDir := (FR.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0;
+        IsLink := (FR.Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0;
+        if IsDir and IsLink then begin
+          // A junction/symlink: unlink it, NEVER recurse -- the target is
+          // somewhere else on the disk and is not ours to delete.
+          if not RemoveDir(P) then Result := Result + 1;
+        end else if IsDir then begin
+          if not DelTree(P, True, True, True) then Result := Result + 1;
+        end else begin
+          if not DeleteFile(P) then Result := Result + 1;
+        end;
+      end;
+    until not FindNext(FR);
+  finally
+    FindClose(FR);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  AppDir, Parent, Params: String;
+  Failures, ResultCode: Integer;
+begin
+  // Before anything is removed: decide (while the marker files still exist)
+  // whether the tree may be swept, ask about the user's own data, and act on
+  // that answer while the bundled python is still there.
+  if CurUninstallStep = usUninstall then begin
+    AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+    SweepWanted := DirExists(AppDir) and LooksLikeEsimInstall(AppDir) and
+                   not IsProtectedDir(AppDir);
+    if SweepWanted and WorkspaceInsideApp(AppDir) then begin
+      SweepWanted := False;
+      if not UninstallSilent then
+        MsgBox('Your eSim workspace is inside' #13#10 #13#10 +
+               AppDir + #13#10 #13#10 +
+               'so the leftover files in that folder are NOT being removed --' #13#10 +
+               'your projects are in there. Move them somewhere else, then' #13#10 +
+               'delete the folder.', mbInformation, MB_OK);
+    end;
+    PurgeUserData := AskPurgeUserData();
+    RunUserCleanup(AppDir);
+  end;
+
+  // After Inno has run the [UninstallRun] entries and deleted everything it
+  // logged: whatever is left in the tree is what eSim wrote after install --
+  // .pyc, simulation output beside the bundled Examples, subcircuits and
+  // device models the user added, HDL build objects. Sweep it.
+  if CurUninstallStep = usPostUninstall then begin
+    if SweepWanted then begin
+      AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+      Failures := SweepDir(AppDir);
+      if (Failures > 0) and not UninstallSilent then
+        MsgBox('Some files could not be removed from' #13#10 #13#10 +
+               AppDir + #13#10 #13#10 +
+               'They are most likely still open -- close eSim, KiCad and any' #13#10 +
+               'terminal or Explorer window in that folder, then delete it.',
+               mbInformation, MB_OK);
+    end;
+    // The app dir now holds only unins000.*, which Inno deletes as it exits --
+    // after this code has run, so the empty folder (and the empty
+    // SystemDrive\FOSSEE parent the default install created) would otherwise
+    // stay. Hand both to a detached cmd that waits for the uninstaller to
+    // finish and then rmdir's them. rmdir WITHOUT /s removes empty directories
+    // only, so this can never take anything with it.
+    if SweepWanted then begin
+      AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+      Parent := ExtractFileDir(AppDir);
+      Params := '/C ping -n 3 127.0.0.1 >nul & rmdir "' + AppDir + '"' +
+                ' & ping -n 3 127.0.0.1 >nul & rmdir "' + AppDir + '"';
+      if not IsProtectedDir(Parent) then
+        Params := Params + ' & rmdir "' + Parent + '"';
+      Exec(ExpandConstant('{cmd}'), Params, '', SW_HIDE, ewNoWait, ResultCode);
+    end;
+  end;
+end;
+
+// No KiCad detection anymore: KiCad ships inside this installer at
+// tools\kicad (see the design notes at the top), so there is nothing to
+// detect, offer or download after this exe finishes.

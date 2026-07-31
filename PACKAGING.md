@@ -41,7 +41,13 @@ release via `detect_profile()` and adjusts only two things per release: where
 KiCad comes from (PPA vs universe) and the minimum KiCad major. Everything
 else is identical across releases. `--dry-run` previews the full plan;
 `--install` is idempotent (reinstall over any prior eSim is clean);
-`--uninstall` is version-agnostic.
+`--uninstall` is version-agnostic. `--uninstall` removes `~/.esim`, `~/.nghdl`,
+`~/nghdl-simulator`, the desktop entry, KiCad (apt purge), the SKY130/IHP PDKs
+and eSim's own `/usr/share/kicad/symbols/eSim_*` files — and then calls
+`windows/uninstall_cleanup.py` (OS-independent despite where it lives) to
+unregister the eSim rows from `~/.config/kicad/<ver>/sym-lib-table`, which
+would otherwise point at deleted files. The user's cloned source tree and
+their project folders are theirs and are never touched.
 
 Key design decisions (do not regress these):
 
@@ -233,6 +239,61 @@ to see the live truth for that machine.
 | NgVeri d_cosim (Icarus) flow | 🧪 *Full* | Custom ngspice carries `d_cosim`/`ivlng`; iverilog built `--enable-libvvp` |
 | NGHDL / GHDL VHDL co-simulation | 🧪 *Full* | Custom ngspice (`ghdl.cm`) + MSYS2 `ghdl-llvm` + staged `nghdl/src` python/ghdlserver (`_WIN32` socket code already in-tree); Winsock now linked via `-lws2_32` |
 | SKY130 / IHP PDKs | ❌ not shipped | Analog PDK flows are Ubuntu-only today; deliberately lower priority than the HDL toolchain (revisit after W1–W13 pass) |
+
+### Uninstall (Windows)
+
+Inno removes exactly what it logged at install time, and eSim writes into its
+own tree long after that: `__pycache__` (the install-time `compileall` plus
+every launch), simulation output beside the bundled `Examples`, subcircuits
+and device models the user adds, HDL model sources and build objects under
+`tools\nghdl`, KiCad's caches under `tools\kicad`. Left to the log alone, the
+install folder survives the uninstall with hundreds of files in it. Per-user
+state is invisible to the log as well: `~\.esim`, `~\.nghdl`, and the eSim
+rows in `%APPDATA%\kicad\<ver>\sym-lib-table` whose uri points into the tree
+being deleted (KiCad then reports a missing library on every schematic).
+
+So `installer.iss` [Code] adds two steps around Inno's own removal:
+
+| Step | What happens |
+|---|---|
+| `usUninstall` (before anything is deleted) | Ask whether to remove `~\.esim` + `~\.nghdl` (default **No**; never asked on a silent uninstall). Run `windows\uninstall_cleanup.py` with the bundled python, which unregisters eSim's KiCad rows always and deletes those two dirs only on a yes. |
+| `usPostUninstall` (after the log playback) | `SweepDir` deletes everything left in the install root except the running `unins000.*`; a detached `cmd` then `rmdir`s the emptied install dir and its parent (`rmdir` without `/s` — it can only remove empty dirs). |
+
+Guards, because the sweep is a recursive delete of a user-chosen directory:
+it runs only if the root still carries an eSim marker file (`eSim.exe`,
+`esim.bat`, `VERSION` or `unins000.dat`), is not a drive root or a well-known
+system directory, and does not contain this user's workspace (read from
+`~\.esim\workspace.txt` — a workspace inside the install tree cancels the
+sweep, since leftover files beat deleted schematics); directory reparse
+points are unlinked, never followed. If anything refuses to go (eSim or KiCad still running), the user
+is told which folder to delete by hand instead of finding it later.
+
+Known limit: the per-user half runs as the account performing the uninstall.
+Inno offers nothing better — `runasoriginaluser` is a `[Run]`-only flag, and
+`ExecAsOriginalUser` raises *"Internal error: Cannot call EXECASORIGINALUSER
+function during Uninstall"* (both checked on Inno 6.3.3). On a shared machine
+uninstalled by a different admin, other users' `~\.esim` and KiCad tables are
+left untouched rather than half-cleaned.
+
+Verifying a change to this logic without touching a real install — compile a
+sandbox copy of the script under a **different `AppId`** (same AppId would
+hijack the real install's uninstall registry entry) and with the `[Icons]`
+entries dropped (same shortcut names would delete the real ones):
+
+```powershell
+# installer-sandbox.iss = installer.iss with AppId/AppName changed and the
+# two [Icons] lines + the postinstall [Run] entry removed.
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q `
+    /DAppVersion=0.0-test /DStageDir=<tiny stage> /DOutDir=<tmp> installer-sandbox.iss
+<tmp>\eSim-0.0-test-installer.exe /VERYSILENT /SUPPRESSMSGBOXES /DIR="<tmp>\sand box\FOSSEE\eSim"
+# drop runtime junk (a .pyc, an Examples\*.cir.out, a junction pointing out of
+# the tree), then:
+"<tmp>\sand box\FOSSEE\eSim\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
+# expect: install dir AND its parent gone, junction target intact.
+```
+
+`windows\uninstall_cleanup.py` itself is covered by
+`windows\tests\test_uninstall_cleanup.py` (stdlib-only, runs on Linux CI).
 
 ### Windows shakedown (first VM run)
 
