@@ -411,14 +411,20 @@ begin
   end;
   Home := ExpandConstant('{%USERPROFILE}');
   Result := MsgBox(
-    'Remove your personal eSim data as well?' #13#10 #13#10 +
-    Home + '\.esim' #13#10 +
-    '    settings, and the KiCad symbol libraries holding every NgVeri /' #13#10 +
-    '    NGHDL model you have built' #13#10 +
-    Home + '\.nghdl' #13#10 +
-    '    simulator paths' #13#10 #13#10 +
-    'Choose No to keep them -- a later eSim install picks them up again.' #13#10 +
-    'Your projects and workspace folder are not touched either way.',
+    'Remove eSim''s settings and saved models too?' #13#10 #13#10 +
+    'Uninstalling removes the program, but eSim also keeps a little' #13#10 +
+    'data in your user folder:' #13#10 #13#10 +
+    '    - your preferences and workspace location' #13#10 +
+    '    - any models you built yourself with NgVeri or NGHDL' #13#10 #13#10 +
+    'Keep them  (No, recommended)' #13#10 +
+    '    A few MB. If you ever install eSim again, it comes back set' #13#10 +
+    '    up exactly as you left it.' #13#10 #13#10 +
+    'Delete them  (Yes)' #13#10 +
+    '    Choose this only if you want no trace of eSim left behind.' #13#10 +
+    '    Models you built will be gone for good.' #13#10 #13#10 +
+    'Your projects and your eSim workspace folder are NOT deleted' #13#10 +
+    'either way.' #13#10 #13#10 +
+    'The folders in question are ' + Home + '\.esim and ' + Home + '\.nghdl',
     mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 end;
 
