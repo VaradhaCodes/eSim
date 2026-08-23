@@ -133,6 +133,15 @@ Design decisions:
   esim.bat prepends `tools\kicad\bin` to PATH, no registry / file
   associations / global env vars, so a user's own KiCad install coexists
   untouched.
+  All official symbol libraries and KiCad's matching `sym-lib-table` template
+  remain in that pruned payload. On every launch, `windows_bootstrap.py` adds
+  any missing official template rows to the bundled KiCad version's user table
+  with `(disabled)` (visible but inactive) and an absolute path into eSim's
+  private KiCad tree, while eSim's own rows stay active. Existing stock rows
+  are never rewritten, so a library the user activates stays active. Owned
+  absolute paths also let uninstall remove these rows without touching stock
+  rows from a separate KiCad installation. The build rejects a payload when a
+  stock `.kicad_sym` file and its template row do not have a one-to-one match.
 * **Per-user state happens at launch, not install** (`windows_bootstrap.py`
   runs from `esim.bat` every start, idempotently). Multi-user machines and
   upgrades self-heal, and the logic is testable.

@@ -203,6 +203,7 @@ def test_register_appends_and_repoints(home, root, kicad_config_root):
 
 def test_register_no_kicad_config_is_noop(home, root):
     assert wb.register_kicad_libraries(str(root)) is False
+    assert wb.register_kicad_stock_libraries(str(root)) is False
 
 
 @pytest.fixture
@@ -212,6 +213,92 @@ def kicad_config_root(home):
     if os.name == "nt":
         return home / "AppData" / "kicad"
     return home / ".config" / "kicad"
+
+
+def _write_bundled_kicad_template(root):
+    kdir = root / "tools" / "kicad"
+    template = kdir / "share" / "kicad" / "template"
+    symbols = kdir / "share" / "kicad" / "symbols"
+    template.mkdir(parents=True)
+    symbols.mkdir(parents=True)
+    (kdir / "KICAD-VERSION").write_text("9.0.3\n")
+    (template / "sym-lib-table").write_text(
+        '(sym_lib_table\n'
+        '  (version 7)\n'
+        '  (lib (name "74xx")(type "KiCad")'
+        '(uri "${KICAD9_SYMBOL_DIR}/74xx.kicad_sym")'
+        '(options "")(descr "74xx symbols"))\n'
+        '  (lib (name "Device")(type "KiCad")'
+        '(uri "${KICAD9_SYMBOL_DIR}/Device.kicad_sym")'
+        '(options "")(descr "Generic symbols"))\n'
+        ')\n')
+    for name in ("74xx", "Device"):
+        (symbols / (name + ".kicad_sym")).write_text("(kicad_symbol_lib)\n")
+    return template / "sym-lib-table"
+
+
+def test_stock_libraries_are_visible_but_disabled(home, root,
+                                                  kicad_config_root):
+    _write_bundled_kicad_template(root)
+    other = kicad_config_root / "8.0"
+    other.mkdir(parents=True)
+    other_table = other / "sym-lib-table"
+    other_table.write_text('(sym_lib_table\n  (version 7)\n)\n')
+
+    wb.ensure_kicad_config_dir(str(root))
+    assert wb.register_kicad_stock_libraries(str(root)) is True
+    table = kicad_config_root / "9.0" / "sym-lib-table"
+    content = table.read_text()
+
+    assert str(root / "tools" / "kicad" / "share" / "kicad" / "symbols" /
+               "74xx.kicad_sym") in content
+    assert str(root / "tools" / "kicad" / "share" / "kicad" / "symbols" /
+               "Device.kicad_sym") in content
+    assert '${KICAD9_SYMBOL_DIR}' not in content
+    assert content.count('(disabled)') == 2
+    assert '(hidden)' not in content
+    assert '74xx symbols' in content
+    assert other_table.read_text() == '(sym_lib_table\n  (version 7)\n)\n'
+
+    wb.seed_generated_symbols(str(root))
+    wb.register_kicad_libraries(str(root))
+    content = table.read_text()
+    esim_row = next(line for line in content.splitlines()
+                    if '(name "eSim_Devices")' in line)
+    assert '(disabled)' not in esim_row
+    assert '(hidden)' not in esim_row
+
+
+def test_stock_registration_preserves_user_activation(home, root,
+                                                      kicad_config_root):
+    template = _write_bundled_kicad_template(root)
+    wb.ensure_kicad_config_dir(str(root))
+    wb.register_kicad_stock_libraries(str(root))
+    table = kicad_config_root / "9.0" / "sym-lib-table"
+
+    enabled = table.read_text().replace('(disabled)', '', 1)
+    table.write_text(enabled)
+    template_content = template.read_text()
+    close = template_content.rstrip().rfind(')')
+    power_row = (
+        '  (lib (name "Power")(type "KiCad")'
+        '(uri "${KICAD9_SYMBOL_DIR}/Power.kicad_sym")'
+        '(options "")(descr "Power symbols"))\n')
+    template.write_text(template_content[:close] + power_row +
+                        template_content[close:])
+
+    assert wb.register_kicad_stock_libraries(str(root)) is True
+    content = table.read_text()
+    row_74xx = next(line for line in content.splitlines()
+                    if '(name "74xx")' in line)
+    row_power = next(line for line in content.splitlines()
+                     if '(name "Power")' in line)
+    assert '(disabled)' not in row_74xx
+    assert '(disabled)' in row_power
+    assert content.count('(name "74xx")') == 1
+
+    wb.register_kicad_stock_libraries(str(root))
+    assert table.read_text() == content
 
 
 def test_kicad_config_dir_from_bundled_stamp(home, root, kicad_config_root):
@@ -273,6 +360,7 @@ def test_main_survives_every_step_failing(home, root, monkeypatch):
     for name in ("write_esim_config", "seed_generated_symbols",
                  "write_nghdl_config", "fix_spinit",
                  "ensure_unversioned_libvvp", "ensure_kicad_config_dir",
+                 "register_kicad_stock_libraries",
                  "register_kicad_libraries"):
         monkeypatch.setattr(wb, name, lambda _root: (_ for _ in ()).throw(
             OSError("read-only install")))

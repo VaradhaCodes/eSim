@@ -78,11 +78,14 @@ def test_install_tree_rows_go_user_rows_stay(home, install, table, tmp_path):
         row("eSim_Analog",
             str(install / "library" / "kicadLibrary" / "eSim-symbols"
                 / "eSim_Analog.kicad_sym")),
+        row("Bundled_Device",
+            str(install / "tools" / "kicad" / "share" / "kicad" /
+                "symbols" / "Device.kicad_sym")),
         row("Device", "${KICAD9_SYMBOL_DIR}/Device.kicad_sym"),
         row("eSim_MyOwn", str(mine)),
     ])
 
-    assert uc.clean_sym_lib_table(str(table), str(install)) == 2
+    assert uc.clean_sym_lib_table(str(table), str(install)) == 3
 
     # KiCad's own library survives, and so does an eSim_* library the user
     # keeps somewhere of their own -- eSim never put it there.

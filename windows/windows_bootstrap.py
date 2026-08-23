@@ -20,7 +20,9 @@
 #                        toolchain pieces this install actually has
 #                     4. spinit                      rewrite the bundled
 #                        ngspice's codemodel paths for this install location
-#                     5. KiCad sym-lib-table         register eSim libraries
+#                     5. KiCad sym-lib-table         seed every library from
+#                        bundled KiCad's own template disabled-by-default,
+#                        then register eSim libraries active-by-default
 #                        (static -> install dir, generated -> ~/.esim) in the
 #                        user's %APPDATA%/kicad/<ver>/sym-lib-table
 #
@@ -245,6 +247,21 @@ def _kicad_config_root():
     return _user_dir('.config', 'kicad')
 
 
+def _bundled_kicad_config_dir(esim_root):
+    """Return the config dir for bundled KiCad's stamped major.minor."""
+    stamp = os.path.join(esim_root, 'tools', 'kicad', 'KICAD-VERSION')
+    try:
+        with open(stamp) as fh:
+            version = fh.read().strip()
+    except OSError:
+        return None
+    m = re.match(r'(\d+)\.(\d+)', version)
+    if not m:
+        return None
+    return os.path.join(_kicad_config_root(),
+                        '%s.%s' % (m.group(1), m.group(2)))
+
+
 def ensure_kicad_config_dir(esim_root):
     """Pre-create the per-user KiCad config version dir for the BUNDLED KiCad
     (tools/kicad), e.g. %APPDATA%/kicad/9.0.
@@ -258,19 +275,86 @@ def ensure_kicad_config_dir(esim_root):
     a minimal sym-lib-table in it) is safe: KiCad treats both as its own on
     first launch and merges, never clobbers. No-op when there is no bundled
     KiCad (dev tree) or the stamp is unreadable."""
-    stamp = os.path.join(esim_root, 'tools', 'kicad', 'KICAD-VERSION')
-    try:
-        with open(stamp) as fh:
-            version = fh.read().strip()
-    except OSError:
+    cfg_dir = _bundled_kicad_config_dir(esim_root)
+    if cfg_dir is None:
         return None
-    m = re.match(r'(\d+)\.(\d+)', version)
-    if not m:
-        return None
-    cfg_dir = os.path.join(_kicad_config_root(),
-                           '%s.%s' % (m.group(1), m.group(2)))
     os.makedirs(cfg_dir, exist_ok=True)
     return cfg_dir
+
+
+def register_kicad_stock_libraries(esim_root):
+    """Add bundled KiCad's standard symbol libraries disabled-by-default.
+
+    The official payload already carries both ``share/kicad/symbols`` and its
+    matching ``share/kicad/template/sym-lib-table``. Copy each template row
+    into bundled KiCad's user table with ``(disabled)`` appended, preserving
+    KiCad's nickname and description while pointing its URI at eSim's private
+    symbol directory. Absolute owned paths let uninstall remove these rows
+    without touching a separate system KiCad installation. Existing rows are
+    never rewritten: once a user checks Active, later eSim launches must not
+    turn it off again.
+
+    Only the bundled KiCad version is touched. A machine may also have KiCad 8
+    or 10 installed, and a KICAD9_SYMBOL_DIR row is invalid in those tables.
+    """
+    cfg_dir = _bundled_kicad_config_dir(esim_root)
+    template = os.path.join(esim_root, 'tools', 'kicad', 'share', 'kicad',
+                            'template', 'sym-lib-table')
+    if cfg_dir is None or not os.path.isdir(cfg_dir) or \
+            not os.path.isfile(template):
+        return False
+
+    sys.path.insert(0, os.path.join(esim_root, 'src', 'maker'))
+    try:
+        from kicad_symlib import _atomic_write, _balanced_end  # noqa: E402
+    except ImportError:
+        return False
+    finally:
+        sys.path.pop(0)
+
+    with open(template) as fh:
+        stock_table = fh.read()
+    entry_re = re.compile(r'\(lib\s+\(name\s+"([^"]+)"\)')
+    uri_re = re.compile(r'\(uri\s+"[^"]*[/\\]([^/\\"]+\.kicad_sym)"\)')
+    symbol_dir = os.path.join(esim_root, 'tools', 'kicad', 'share', 'kicad',
+                              'symbols')
+    stock_entries = []
+    for match in entry_re.finditer(stock_table):
+        end = _balanced_end(stock_table, match.start())
+        if end != -1:
+            entry = stock_table[match.start():end].strip()
+            uri_match = uri_re.search(entry)
+            if uri_match:
+                owned_uri = os.path.join(symbol_dir, uri_match.group(1))
+                entry = uri_re.sub(lambda _match: '(uri "%s")' % owned_uri,
+                                   entry, count=1)
+                stock_entries.append((match.group(1), entry))
+    if not stock_entries:
+        return False
+
+    table = os.path.join(cfg_dir, 'sym-lib-table')
+    try:
+        with open(table) as fh:
+            content = fh.read()
+    except FileNotFoundError:
+        content = '(sym_lib_table\n  (version 7)\n)\n'
+
+    existing = set(entry_re.findall(content))
+    additions = []
+    for name, entry in stock_entries:
+        if name in existing:
+            continue
+        if '(disabled)' not in entry:
+            entry = entry[:-1] + '(disabled))'
+        additions.append('  ' + entry.replace('\n', '\n  ') + '\n')
+    if not additions:
+        return True
+
+    idx = content.rstrip().rfind(')')
+    if idx == -1:
+        return False
+    _atomic_write(table, content[:idx] + ''.join(additions) + content[idx:])
+    return True
 
 
 def register_kicad_libraries(esim_root):
@@ -281,8 +365,8 @@ def register_kicad_libraries(esim_root):
 
     On Windows eSim does NOT copy static libs into KiCad's own install tree
     (that was the old tribal-installer behaviour); they are referenced in
-    place from the eSim install dir. KiCad's standard libraries are never
-    touched.
+    place from the eSim install dir. KiCad's standard libraries are registered
+    separately by register_kicad_stock_libraries().
 
     If KiCad has never been started (%APPDATA%/kicad absent) there is nothing
     to register into yet; runtime ensure_lib_registered calls in the model
@@ -336,7 +420,8 @@ def main(argv=None):
         ('spinit code-model paths', fix_spinit),
         ('libvvp.dll', ensure_unversioned_libvvp),
         ('kicad config dir', ensure_kicad_config_dir),
-        ('kicad sym-lib-table', register_kicad_libraries),
+        ('kicad stock sym-lib-table', register_kicad_stock_libraries),
+        ('eSim sym-lib-table', register_kicad_libraries),
     )
     failed = 0
     for label, step in steps:

@@ -839,6 +839,24 @@ function Stage-Kicad {
     foreach ($d in @('share\kicad\symbols', 'share\kicad\footprints', 'share\kicad\template')) {
         if (-not (Test-Path (Join-Path $dst $d))) { Die "staged KiCad is missing $d" }
     }
+    # The bootstrap registers every row from KiCad's own template disabled by
+    # default. Prove the template and symbol directory are a complete pair:
+    # no referenced file was pruned, and no shipped library lacks a row users
+    # can activate later in KiCad's Symbol Libraries dialog.
+    $symbolDir = Join-Path $dst 'share\kicad\symbols'
+    $templateFile = Join-Path $dst 'share\kicad\template\sym-lib-table'
+    if (-not (Test-Path $templateFile)) { Die 'staged KiCad is missing its sym-lib-table template' }
+    $templateText = Get-Content -Raw $templateFile
+    $templateSymbols = @([regex]::Matches(
+        $templateText, '[/\\]([^/\\"]+\.kicad_sym)"') |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    $stockSymbols = @(Get-ChildItem $symbolDir -Filter '*.kicad_sym' -File |
+        ForEach-Object { $_.Name } | Sort-Object -Unique)
+    $missingFiles = @($templateSymbols | Where-Object { $_ -notin $stockSymbols })
+    $missingRows = @($stockSymbols | Where-Object { $_ -notin $templateSymbols })
+    if ($stockSymbols.Count -eq 0 -or $missingFiles.Count -or $missingRows.Count) {
+        Die "KiCad symbol/template mismatch: $($stockSymbols.Count) files, $($templateSymbols.Count) rows; missing files [$($missingFiles -join ', ')]; missing rows [$($missingRows -join ', ')]"
+    }
     # The repo's Examples are legacy-format .sch (they predate KiCad 6);
     # kicad-cli imports that directly, which conveniently ALSO proves the
     # pruned tree still reads the legacy schematics eSim users have.
@@ -849,7 +867,7 @@ function Stage-Kicad {
     if (-not (Test-Path $net) -or (Get-Item $net).Length -eq 0) {
         Die 'staged KiCad failed to netlist Examples\BasicGates (smoke test)'
     }
-    Log "KiCad $($Manifest.kicad_installer.version) staged (pruned) + netlist smoke OK"
+    Log "KiCad $($Manifest.kicad_installer.version) staged (pruned), $($stockSymbols.Count) stock symbol libraries + netlist smoke OK"
 }
 
 function Stage-Launcher {

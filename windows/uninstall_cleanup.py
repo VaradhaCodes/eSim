@@ -10,11 +10,12 @@
 #                     ~/.esim            config.ini, kicad_symbols/, caches
 #                     ~/.nghdl           config.ini
 #                     %APPDATA%/kicad/<ver>/sym-lib-table
-#                                        eSim_* library rows, whose uri points
-#                                        INTO the install dir that is about to
-#                                        be deleted -- left behind they make
-#                                        KiCad raise "library not found" on
-#                                        every schematic the user opens next.
+#                                        eSim rows plus bundled KiCad stock
+#                                        rows added by windows_bootstrap.py;
+#                                        their uris point INTO the install dir
+#                                        that is about to be deleted -- left
+#                                        behind they make KiCad raise "library
+#                                        not found" on every schematic next.
 #
 #                   So the uninstaller runs this script (as the ORIGINAL,
 #                   non-elevated user -- see installer.iss CurUninstallStep-
@@ -124,24 +125,24 @@ def _atomic_write(path, data):
         raise
 
 
-def _row_is_esim(name, uri, esim_root, purge_user_data):
+def _row_is_owned(name, uri, esim_root, purge_user_data):
     """Should this sym-lib-table row go?
 
-    Only eSim's own rows are ever considered, and then only when their target
-    is one eSim owns:
-      * inside the install tree                      -> always (it is going)
+    Rows are removed only when their target is one eSim owns:
+      * inside the install tree, including bundled
+        KiCad's disabled stock symbol rows           -> always (it is going)
       * a generated lib under ~/.esim/kicad_symbols  -> only when the user
                                                         asked for that data to
                                                         be removed as well
       * a legacy ${KICAD*_SYMBOL_DIR} row eSim wrote before the libraries
         moved into ~/.esim                           -> always (dangling now)
-    Anything else named eSim_* -- e.g. a library the user copied somewhere of
-    their own and registered by hand -- is left alone."""
+    Anything else -- including a system KiCad stock row, or an eSim_* library
+    the user copied somewhere of their own -- is left alone."""
+    if esim_root and _under(uri, esim_root):
+        return True
     if not name.startswith('eSim_'):
         return False
     if uri.startswith('${KICAD') and 'SYMBOL_DIR' in uri:
-        return True
-    if esim_root and _under(uri, esim_root):
         return True
     gen_dir = os.path.join(_home(), '.esim', 'kicad_symbols')
     if _under(uri, gen_dir):
@@ -164,7 +165,7 @@ def clean_sym_lib_table(table, esim_root, purge_user_data=False,
     def drop(m):
         uri_m = _URI.search(m.group(0))
         uri = uri_m.group('uri') if uri_m else ''
-        if _row_is_esim(m.group('name'), uri, esim_root, purge_user_data):
+        if _row_is_owned(m.group('name'), uri, esim_root, purge_user_data):
             removed.append(m.group('name'))
             return ''
         return m.group(0)
