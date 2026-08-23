@@ -32,6 +32,8 @@ MANIFEST = os.path.join(WINDIR, 'deps-manifest.json')
 REQS = os.path.join(WINDIR, 'requirements-windows.txt')
 BUILD_PS1 = os.path.join(WINDIR, 'build-windows.ps1')
 INSTALL_SH = os.path.join(REPO, 'Ubuntu', 'install-eSim.sh')
+SKY130_PREPARE = os.path.join(
+    REPO, 'src', 'configuration', 'Sky130Prepare.py')
 
 # The dirs the running app writes inside the install tree. Keep in step with
 # installer.iss's [Dirs] comment, which records what each one is written by.
@@ -299,3 +301,50 @@ def test_packages_lock_is_shipped_not_excluded():
         for pattern in m.group(1).split(','):
             assert 'PACKAGES.lock' not in pattern
             assert pattern.strip() != '*'
+
+
+# --------------------------------------------------------------------------
+# SKY130 -- expanded, repaired, and electrically smoke-tested before shipping
+# --------------------------------------------------------------------------
+
+def test_windows_stage_expands_sky130_and_drops_both_archive_layers():
+    text = _read(BUILD_PS1)
+    stage = text.split('function Stage-Sky130', 1)[1].split(
+        '\nfunction ', 1)[0]
+    assert 'sky130_fd_pr.tar.xz' in stage
+    assert 'sky130_fd_pr.tar' in stage
+    assert 'Sky130Prepare.py' in stage
+    assert 'Remove-Item $tar, $archive' in stage
+    assert "Test-Path $archive" in stage
+    assert "Test-Path $pdk" in stage
+
+    main = text.rsplit('# ----------------------------------------------------------------- main ----',
+                       1)[1]
+    assert main.index('Stage-Python') < main.index('Stage-Sky130')
+    assert main.index('Stage-Sky130') < main.index('Stage-SimToolchain')
+
+
+def test_windows_build_runs_real_sky130_inverter_smoke():
+    text = _read(BUILD_PS1)
+    smoke = text.split('function Test-Sky130Simulation', 1)[1].split(
+        '\nfunction ', 1)[0]
+    assert 'sky130.lib.spice' in smoke
+    assert 'sky130_fd_pr__nfet_01v8' in smoke
+    assert 'sky130_fd_pr__pfet_01v8' in smoke
+    assert '.measure tran vout_low' in smoke
+    assert '.measure tran vout_high' in smoke
+    assert 'ngbehavior=hsa' in smoke
+
+    main = text.rsplit('# ----------------------------------------------------------------- main ----',
+                       1)[1]
+    assert main.index('Stage-Ngspice') < main.index('Test-Sky130Simulation')
+
+
+def test_both_installers_use_the_same_sky130_repair_helper():
+    assert os.path.isfile(SKY130_PREPARE)
+    helper = _read(SKY130_PREPARE)
+    assert 'BROKEN_INCLUDE' in helper
+    assert 'FIXED_INCLUDE' in helper
+    assert 'unknown PDK revision' in helper
+    assert 'Sky130Prepare.py' in _read(BUILD_PS1)
+    assert 'Sky130Prepare.py' in _read(INSTALL_SH)

@@ -145,6 +145,15 @@ Design decisions:
 * **Per-user state happens at launch, not install** (`windows_bootstrap.py`
   runs from `esim.bat` every start, idempotently). Multi-user machines and
   upgrades self-heal, and the logic is testable.
+* **SKY130 is expanded and validated at build time.** The repository keeps
+  `library/sky130_fd_pr.tar.xz` as the compact release source, but
+  `Stage-Sky130` expands it into `library\sky130_fd_pr`, applies the one exact
+  known upstream model-deck repair through
+  `src/configuration/Sky130Prepare.py`, and removes both archive layers before
+  Inno Setup runs. The build then loads the complete `tt` corner in ngspice
+  and simulates a 1.8 V CMOS inverter, checking its low/high output levels.
+  This is deliberately an electrical smoke test: directory-existence checks
+  cannot catch a malformed nested SPICE include.
 * **Space-free default install root** (`C:\FOSSEE\eSim`): the MSYS2/mingw
   toolchain and code-model paths break subtly under `Program Files`. HDL model
   builds write into the install tree by design (exactly like the Ubuntu install
@@ -247,7 +256,8 @@ to see the live truth for that machine.
 | NgVeri code-model builds | 🧪 *Full* flavour only | mingw gcc/make/verilator via `MSYS_HOME`; doctor-gated with per-tool errors |
 | NgVeri d_cosim (Icarus) flow | 🧪 *Full* | Custom ngspice carries `d_cosim`/`ivlng`; iverilog built `--enable-libvvp` |
 | NGHDL / GHDL VHDL co-simulation | 🧪 *Full* | Custom ngspice (`ghdl.cm`) + MSYS2 `ghdl-llvm` + staged `nghdl/src` python/ghdlserver (`_WIN32` socket code already in-tree); Winsock now linked via `-lws2_32` |
-| SKY130 / IHP PDKs | ❌ not shipped | Analog PDK flows are Ubuntu-only today; deliberately lower priority than the HDL toolchain (revisit after W1–W13 pass) |
+| SKY130 PDK | 🧪 | Expanded, repaired and CMOS-inverter-tested during every Windows build; awaiting clean-VM W6 confirmation |
+| IHP PDK | ❌ not shipped | IHP's installer remains Ubuntu-only |
 
 ### Uninstall (Windows)
 
@@ -340,7 +350,8 @@ and send the zip it drops on the Desktop.
 | GHDL | apt `ghdl-llvm` (**never** the `ghdl` meta → mcode) | MSYS2 `mingw-w64-x86_64-ghdl-llvm` (Full flavour); build hard-fails on an mcode backend | See `GHDL-BACKEND-26.04.md` — the trap is identical on both OSes. |
 | gcc/make | apt `build-essential` | MSYS2 mingw64 (Full flavour) | Runtime code-model compilation. |
 | nghdl python + ghdlserver sources | shipped in `nghdl/` (softlinked `nghdl` launcher) | staged at `<install>\nghdl\` (`SRC_HOME`), embedded in the Makerchip VHDL tab | `ngspice_ghdl.py` copies `src/ghdlserver/*` into each model's `DUTghdl/` at build time. |
-| SKY130 / IHP PDK | bundled tarball / `ihp/` script | not shipped | Ubuntu-only flows. |
+| SKY130 PDK | bundled tarball, repaired after extraction | bundled as an expanded, repaired directory | Both targets use `Sky130Prepare.py`; Windows additionally runs an ngspice inverter smoke test and ships no PDK tarball. |
+| IHP PDK | `ihp/` install script | not shipped | Ubuntu-only flow. |
 
 ---
 

@@ -135,8 +135,16 @@ def _sanitize_net(name):
     to a code-based name. Distinct nets that collapse to the same string are
     disambiguated by the caller (see xml_to_spice_lines); never short here.
     """
+    raw = name.strip().lower()
+    # The bundled eSim power symbol exports its value as ``eSim_GND``.  Unlike
+    # KiCad's stock ``GND`` spelling, ngspice does not treat ``esim_gnd`` as
+    # its reference node, so the previously generated circuit floated and
+    # failed with a singular matrix.  Normalize both spellings explicitly;
+    # SPICE node 0 is the only portable ground representation.
+    if raw in ('0', 'gnd', 'esim_gnd'):
+        return '0'
     safe = ''.join(c if (c.isalnum() or c == '_') else '_'
-                   for c in name.strip().lower())
+                   for c in raw)
     return safe.strip('_')
 
 
@@ -199,7 +207,9 @@ def xml_to_spice_lines(xml_path, title="KiCad schematic", proj_dir=None):
         code = net.get('code') or '0'
         raw = net.get('name') or ('net' + code)
         safe = _sanitize_net(raw) or ('net' + code)
-        if safe in used:
+        # All accepted ground spellings intentionally collapse to SPICE node
+        # zero.  Other sanitized collisions must remain distinct nets.
+        if safe != '0' and safe in used:
             safe = safe + '_' + code
         used.add(safe)
         net_name[net] = safe

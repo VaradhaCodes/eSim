@@ -1061,6 +1061,14 @@ installSky130Pdk() {
     sudo rm -rf /usr/share/local/sky130_fd_pr
     rm -rf "$eSim_Home/library/sky130_fd_pr"
     tar -xJf "$t" -C "$eSim_Home/library"
+    # The pinned upstream PDK snapshot has one malformed Spectre-style
+    # `include` line.  Ngspice treats it as a current source and refuses to
+    # parse every sky130.lib corner, even for circuits that do not instantiate
+    # that native 5 V device.  The shared helper applies only the exact known
+    # repair and rejects unknown/incomplete PDK revisions.
+    python3 "$eSim_Home/src/configuration/Sky130Prepare.py" \
+        "$eSim_Home/library/sky130_fd_pr" \
+        || die "SKY130 PDK validation/repair failed"
     sudo mkdir -p /usr/share/local
     sudo mv "$eSim_Home/library/sky130_fd_pr" /usr/share/local/
     sudo chown -R "$USER:$USER" /usr/share/local/sky130_fd_pr

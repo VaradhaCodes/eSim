@@ -244,6 +244,46 @@ function Stage-Python {
     if ($LASTEXITCODE -ne 0) { Die 'PyQt6/Qsci import check failed' }
 }
 
+function Stage-Sky130 {
+    <# The repository carries SKY130 as a compressed release payload.  The
+       application, however, opens library\sky130_fd_pr\models directly, so
+       Windows must ship the expanded tree -- never the tarball.  Repair the
+       one malformed include in this pinned upstream snapshot through the
+       same Python helper the Ubuntu installer uses, then delete both archive
+       layers only after validation succeeds. #>
+    Log 'Staging extracted and ngspice-ready SKY130 PDK'
+    $lib = Join-Path $Stage 'library'
+    $archive = Join-Path $lib 'sky130_fd_pr.tar.xz'
+    $tar = Join-Path $lib 'sky130_fd_pr.tar'
+    $pdk = Join-Path $lib 'sky130_fd_pr'
+
+    if (Test-Path $archive) {
+        # Stage-App mirrors the source tree on every build.  Re-expand the
+        # archive rather than retaining an older incremental-stage directory.
+        Remove-Item $pdk -Recurse -Force -ErrorAction SilentlyContinue
+        & $7z x $archive "-o$lib" -y | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tar)) {
+            Die 'failed to decompress library\sky130_fd_pr.tar.xz'
+        }
+        & $7z x $tar "-o$lib" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Die 'failed to extract library\sky130_fd_pr.tar'
+        }
+    }
+    if (-not (Test-Path $pdk)) {
+        Die 'SKY130 PDK missing after staging (expected library\sky130_fd_pr)'
+    }
+
+    $prepare = Join-Path $Stage 'src\configuration\Sky130Prepare.py'
+    & (Join-Path $Stage 'python\python.exe') $prepare $pdk
+    if ($LASTEXITCODE -ne 0) { Die 'SKY130 PDK validation/repair failed' }
+
+    Remove-Item $tar, $archive -Force -ErrorAction SilentlyContinue
+    if ((Test-Path $tar) -or (Test-Path $archive)) {
+        Die 'SKY130 archive remained in stage after successful extraction'
+    }
+}
+
 function Stage-Ngspice {
     Log 'Staging ngspice (official Windows build; Compact-flavour fallback)'
     $arc = Get-Dep 'ngspice'
@@ -270,6 +310,64 @@ function Stage-Ngspice {
             Copy-Item $dst $shim -Recurse
         }
     }
+}
+
+function Test-Sky130Simulation {
+    <# Parse the complete tt corner and run a real CMOS inverter through the
+       exact ngspice path eSim launches.  A file-existence check missed the
+       upstream line that ngspice parsed as a current source; this catches the
+       packaging boundary and model-deck boundary together. #>
+    Log 'Verifying staged SKY130 PDK with a CMOS inverter simulation'
+    $ngspice = Join-Path $Stage 'tools\nghdl\install_dir\bin\ngspice.exe'
+    if (-not (Test-Path $ngspice)) { Die 'runtime ngspice missing for SKY130 smoke test' }
+    $pdk = (Join-Path $Stage 'library\sky130_fd_pr') -replace '\\', '/'
+    $smoke = Join-Path $Build 'sky130-smoke'
+    New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+    Set-Content (Join-Path $smoke '.spiceinit') -Encoding ascii @'
+set ngbehavior=hsa
+set ng_nomodcheck
+'@
+    Set-Content (Join-Path $smoke 'inverter.cir') -Encoding ascii @"
+* eSim staged SKY130 CMOS inverter smoke test
+.include "$pdk/models/sky130_fd_pr__model__r+c.model.spice"
+.include "$pdk/models/sky130_fd_pr__model__linear.model.spice"
+.include "$pdk/models/sky130_fd_pr__model__diode_pw2nd_11v0.model.spice"
+.include "$pdk/models/sky130_fd_pr__model__diode_pd2nw_11v0.model.spice"
+.lib "$pdk/models/sky130.lib.spice" tt
+.include "$pdk/models/sky130_fd_pr__model__inductors.model.spice"
+.include "$pdk/models/sky130_fd_pr__model__pnp.model.spice"
+VDD vdd 0 1.8
+VIN in 0 PULSE(0 1.8 1n 50p 50p 2n 4n)
+XMN out in 0 0 sky130_fd_pr__nfet_01v8 w=1 l=0.15
+XMP out in vdd vdd sky130_fd_pr__pfet_01v8 w=2 l=0.15
+CLOAD out 0 10f
+.tran 10p 8n
+.measure tran vout_low FIND v(out) AT=2n
+.measure tran vout_high FIND v(out) AT=4n
+.end
+"@
+
+    Push-Location $smoke
+    try {
+        $output = (& $ngspice -b 'inverter.cir' 2>&1 | Out-String)
+        $rc = $LASTEXITCODE
+    }
+    finally { Pop-Location }
+    if ($rc -ne 0) { Die "SKY130 inverter simulation failed (rc=$rc):`n$output" }
+
+    $low = [regex]::Match($output, 'vout_low\s*=\s*([-+0-9.eE]+)')
+    $high = [regex]::Match($output, 'vout_high\s*=\s*([-+0-9.eE]+)')
+    if (-not $low.Success -or -not $high.Success) {
+        Die "SKY130 inverter measurements missing:`n$output"
+    }
+    $lowValue = [double]::Parse($low.Groups[1].Value,
+        [Globalization.CultureInfo]::InvariantCulture)
+    $highValue = [double]::Parse($high.Groups[1].Value,
+        [Globalization.CultureInfo]::InvariantCulture)
+    if ([math]::Abs($lowValue) -ge 0.1 -or $highValue -le 1.7) {
+        Die "SKY130 inverter response invalid (low=$lowValue, high=$highValue)"
+    }
+    Log "SKY130 inverter OK (low=$lowValue V, high=$highValue V)"
 }
 
 function Stage-Iverilog {
@@ -1230,9 +1328,11 @@ New-Item -ItemType Directory -Force -Path $Build, $Dist | Out-Null
 
 Stage-App
 Stage-Python
+Stage-Sky130        # archive -> validated runtime dir; archive never ships
 Stage-Msys           # must precede Stage-SimToolchain (it builds inside MSYS2)
 Stage-SimToolchain   # custom ngspice + libvvp iverilog (Full flavour)
 Stage-Ngspice        # official build: Compact fallback (+ shim on -SkipSimBuild)
+Test-Sky130Simulation # complete tt-corner parse + analog inverter response
 Stage-Iverilog       # Bleyer fallback, only on -SkipSimBuild
 Stage-Kicad          # pruned official KiCad payload -> tools\kicad (bundled)
 Stage-Launcher       # eSim.exe (native shortcut target; after Stage-App's /MIR)

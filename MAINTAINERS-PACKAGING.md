@@ -110,7 +110,7 @@ Copy this table into the release PR/issue and fill the Result column.
 | W3 | KiCad hand-off | with KiCad absent, installer offers the bundled official KiCad setup | Win VM |
 | W4 | Per-user bootstrap | after first launch: `%USERPROFILE%\.esim\config.ini`, `kicad_symbols\` seeded, full `%USERPROFILE%\.nghdl\config.ini` (NGHDL/SRC/COMPILER/COSIM sections), spinit codemodel lines point at the install, eSim libs in `%APPDATA%\kicad\<ver>\sym-lib-table` | Win VM |
 | W5 | Doctor all-green | `C:\FOSSEE\eSim\esim.bat --doctor` exits 0, every row OK (Full flavour) | Win VM |
-| W6 | ngspice sim | Examples project simulates + plots (custom console ngspice from `tools\nghdl\install_dir`) | Win VM |
+| W6 | ngspice + SKY130 sim | Examples project simulates + plots; `library\sky130_fd_pr` exists, `sky130_fd_pr.tar*` does not; a SKY130 1.8 V CMOS inverter simulates and inverts correctly through `tools\nghdl\install_dir\bin\ngspice.exe` | Win VM |
 | W7 | Verifier (iverilog) | compile+simulate a `.v` | Win VM |
 | W8 | NgVeri build (Full) | Verilog model build via bundled MSYS2 toolchain; symbol lands in `eSim_Ngveri` | Win VM |
 | W9 | d_cosim end-to-end (Full) | NgVeri Dual Co-sim build, then simulate a schematic using the model (ivlng loads libvvp — check `~/.esim/dcosim.log`) | Win VM |

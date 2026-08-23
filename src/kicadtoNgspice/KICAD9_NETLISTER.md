@@ -531,7 +531,8 @@ fills in the source and analysis parameters through the eSim tabs.
 
 **Cosmetic differences from legacy `.cir` that are harmless:**
 
-- Net-name spelling (ngspice is case-insensitive; it aliases `gnd` → node 0 built-in)
+- Net-name spelling (ngspice is case-insensitive; the netlister explicitly
+  normalizes KiCad `GND` and eSim's `eSim_GND` power symbol to SPICE node `0`)
 - Component order in the file (ngspice is order-independent)
 - Unconnected pins: legacy lumps all as `?`; KiCad-9 emits distinct
   `unconnected-*` nodes — each is a distinct floating node, simulates the same

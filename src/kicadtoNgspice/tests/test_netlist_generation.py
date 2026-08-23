@@ -42,6 +42,21 @@ REAL_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </export>
 """
 
+GROUND_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <components>
+    <comp ref="R1"><value>1k</value><fields/></comp>
+    <comp ref="R2"><value>2k</value><fields/></comp>
+  </components>
+  <nets>
+    <net code="1" name="in"><node ref="R1" pin="1"/></net>
+    <net code="2" name="eSim_GND"><node ref="R1" pin="2"/></net>
+    <net code="3" name="GND"><node ref="R2" pin="1"/></net>
+    <net code="4" name="out"><node ref="R2" pin="2"/></net>
+  </nets>
+</export>
+"""
+
 
 @pytest.fixture
 def project(tmp_path):
@@ -104,6 +119,16 @@ def test_a_real_schematic_is_written(project, monkeypatch):
     ok, _msg = KicadNetlister.generate_netlist(str(project), 'blk')
     assert ok is True
     assert 'r1 in out 1k' in _cir(project)
+
+
+def test_esim_and_kicad_ground_names_become_spice_node_zero(tmp_path):
+    xml = tmp_path / 'ground.xml'
+    xml.write_text(GROUND_XML)
+
+    lines = KicadNetlister.xml_to_spice_lines(str(xml), proj_dir=str(tmp_path))
+
+    assert 'r1 in 0 1k' in lines
+    assert 'r2 0 out 2k' in lines
 
 
 # -- the other refusals ------------------------------------------------------
