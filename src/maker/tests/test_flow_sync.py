@@ -92,6 +92,17 @@ def test_external_change_is_a_non_modal_reload():
         "the reload bar must offer Reload / Keep-mine (non-modal)"
 
 
+def test_flownav_close_stops_makerchip_loopback_session():
+    """Closing the dock must release a browser bridge owned by its Author.
+
+    Child widgets are destroyed with the dock but do not reliably receive a
+    close event of their own, so the host owns this explicit lifecycle call.
+    """
+    src = _read(_FLOWNAV)
+    close = _func(src, "closeEvent")
+    assert close is not None and "stop_makerchip_bridge" in _calls_in(close)
+
+
 def test_no_send_handoff_remains():
     """The old explicit hand-off (Verify -> _on_verified -> Author -> Convert)
     is replaced by automatic in-memory sync; it must be gone."""

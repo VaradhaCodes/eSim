@@ -130,6 +130,10 @@ flowchart LR
   and a source no parser can read. Designs live in
   `<workspace>/VerilogLibrary/<module>/`, written by `DesignBus`'s debounced
   autosave (`maker/verilog_library.py`).
+- [`docs/MAKERCHIP_INTEGRATION.md`](docs/MAKERCHIP_INTEGRATION.md) — the
+  browser-plugin bridge behind **Edit in Makerchip IDE**, including file sync,
+  conflict handling, loopback security and the boundary between Makerchip and
+  eSim Verify/Convert.
 - [`docs/UPSTREAM_DECISIONS.md`](docs/UPSTREAM_DECISIONS.md) — the defects in
   eSim's core converter and the NgVeri backend that are **measured, fixed, and
   deliberately switched off**, because turning them on would change results

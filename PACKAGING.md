@@ -55,7 +55,8 @@ Key design decisions (do not regress these):
   scipy) so they stay ABI-consistent with the system Qt. pip-pinning them is
   what made the pre-2026 per-version scripts fragile. The venv is created
   `--system-site-packages`; pip adds only pure-python extras (watchdog,
-  hdlparse, makerchip-app, sandpiper-saas, volare).
+  hdlparse, sandpiper-saas, volare). Makerchip itself is embedded through its
+  supported browser plugin and has no local Python package.
 * **KiCad symbol split**: eSim's 14 static symbol libraries go to
   `/usr/share/kicad/symbols/` **root-owned**; the 3 libraries eSim rewrites
   at runtime (`eSim_Ngveri`, `eSim_NgVeriCosim`, `eSim_Nghdl`) live in
@@ -342,7 +343,7 @@ and send the zip it drops on the Desktop.
 | Python 3 | system (`python3-full`, venv `--system-site-packages`) | bundled private CPython (nuget) | Ubuntu: one Python, ABI-consistent with apt Qt. Windows: no system Python to rely on. |
 | PyQt6 + QScintilla | apt `python3-pyqt6`, `python3-pyqt6.qsci` | pip wheels `PyQt6`, `PyQt6-QScintilla` | Apt keeps Qt ABI-consistent on Ubuntu; wheels bundle their own Qt on Windows. |
 | matplotlib / numpy / scipy / psutil | apt | pip wheels | Same reasoning as Qt. |
-| watchdog, hdlparse, makerchip-app, sandpiper-saas, volare | pip (venv) | pip (bundled Python) | Pure-python / not packaged by distros. |
+| watchdog, hdlparse, sandpiper-saas, volare | pip (venv) | pip (bundled Python) | Pure-python / not packaged by distros. Makerchip uses its hosted browser plugin. |
 | KiCad 8/9 | apt (PPA on 24.04, universe on 26.04) | official installer payload, pruned by Stage-Kicad, bundled at `tools\kicad` | Ubuntu: never touch KiCad's packages. Windows: reproducible prune of the pinned official payload (no 3D models/demos/translations); KiCad's own libraries inside it stay untouched. |
 | ngspice (d_cosim + ivlng + ghdl.cm) | source-built by `nghdl/install-nghdl.sh` | source-built by `Stage-SimToolchain` inside MSYS2 (same tarball, same patch, same flags) → `tools\nghdl` | The ONLY ngspice with the eSim co-sim bridges; both OSes now run the identical custom build. Official Windows zip ships at `tools\ngspice` purely as the Compact fallback. |
 | Icarus Verilog (`libvvp`) | source-built by `nghdl/install-nghdl.sh` (apt's lacks `libvvp`) | source-built by `Stage-SimToolchain` at the SAME pinned commit, `--enable-libvvp`, staged under `library/bin/iverilog/` | `ivlng` dlopens `libvvp` at runtime on both OSes; no prebuilt Windows Icarus ships it (Bleyer = `-SkipSimBuild` fallback only). |

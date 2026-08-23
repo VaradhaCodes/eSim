@@ -198,7 +198,7 @@ def _ubuntu_pins():
 
 
 def test_windows_and_ubuntu_install_the_same_pins():
-    """The two lists are the same four tools plus watchdog. They drift the
+    """The two lists are the same three tools plus watchdog. They drift the
     moment one is bumped alone, and the symptom is a bug that reproduces on
     exactly one OS."""
     win = set(_windows_pins())
@@ -230,7 +230,7 @@ def test_named_tools_carry_both_a_floor_and_a_ceiling(pins_of):
     named = [p for p in pins_of() if not p.startswith('http')
              and not p.startswith('watchdog')]
     assert {p.split('>')[0] for p in named} == {
-        'makerchip-app', 'sandpiper-saas', 'volare'}
+        'sandpiper-saas', 'volare'}
     for spec in named:
         assert '>=' in spec, spec
         assert re.search(r'<\s*\d', spec), (

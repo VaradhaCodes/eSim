@@ -32,7 +32,6 @@ watchdog>=3.0
 # master through a legacy redirect, so the URL silently tracked whatever main
 # pointed at. Pinned to the commit main resolves to today (bump deliberately).
 https://github.com/hdl/pyhdlparser/tarball/e1153ace8ca1e25f9fb53350c41058ef8eb8dacf
-makerchip-app>=1.1.6,<2
 sandpiper-saas>=1.1.0,<2
 # volare is 0.x: the MINOR is its breaking unit, so the ceiling is 0.21.
 volare>=0.20.6,<0.21

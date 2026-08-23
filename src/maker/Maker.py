@@ -35,9 +35,9 @@ from configuration.Appconfig import Appconfig
 from frontEnd.theme_utils import zoom_px, on_zoom_changed
 import os
 import re
-import shutil
 from os.path import expanduser
 from .DesignBus import DesignBus
+from .MakerchipBridge import MakerchipBridge
 from . import verilog_library
 from .hdl.ports import top_module_name
 from .VerilogVerifier import HdlEditor
@@ -86,6 +86,7 @@ class Maker(QtWidgets.QWidget):
         self._applying = False
         self.bus = None
         self._owns_bus = False
+        self._makerchip_bridge = None
         self.createMakerWidget()
         self.obj_Appconfig = Appconfig()
         verilogFile.append("")
@@ -151,9 +152,16 @@ class Maker(QtWidgets.QWidget):
             self.refresh_library_list()
 
     def closeEvent(self, event):
+        self.stop_makerchip_bridge()
         if self.bus is not None and self._owns_bus:
             self.bus.close()
         super().closeEvent(event)
+
+    def stop_makerchip_bridge(self):
+        """Release the loopback session when Author or its host closes."""
+        if self._makerchip_bridge is not None:
+            self._makerchip_bridge.stop()
+            self._makerchip_bridge = None
 
     # This function is to Add new verilog file
     def addverilog(self):
@@ -300,7 +308,7 @@ class Maker(QtWidgets.QWidget):
                 "exists and is writable.")
         return written
 
-    # This is used to run the makerchip-app
+    # Open the current design through Makerchip's supported browser plugin.
     def runmakerchip(self):
         try:
             if not makerchipTOSAccepted(True):
@@ -309,25 +317,36 @@ class Maker(QtWidgets.QWidget):
             # Makerchip reads the design off disk; flush any in-editor edits
             # first so it sees the current text, not a stale file.
             if self.bus is not None:
-                self.bus.materialize()
+                materialized = self.bus.materialize()
+                if materialized:
+                    self.verilogfile = materialized
+
+            if not self.verilogfile or not os.path.isfile(self.verilogfile):
+                Dialogs.critical(
+                    self, "Error Message",
+                    "<b>There is no saved Verilog design to open.</b><br/><br/>"
+                    "Name a module in the Author editor or open a Verilog "
+                    "file, then try again.",
+                    QtWidgets.QMessageBox.StandardButton.Ok)
+                return
 
             print("Running Makerchip IDE...........................")
             # self.file = open(self.verilogfile,"w")
             # self.file.write(self.entry_var[1].toPlainText())
             # self.file.close()
             filename = self.verilogfile
-            if self.verilogfile.split('.')[-1] != "tlv":
+            if os.path.splitext(self.verilogfile)[1].lower() != ".tlv":
                 reply = Dialogs.warning(
                     self,
                     "Do you want to automate the top module? ",
-                    "<b>Click on YES button if you want the top module \
-                    to be added automatically. A .tlv file will be created \
-                    in the directory of current verilog file \
-                    and the Makerchip IDE will be running on \
-                    this file. Otherwise click on NO button. \
-                    To not open Makerchip IDE, click on CANCEL button. </b>\
-                    <br><br> NOTE: Makerchip IDE requires an active \
-                    internet connection and a browser.",
+                    "<b>Choose Yes to generate a Makerchip-ready .tlv wrapper "
+                    "with a top module, or No to open the Verilog file "
+                    "unchanged.</b><br/><br/>Browser edits are saved "
+                    "automatically to the file opened in Makerchip. The "
+                    "generated .tlv file sits beside the current Verilog "
+                    "file.<br/><br/>The opened source is processed by the "
+                    "hosted Makerchip service. Makerchip requires an active "
+                    "internet connection and a modern browser.",
                     QtWidgets.QMessageBox.StandardButton.Yes
                     | QtWidgets.QMessageBox.StandardButton.No
                     | QtWidgets.QMessageBox.StandardButton.Cancel)
@@ -337,8 +356,7 @@ class Maker(QtWidgets.QWidget):
                     with open(self.verilogfile) as fh:
                         code = fh.read()
                     text = code
-                    filename = '.'.join(
-                        self.verilogfile.split('.')[:-1]) + ".tlv"
+                    filename = os.path.splitext(self.verilogfile)[0] + ".tlv"
                     # Word-boundary strip of the standalone wire/reg keywords;
                     # the old spaced-substring replace still mangled tokens at
                     # line-start or tab-adjacent (out_reg, wire_sel).
@@ -421,32 +439,24 @@ Add \\TLV here if desired\
                     with open(filename, 'w') as f:
                         f.write(string)
 
-            makerchip_bin = shutil.which('makerchip')
-            if makerchip_bin is None:
-                Dialogs.critical(
-                    self, "Error Message",
-                    "<b>Makerchip was not found on your system.</b><br/>"
-                    "Install it with <i>pip install makerchip-app</i> and "
-                    "make sure it is on your PATH, then try again.",
-                    QtWidgets.QMessageBox.StandardButton.Ok)
-                return
-            self.process = QtCore.QProcess(self)
-            self.process.errorOccurred.connect(self._makerchip_launch_error)
             print("File: " + filename)
-            # Pass the file name as a separate argument (not one space-joined
-            # string) so a path containing spaces is not split into pieces.
-            self.process.start(makerchip_bin, [filename])
-            print(
-                "Makerchip IDE command process pid ---------->",
-                self.process.processId())
+            self.stop_makerchip_bridge()
+            bridge = MakerchipBridge(filename)
+            url = bridge.start()
+            self._makerchip_bridge = bridge
+            if not QtGui.QDesktopServices.openUrl(QtCore.QUrl(url)):
+                bridge.stop()
+                self._makerchip_bridge = None
+                raise RuntimeError("the default browser could not be opened")
+            self.obj_Appconfig.print_info(
+                "Makerchip opened for " + filename)
         except Exception as e:
             print(e)
             Dialogs.critical(
                 self, "Error Message",
-                "Error in running Makerchip IDE. "
-                "Please check if verilog file is chosen.")
-            print("Error in running Makerchip IDE. \
-Please check if verilog file is chosen.")
+                "Could not open Makerchip. Check that a default browser is "
+                "configured and that the internet connection is available.")
+            print("Could not open Makerchip IDE:", e)
         #   initial = self.read_file()
 
         # while True:
@@ -459,17 +469,6 @@ Please check if verilog file is chosen.")
         # self.processfile = QtCore.QProcess(self)
         # self.processfile.start("python3 notify.py")
         # print(self.processfile.readChannel())
-
-    def _makerchip_launch_error(self, _error):
-        '''
-            Called by QProcess.errorOccurred if the Makerchip IDE fails to
-            start (e.g. not installed, or no working browser/network). Tells
-            the user instead of failing silently.
-        '''
-        Dialogs.critical(
-            self, "Error Message",
-            "Could not launch the Makerchip IDE. It needs the makerchip-app "
-            "installed, an active internet connection and a browser.")
 
     # This creates the buttons/options
 
@@ -516,7 +515,9 @@ Please check if verilog file is chosen.")
 
         self.runoptions = QtWidgets.QPushButton("Edit in Makerchip IDE")
         self.runoptions.setToolTip(
-            "Requires internet connection and a browser"
+            "Open this design in hosted Makerchip using your default browser. "
+            "Edits autosave to the opened file; compilation runs in the "
+            "Makerchip service."
         )
         self.runoptions.setToolTipDuration(5000)
         self.optionsgroupbtn.addButton(self.runoptions)

@@ -217,10 +217,11 @@ src/
 │
 ├── maker/                   # Makerchip & NgVeri Integration
 │   ├── Maker.py             # Makerchip IDE integration (23K)
+│   ├── MakerchipBridge.py   # Secure browser-plugin/file bridge
 │   ├── NgVeri.py            # Verilog-to-Ngspice model generator (17K)
 │   ├── ModelGeneration.py   # Auto model generation pipeline (48K)
 │   ├── createkicad.py       # KiCad symbol creation for models (14K)
-│   ├── makerchip.py         # Makerchip cloud IDE connector (3K)
+│   ├── makerchip.py         # HDL Flow Navigator entry widget (3K)
 │   └── Appconfig.py         # Maker-specific configuration (2K)
 │
 ├── converter/               # Schematic Format Converters

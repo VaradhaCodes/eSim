@@ -88,7 +88,6 @@ PYHDLPARSER_REF="e1153ace8ca1e25f9fb53350c41058ef8eb8dacf"
 PIP_PINS=(
     "watchdog>=3.0"
     "https://github.com/hdl/pyhdlparser/tarball/$PYHDLPARSER_REF"
-    "makerchip-app>=1.1.6,<2"
     "sandpiper-saas>=1.1.0,<2"
     "volare>=0.20.6,<0.21"      # 0.x: the MINOR is the breaking unit
 )
@@ -855,7 +854,7 @@ installDependency() {
     # eSim-specific pure-python deps not packaged in apt. Heavy/native deps
     # (PyQt6, matplotlib, numpy, scipy) come from apt above to stay mutually
     # consistent — pinning them via pip here is what made the old scripts fragile.
-    log "Installing eSim Python deps (watchdog, hdlparse, makerchip, sandpiper, volare)"
+    log "Installing eSim Python deps (watchdog, hdlparse, sandpiper, volare)"
     # Each is optional at runtime -- eSim degrades gracefully when one is
     # absent -- so a failure warns and the install continues. watchdog used to
     # be installed WITHOUT a `|| warn`, which under `set +e` meant a failure

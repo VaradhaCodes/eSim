@@ -88,6 +88,42 @@ def test_a_design_appears_in_the_library_panel(author, qapp):
     assert "nand_gate" in names
 
 
+def test_edit_in_makerchip_opens_materialized_design_through_bridge(
+        author, qapp, monkeypatch):
+    """The button must use the supported plugin bridge, not makerchip-app."""
+    from PyQt6 import QtWidgets
+
+    w, _bus = author
+    home = _paste(author, NAND)
+    opened = []
+
+    class FakeBridge:
+        def __init__(self, filename):
+            self.filename = filename
+            self.stopped = False
+
+        def start(self):
+            return "http://127.0.0.1:43210/session/test/"
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(Maker, "makerchipTOSAccepted", lambda *_a: True)
+    monkeypatch.setattr(
+        Maker.Dialogs, "warning",
+        lambda *_a, **_k: QtWidgets.QMessageBox.StandardButton.No)
+    monkeypatch.setattr(Maker, "MakerchipBridge", FakeBridge)
+    monkeypatch.setattr(
+        Maker.QtGui.QDesktopServices, "openUrl",
+        staticmethod(lambda url: opened.append(url.toString()) or True))
+
+    w.runmakerchip()
+
+    assert isinstance(w._makerchip_bridge, FakeBridge)
+    assert w._makerchip_bridge.filename == home
+    assert opened == ["http://127.0.0.1:43210/session/test/"]
+
+
 def test_new_module_starts_a_named_design(author, qapp, monkeypatch):
     from PyQt6 import QtWidgets
     w, bus = author

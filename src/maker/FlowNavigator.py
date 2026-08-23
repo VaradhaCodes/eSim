@@ -496,6 +496,11 @@ class FlowNavigator(QtWidgets.QWidget):
         self._reload_bar.setVisible(False)
 
     def closeEvent(self, event):
+        if self.obj_Maker is not None:
+            # The Author child does not reliably receive a close event when
+            # its dock host is torn down, so release its loopback IDE session
+            # explicitly rather than leaving a server alive until GC.
+            self.obj_Maker.stop_makerchip_bridge()
         if self.bus is not None:
             # close() flushes the pending autosave before stopping the watch,
             # so a design still inside the quiet period is not lost on exit.
