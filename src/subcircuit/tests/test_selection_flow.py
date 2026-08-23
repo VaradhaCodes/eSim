@@ -159,6 +159,7 @@ def test_new_subcircuit_is_selected_and_convertible_after_drawing(tmp_path,
     sel = Appconfig.current_subcircuit
     assert sel['Stem'] == 'my_block'
     assert os.path.isdir(sel['SubcircuitName'])
+    assert 'my_block.kicad_sch' in FakeThread.launched[-1]
 
     # The user draws and exports a netlist in eeschema.
     with open(os.path.join(sel['SubcircuitName'], 'my_block.cir'), 'w') as fh:
