@@ -105,7 +105,7 @@ class Workspace(QtWidgets.QDialog):
         # Defense in depth: read_workspace already clamps the token, but this
         # line runs during Application() construction and must never abort
         # startup or set a bogus tri-state, whatever value the attribute holds
-        # (H7). This is a two-state box, so decide explicitly -- don't feed an
+        # This is a two-state box, so decide explicitly -- don't feed an
         # unvalidated int into Qt.CheckState(): an out-of-range value raises on
         # some Qt builds and silently coerces to Checked on others.
         try:

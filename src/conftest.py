@@ -12,8 +12,8 @@ registry into an admin-owned, since-deleted directory).
 The same class of escape also reached the developer's real KiCad profile:
 ``maker.kicad_symlib._kicad_config_dir`` reads ``%APPDATA%\\kicad`` directly on
 Windows, which ``expanduser`` does NOT cover, so a test that only redirected
-HOME still appended bogus ``sym-lib-table`` entries into the real config (audit
-R2-5). That hole is closed at the source instead — the only tests that reach
+HOME still appended bogus ``sym-lib-table`` entries into the real config. That
+hole is closed at the source instead — the only tests that reach
 ``ensure_lib_registered`` redirect %APPDATA% themselves (see
 ``maker/tests/test_kicad_symlib_paths.py``).
 
@@ -55,7 +55,7 @@ def _detach_appconfig_gui_sinks():
     calls ``print_info`` -> ``_append_note`` -> ``QTextEdit.append()`` on the
     dead object and dies with ``RuntimeError: wrapped C/C++ object of type
     QTextEdit has been deleted`` — reproduced as 17 ngspiceSimulation "ERROR at
-    setup" failures that only appear in a full-suite run (audit R2-6).
+    setup" failures that only appear in a full-suite run.
 
     Detaching both sinks back to their pre-GUI baseline after every test makes
     the sink-replacement local to the test that did it, so the leak cannot

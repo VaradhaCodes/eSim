@@ -396,6 +396,13 @@ def register_kicad_libraries(esim_root):
             target = (os.path.join(gen_dir, fname) if lib in GENERATED_LIBS
                       else os.path.join(static_dir, fname))
             ensure_lib_registered(lib, target)
+        legacy_dir = os.path.join(static_dir, 'legacy')
+        if os.path.isdir(legacy_dir):
+            for fname in sorted(os.listdir(legacy_dir)):
+                if not fname.endswith('.lib'):
+                    continue
+                lib = os.path.splitext(fname)[0]
+                ensure_lib_registered(lib, os.path.join(legacy_dir, fname))
     return True
 
 

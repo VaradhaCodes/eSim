@@ -1067,7 +1067,7 @@ class DockArea(QtWidgets.QMainWindow):
         # dock like every sibling opener. Without this the dock (its Flow
         # Navigator + DesignBus watchdog thread) survived Close Project bound to
         # a closed project, and each open/close cycle leaked an OS observer
-        # thread (H4 / R3-2). Teardown of the watch runs off FlowNavigator's
+        # thread. Teardown of the watch runs off FlowNavigator's
         # destroyed signal (dock destruction skips closeEvent).
         if projDir:
             self.obj_appconfig.dock_dict.setdefault(projDir, []).append(

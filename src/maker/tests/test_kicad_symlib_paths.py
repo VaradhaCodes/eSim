@@ -1,5 +1,5 @@
 """Tests for the generated-symbol-library location + lazy migration + KiCad
-sym-lib-table registration helpers added to ``kicad_symlib`` for P2-2.
+sym-lib-table registration helpers in ``kicad_symlib``.
 
 The three libraries eSim rewrites at runtime (eSim_Ngveri / eSim_NgVeriCosim /
 eSim_Nghdl) moved out of the root-owned /usr/share/kicad/symbols into the
@@ -10,8 +10,8 @@ user's own ~/.esim/kicad_symbols. These tests pin:
 
 HOME (and os.path.expanduser) is redirected to tmp_path throughout, so the real
 ~/.esim is never touched. %APPDATA% is redirected too, because the KiCad config
-dir lives there on Windows and is NOT covered by expanduser (audit R2-5): before
-this, ensure_lib_registered wrote bogus entries into the developer's real
+dir lives there on Windows and is NOT covered by expanduser. Before this,
+ensure_lib_registered wrote bogus entries into the developer's real
 %APPDATA%\\kicad\\sym-lib-table on every Windows run.
 """
 import os
@@ -110,7 +110,7 @@ def _kicad_verdir(tmp_path, monkeypatch):
     hardcoded ``~/.config/kicad`` — so it lands exactly where
     ``ensure_lib_registered`` will look on both platforms (``%APPDATA%\\kicad``
     on Windows, ``~/.config/kicad`` on POSIX). Hardcoding the POSIX path was the
-    R2-5 bug: the test wrote here while the code read the real %APPDATA%, so the
+    The test once wrote here while the code read the real %APPDATA%, so the
     append/rewrite assertions failed on Windows and the real profile got junked.
     """
     _redirect_home(tmp_path, monkeypatch)

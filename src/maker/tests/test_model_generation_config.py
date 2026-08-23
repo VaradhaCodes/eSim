@@ -46,7 +46,7 @@ def test_constructor_accepts_partial_nghdl_config(qapp, tmp_path, monkeypatch):
 
 def test_verilog_parse_keeps_wire_reg_in_identifiers(qapp, tmp_path,
                                                      monkeypatch):
-    """M1: the wire/reg keyword strip must not punch holes in identifiers
+    """The wire/reg keyword strip must not punch holes in identifiers
     that merely CONTAIN 'wire'/'reg' (out_reg, wire_en, data_reg). A bare
     substring replace mangled the module name (parse then fails to match)
     and the port names; a word-boundary regex leaves them intact."""
@@ -89,7 +89,7 @@ def test_verilog_parse_keeps_wire_reg_in_identifiers(qapp, tmp_path,
 ])
 def test_model_stem_is_unified_and_validated(qapp, tmp_path, monkeypatch,
                                              fname, expected_stem, valid):
-    """M4: one os.path.splitext-based stem drives every derived artifact (model
+    """One os.path.splitext-based stem drives every derived artifact (model
     dir, cfunc, ifspec, sim_main, modpath), so a dotted name can't split-brain
     the build the way split('.')[0] did. The stem is then validated as a bare
     identifier -- 'fir.v1' unifies correctly but is refused up front, since it
@@ -107,7 +107,7 @@ def test_model_stem_is_unified_and_validated(qapp, tmp_path, monkeypatch,
 
 def test_convert_on_a_fresh_tree_creates_the_model_dir(qapp, tmp_path,
                                                        monkeypatch):
-    """M9: the digital-model root is built lazily (the remove dialog or a
+    """The digital-model root is built lazily (the remove dialog or a
     previous build makes it), so on a fresh install verilogfile's os.mkdir hit
     a MISSING PARENT and raised FileNotFoundError. The generic handler then
     told the user only "Error in Ngspice code model generation", naming
@@ -132,7 +132,7 @@ def test_convert_on_a_fresh_tree_creates_the_model_dir(qapp, tmp_path,
 
 def test_modpathlst_on_a_fresh_tree_creates_the_list(qapp, tmp_path,
                                                      monkeypatch):
-    """M9: modpath.lst was opened 'r' before it -- or its directory -- existed.
+    """modpath.lst was opened 'r' before it -- or its directory -- existed.
     It is now created on demand, exactly as the remove dialog already did."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -196,7 +196,7 @@ def test_modpathlst_does_not_glue_onto_an_unterminated_last_line(
 
 def test_ifspec_output_ports_go_through_out_port_table(qapp, tmp_path,
                                                        monkeypatch):
-    """M16: the output loop appended to in_port_table, leaving the later
+    """The output loop appended to in_port_table, leaving the later
     "for item in out_port_table" writer dead. The file came out right purely
     because one list preserved the order, so any edit touching only
     out_port_table silently did nothing."""
@@ -230,7 +230,7 @@ def test_ifspec_output_ports_go_through_out_port_table(qapp, tmp_path,
 
 def test_ifspec_description_names_the_verilog_toolchain(qapp, tmp_path,
                                                         monkeypatch):
-    """M16: this ifspec is generated from Verilog by Verilator, but the
+    """This ifspec is generated from Verilog by Verilator, but the
     NAME_TABLE description was copy-pasted from the GHDL generator. It is
     echoed back in ngspice's own error messages, so it misdirects debugging."""
     monkeypatch.setenv("HOME", str(tmp_path))

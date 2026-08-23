@@ -1,4 +1,4 @@
-"""Tests for the shared dialogs.ask_ngspice_plots helper (audit area-02 F12).
+"""Tests for the shared dialogs.ask_ngspice_plots helper.
 
 Application.plotFlagPopBox and TerminalUi._resolveNgspicePlotChoice were
 verbatim copies of the same Yes/No popup + "remember my choice" persistence.

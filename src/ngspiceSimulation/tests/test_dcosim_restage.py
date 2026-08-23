@@ -1,4 +1,4 @@
-"""Rebuilt d_cosim models are re-staged at simulation start (MAKER_AUDIT M8).
+"""Rebuilt d_cosim models are re-staged at simulation start.
 
 ``Convert._cosim_model_line`` copies each compiled vvp next to the netlist so
 ivlng can load it relative to ngspice's working directory -- but only at

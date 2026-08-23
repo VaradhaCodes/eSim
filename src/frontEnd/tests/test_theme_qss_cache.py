@@ -1,4 +1,4 @@
-"""Area-02 F11 hardening: the resolved stylesheet is cached per input tuple.
+"""The resolved stylesheet is cached per input tuple.
 
 Toggling theme back and forth (or the OS colorScheme signal firing repeatedly)
 must not re-read the .qss file and re-run the token-replace / rgba-recolor /

@@ -55,8 +55,7 @@ class Source(QtWidgets.QWidget):
 
         # Pre-bind so ``root`` is always defined even when the prev-values XML
         # is missing or has no <source> child; the restore loops below skip
-        # cleanly instead of relying on a swallowed UnboundLocalError (the
-        # latent root-may-be-unbound pattern flagged in audit R3-13).
+        # cleanly instead of relying on a swallowed UnboundLocalError.
         root = None
         try:
             f = open(

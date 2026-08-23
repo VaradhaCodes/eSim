@@ -1,16 +1,16 @@
-"""NGHDL model generation — MAKER_AUDIT M21, M12 and the nghdl half of M11.
+"""Regression tests for NGHDL model generation.
 
 ``nghdl/src/model_generation.py`` wrote every generated file (connection_info,
 cfunc.mod, ifspec.ifs, the testbench, both shell scripts) into the CURRENT
 WORKING DIRECTORY — eSim's launch directory — as a side effect of merely
-constructing the class. That made the whole module untestable (audit test-gap
-3), and it failed outright when eSim was launched from a read-only directory.
+constructing the class. That made the whole module difficult to test, and it
+failed outright when eSim was launched from a read-only directory.
 It now writes into a caller-supplied ``outdir``, which is what makes the rest
 of these tests possible:
 
-* M12 — the POSIX branch baked ``$HOME/nghdl-simulator/...`` into the generated
+* The POSIX branch baked ``$HOME/nghdl-simulator/...`` into the generated
   cfunc instead of honouring config.ini's DIGITAL_MODEL.
-* M11 — ``send_data``/``recv_data``/``temp_<port>`` were fixed 1024-byte
+* ``send_data``/``recv_data``/``temp_<port>`` were fixed 1024-byte
   buffers; a wide-enough model silently truncated its co-simulation messages.
 """
 import importlib.util
@@ -89,7 +89,7 @@ def _build(tmp_path, monkeypatch, vhdl=_VHDL,
     return mod, model, outdir, cwd
 
 
-# ---------------------------------------------------------------- M21
+# Output-directory isolation
 
 
 def test_every_generated_file_lands_in_outdir(tmp_path, monkeypatch):
@@ -113,8 +113,7 @@ def test_outdir_is_created_on_demand(tmp_path, monkeypatch):
 
 
 def test_ports_survive_the_round_trip(tmp_path, monkeypatch):
-    """Guards the generation smoke test the audit asked for: the parsed VHDL
-    reaches connection_info.txt and comes back with the right widths."""
+    """The parsed VHDL must reach connection_info.txt with the right widths."""
     _, model, outdir, _ = _build(tmp_path, monkeypatch)
 
     assert (outdir / "connection_info.txt").read_text().split() == [
@@ -129,7 +128,7 @@ def test_ports_survive_the_round_trip(tmp_path, monkeypatch):
 
 
 def test_upload_flow_no_longer_chdirs(tmp_path):
-    """M21's other half: ngspice_ghdl.createModelFiles generated into the CWD
+    """ngspice_ghdl.createModelFiles generated into the CWD
     and chdir'ed twice to do it. The method must now be chdir-free (it is a
     QWidget method, so this is a source guard rather than a call)."""
     # utf-8 explicitly: the file has non-ASCII text and this box's default
@@ -148,7 +147,7 @@ def test_upload_flow_no_longer_chdirs(tmp_path):
     assert "outdir=workdir" in body
 
 
-# ---------------------------------------------------------------- M12
+# Relocated digital-model path
 
 
 def test_posix_start_server_command_honours_the_config(tmp_path, monkeypatch):
@@ -188,7 +187,7 @@ def test_command_buffer_fits_the_command(tmp_path, monkeypatch):
     assert "snprintf(command,1024" not in cfunc
 
 
-# ---------------------------------------------------------------- M11
+# Generated buffer sizing
 
 
 def test_message_buffers_are_sized_from_the_ports(tmp_path, monkeypatch):

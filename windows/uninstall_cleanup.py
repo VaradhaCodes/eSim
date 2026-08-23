@@ -134,12 +134,20 @@ def _row_is_owned(name, uri, esim_root, purge_user_data):
       * a generated lib under ~/.esim/kicad_symbols  -> only when the user
                                                         asked for that data to
                                                         be removed as well
+      * an eSim static library under ~/.esim/kicad_static
+                                                    -> only with user-data purge
       * a legacy ${KICAD*_SYMBOL_DIR} row eSim wrote before the libraries
-        moved into ~/.esim                           -> always (dangling now)
+        moved into an eSim-owned directory           -> always (dangling now)
     Anything else -- including a system KiCad stock row, or an eSim_* library
     the user copied somewhere of their own -- is left alone."""
     if esim_root and _under(uri, esim_root):
         return True
+    static_dir = os.path.join(_home(), '.esim', 'kicad_static')
+    if _under(uri, static_dir):
+        # Legacy converter libraries retain their historical names (CONNECT,
+        # analog, source, and so on), so ownership is established by this
+        # directory rather than by an eSim_ name prefix.
+        return purge_user_data
     if not name.startswith('eSim_'):
         return False
     if uri.startswith('${KICAD') and 'SYMBOL_DIR' in uri:

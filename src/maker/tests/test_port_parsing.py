@@ -1,4 +1,4 @@
-"""Port-direction parsing regression tests (MAKER_AUDIT M2 + M3).
+"""Port-direction parsing regression tests.
 
 ``connection_info.txt`` lines are exactly ``name direction bits``. Four copies
 of the reader historically detected the direction by substring-searching the
@@ -6,13 +6,12 @@ WHOLE line, so a port whose *name* contained a direction keyword was counted
 in both the input and the output list — a silently corrupt model (wrong ifspec,
 wrong KiCad pin count, wrong generated C). The nghdl copies were worse: bare
 ``IN``/``OUT`` misclassified ``sout``/``win``/``dout``. A leading blank line
-also left the match variables unbound and crashed (M3).
+also left the match variables unbound and crashed.
 
 These tests feed an adversarial fixture to every copy we can import and assert
 exact classification with no double-counting. The fourth copy
 (``nghdl/src/createKicadLibrary.py``) drags in Appconfig/PyQt and cannot be
-imported in isolation until MAKER_AUDIT M21 lands, so it gets a static
-source-parity guard instead.
+imported in isolation, so it gets a static source-parity guard instead.
 """
 import importlib.util
 import os
@@ -43,7 +42,7 @@ _DIR = {"clk": "input", "output_valid": "input", "input_load": "output",
 
 def _write_conn(path, maker_tokens, leading_blank=True):
     """Write a connection_info.txt using maker (input/output/inout) or nghdl
-    (in/out/inout) direction tokens. Optionally prepend blank lines (M3)."""
+    (in/out/inout) direction tokens. Optionally prepend blank lines."""
     tok = {"input": "input", "output": "output", "inout": "inout"} if \
         maker_tokens else {"input": "in", "output": "out", "inout": "inout"}
     lines = ["\n", "   \n"] if leading_blank else []
@@ -84,7 +83,7 @@ def test_createkicad_portinfo(tmp_path):
 
 
 def test_model_generation_blank_first_line_no_crash(tmp_path):
-    """M3: a leading blank line must not raise (it used to leave the match
+    """A leading blank line must not raise (it used to leave the match
     variables unbound)."""
     conn = tmp_path / "connection_info.txt"
     _write_conn(str(conn), maker_tokens=True, leading_blank=True)
@@ -92,7 +91,7 @@ def test_model_generation_blank_first_line_no_crash(tmp_path):
     mg = ModelGeneration.ModelGeneration.__new__(
         ModelGeneration.ModelGeneration)
     mg.modelpath = str(tmp_path) + os.sep
-    mg.getPortInfo()  # would raise NameError before the M3 fix
+    mg.getPortInfo()  # previously raised NameError
     assert len(mg.input_list) == len(_INPUT_PORTS)
 
 
@@ -112,8 +111,8 @@ def test_nghdl_readportinfo(tmp_path):
     _write_conn(str(conn), maker_tokens=False)
 
     mg = mod.ModelGeneration.__new__(mod.ModelGeneration)
-    # Since MAKER_AUDIT M21 the generator reads and writes under outdir instead
-    # of the process CWD, so the __new__-bypassed instance must be given one.
+    # The generator reads and writes under outdir instead of the process CWD,
+    # so the __new__-bypassed instance must be given one.
     mg.outdir = str(tmp_path)
     mg.readPortInfo()
 
@@ -133,7 +132,7 @@ def _getportinfo_source(rel_path):
 
 
 def test_nghdl_createkicadlibrary_parity():
-    """The 4th copy (heavy imports, untestable until M21) must carry the same
+    """The fourth copy has heavy imports, so a source guard confirms the same
     structural fix: parse the direction FIELD, no substring findall."""
     src = _getportinfo_source(os.path.join("nghdl", "src",
                                            "createKicadLibrary.py"))

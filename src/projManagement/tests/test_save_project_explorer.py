@@ -1,4 +1,4 @@
-"""Regression tests for projectPaths.save_project_explorer (area-01 F8).
+"""Regression tests for projectPaths.save_project_explorer.
 
 The project registry was written with a plain open('w')+json.dump, which
 truncates the target the instant it starts -- a crash mid-write left a

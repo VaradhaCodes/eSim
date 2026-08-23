@@ -3,7 +3,7 @@
 The bundled ``sky130_fd_pr.tar.xz`` is an upstream 2022 snapshot.  One line
 in that snapshot is Spectre-like text rather than a SPICE directive, so
 ngspice treats it as a current source and aborts while loading *any* corner.
-Keep the archive byte-for-byte reproducible and apply this narrow, auditable
+Keep the archive byte-for-byte reproducible and apply this narrow, inspectable
 repair after extraction on every supported operating system.
 """
 

@@ -1475,7 +1475,7 @@ class MainView(QtWidgets.QWidget):
         # QStatusBar). Both may only be touched from the GUI thread, so stand up
         # the GUI-thread reporter that print_info/warning/error marshal through
         # -- we are on the GUI thread here (Application is built after
-        # QApplication in main()). See Appconfig.attach_gui_reporter (M9).
+        # QApplication in main()). See Appconfig.attach_gui_reporter.
         self.obj_appconfig.attach_gui_reporter()
 
         # Enhanced CSS with proper scrollbar styling
@@ -1596,13 +1596,13 @@ def _install_excepthook():
 
         # Always POST the dialog, never show it inline -- for two reasons:
         #
-        #  1. Thread (B1): sys.excepthook runs on whichever thread raised, and a
+        #  1. Thread: sys.excepthook runs on whichever thread raised, and a
         #     raise inside a WorkerThread (a missing eeschema/OMEdit binary is
         #     the easy one) lands here off the GUI thread. Creating or showing a
         #     QWidget from a non-GUI thread is undefined behaviour in Qt and can
         #     kill the process natively -- the crash net itself becoming the
         #     crash.
-        #  2. Re-entrancy (M12): even ON the GUI thread, Dialogs.critical runs a
+        #  2. Re-entrancy: even ON the GUI thread, Dialogs.critical runs a
         #     nested modal loop (exec()). If the exception escaped a paint /
         #     close / teardown handler, exec()ing there re-enters the event loop
         #     -- and can re-enter the very handler that just raised. The

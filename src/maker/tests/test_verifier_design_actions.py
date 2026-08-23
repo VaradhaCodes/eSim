@@ -1,4 +1,4 @@
-"""S5: design-side actions wired through the live Verify widget.
+"""Design-side actions wired through the live Verify widget.
 
 The structural logic is unit-tested in test_hdl_structure.py; this file pins the
 *wiring* -- that the widget actually feeds tab labels/code into order_modules,

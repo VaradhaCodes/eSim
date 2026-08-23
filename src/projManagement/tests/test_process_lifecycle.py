@@ -1,8 +1,7 @@
 # =========================================================================
-# Regression tests for S2 (process lifecycle): handles-not-pids in proc_dict,
+# Regression tests for process lifecycle: handles-not-pids in proc_dict,
 # child reaping via the babysitting WorkerThread, and graceful terminate_handle
-# for both subprocess.Popen and QProcess. See esim_audit area-01 F4 / area-02
-# F3 / area-04 F6.
+# for both subprocess.Popen and QProcess.
 # =========================================================================
 
 import os

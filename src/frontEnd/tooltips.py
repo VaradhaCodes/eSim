@@ -93,7 +93,19 @@ class AuroraToolTip(QtWidgets.QWidget):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
 
-    def show_text(self, text, global_pos, app):
+    def show_text(self, text, global_pos, app, owner=None):
+        # Wayland popup surfaces need a transient parent before they are
+        # shown. Keep QWidget ownership independent so closing an editor
+        # does not delete the application-wide cached tooltip.
+        owner = owner or app.activeWindow()
+        if isinstance(owner, QtWidgets.QWidget):
+            owner = owner.window()
+            owner.winId()
+            self.winId()
+            handle = self.windowHandle()
+            if handle.transientParent() is not owner.windowHandle():
+                self.hide()
+                handle.setTransientParent(owner.windowHandle())
         bg, fg, border = _tip_colors(app)
         self._card.setStyleSheet(
             "QFrame#auroraTipCard{"
@@ -255,7 +267,9 @@ class _ToolTipFilter(QtCore.QObject):
                 if isinstance(w, QtWidgets.QWidget):
                     text = w.toolTip()
             if text:
-                self._ensure().show_text(text, event.globalPos(), self._app)
+                owner = (obj if isinstance(obj, QtWidgets.QWidget)
+                         else QtWidgets.QApplication.widgetAt(gpos))
+                self._ensure().show_text(text, gpos, self._app, owner)
                 return True   # suppress the native square tooltip
             self._hide()
             return False

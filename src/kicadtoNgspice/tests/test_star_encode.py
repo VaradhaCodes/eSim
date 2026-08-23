@@ -1,4 +1,4 @@
-"""Regression tests for Convert._star_encode (area-03 F9).
+"""Regression tests for Convert._star_encode.
 
 The old inline encoder used ``path.index(c)`` which returns the FIRST
 occurrence, so a path with a repeated uppercase letter got the wrong

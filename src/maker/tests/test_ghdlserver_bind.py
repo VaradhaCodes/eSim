@@ -1,4 +1,4 @@
-"""ghdlserver bind-address regression guard (MAKER_AUDIT M7).
+"""ghdlserver bind-address regression guard.
 
 Every NGHDL co-simulation starts one VHDL-testbench TCP server per model
 instance on port ``5000 + instance_id``. That server used to bind
@@ -11,8 +11,7 @@ way nobody connects back to the popup).
 ``ghdlserver.c`` is compiled per model by the C toolchain at upload time and
 has no unit-test harness in this repo, so this is a source guard on the
 invariant — the same shape as the ``createKicadLibrary`` parity guard in
-``test_port_parsing.py``. The runtime proof (bind + reachability, before and
-after) is recorded in MAKER_AUDIT.md's FIX LOG.
+``test_port_parsing.py``.
 """
 import os
 

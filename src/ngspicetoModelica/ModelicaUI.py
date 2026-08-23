@@ -227,7 +227,7 @@ class OpenModelicaEditor(QtWidgets.QWidget):
 
             # An empty or comment-only netlist parses cleanly all the way down
             # to a bare skeleton .mo with no components, which then reported a
-            # false "successfully converted" and wrote junk (audit R3-7).
+            # false "successfully converted" result and wrote an empty model.
             # schematicInfo holds every device / source / subckt-instance line;
             # if it is empty there is nothing to convert -- report it and write
             # no output file instead of pretending success.

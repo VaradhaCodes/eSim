@@ -1,4 +1,4 @@
-"""S6: Verify-stage run-side hardening (GUI-wired, but iverilog-free).
+"""Verify-stage run-side hardening (GUI-wired, but iverilog-free).
 
 Pins the behaviour that only shows up around the compile/sim/plot pipeline and
 its async/cancel/lifecycle machinery -- none of which needs a toolchain to
@@ -35,7 +35,7 @@ def test_safe_source_name_is_diagnostic_regex_safe():
     from maker.VerilogVerifier import VerilogVerifier as V
     assert V._safe_source_name("alu.v") == "alu.v"
     assert V._safe_source_name("counter") == "counter.v"      # extension added
-    n = V._safe_source_name("foo (2).v")                       # S5 disambiguation
+    n = V._safe_source_name("foo (2).v")       # duplicate disambiguation
     assert n.endswith(".v")
     # the squiggle/jump regex is [\w./-]+ ; spaces and parens would break it
     assert re.fullmatch(r"[\w./-]+\.v", n)

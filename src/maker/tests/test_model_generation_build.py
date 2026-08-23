@@ -1,5 +1,5 @@
-"""Regression tests for the async NgVeri legacy build (audit area-05 P2-1)
-and the ModelGeneration fixes folded into that pass (F3/F6/F7).
+"""Regression tests for the asynchronous NgVeri legacy build and its
+ModelGeneration integration.
 
 None of these need verilator/make/iverilog installed: the _run tests drive the
 real (streaming Popen) subprocess boundary with the Python interpreter itself
@@ -31,7 +31,7 @@ def model(qapp, tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# _run: subprocess arg-list, cwd, real exit-code verdict (F1/F3)
+# _run: subprocess argument list, working directory, and exit-code verdict
 # --------------------------------------------------------------------------- #
 def test_run_passes_arglist_and_cwd_no_chdir(model, tmp_path):
     cwd_before = os.getcwd()
@@ -80,7 +80,7 @@ def test_run_returns_false_when_binary_missing(model):
 
 
 # --------------------------------------------------------------------------- #
-# verilogfile: SV "top" rename is word-boundary only (F6)
+# verilogfile: SystemVerilog "top" rename is word-boundary only
 # --------------------------------------------------------------------------- #
 def test_sv_rename_is_word_boundary_only(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -110,7 +110,7 @@ def test_sv_rename_is_word_boundary_only(qapp, tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# verilogParse: empty / unparseable source -> "Error", no NameError (F7)
+# verilogParse: empty or unparseable source returns "Error", not NameError
 # --------------------------------------------------------------------------- #
 def test_verilogparse_empty_source_returns_error(model, monkeypatch):
     monkeypatch.setattr(ModelGeneration.Dialogs, "critical",
@@ -131,7 +131,7 @@ def test_verilogparse_name_mismatch_returns_error(model, monkeypatch):
 
 # --------------------------------------------------------------------------- #
 # NgVeri async orchestration: the slow pipeline short-circuits on real exit
-# codes and drives the steps in order (F1)
+# codes and drives the steps in order
 # --------------------------------------------------------------------------- #
 class _StubModel:
     """Records which build steps ran; each returns a scripted bool."""
@@ -206,7 +206,7 @@ def test_convert_buttons_toggle(ngveri):
 
 
 # --------------------------------------------------------------------------- #
-# d_cosim async build (area-05 build_cosim parity)
+# d_cosim asynchronous build parity
 # --------------------------------------------------------------------------- #
 class _StubClog:
     """Records severity-tagged log calls."""

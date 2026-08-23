@@ -227,7 +227,7 @@ class PrcocessNetlist:
 
             elif compName[0] == 'h' or compName[0] == 'f':
                 # A CCVS/CCCS (h/f) needs words[1..5]; a short line
-                # ("h1 1 2") used to IndexError at words[3..5] (R2-4). Leave
+                # ("h1 1 2") used to IndexError at words[3..5]. Leave
                 # the malformed component untouched for the downstream error
                 # surface rather than crash the parser here.
                 if len(words) < 6:
@@ -487,7 +487,7 @@ class PrcocessNetlist:
                     # trailing plot-type token (words[-1]). Slicing them out
                     # both fixes the IndexError on a plot line with too few
                     # nodes (M3c) and stops a single-node plot_v2 from emitting
-                    # the plot-type token itself as a bogus node name (R2-4).
+                    # the plot-type token itself as a bogus node name.
                     words = compline.split()
                     nodes = words[1:-1]
                     if compType == 'plot_v1':
@@ -520,7 +520,7 @@ class PrcocessNetlist:
                     schematicInfo.insert(index, "* " + compline)
                     # A transformer needs words[1..4] (four coupling nodes);
                     # a short line ("u3 1 2 transfo") used to IndexError at
-                    # words[4] (R2-4). Keep the original as a comment (above)
+                    # words[4]. Keep the original as a comment (above)
                     # and skip generating its model lines.
                     if len(words) < 5:
                         continue

@@ -32,7 +32,7 @@ except ImportError:               # QScintilla not installed / failed to load
     # all. Stand in placeholder bases so the class statements below still
     # execute; they are never instantiated because make_lexer() bails out.
     # EVERY stock lexer used below must appear here too, or a Qsci-less
-    # install crashes at import (regression of an old audit fix).
+# install crashes at import.
     QsciLexerCustom = QsciLexerVerilog = QsciLexerVHDL = QsciLexerCPP = \
         QsciLexerXML = QsciLexerJSON = QsciLexerPython = QsciLexerMarkdown = \
         QsciLexerIntelHex = object
@@ -205,7 +205,7 @@ class SpiceLexer(QsciLexerCustom):
 
         # Fold structure depends on the whole file; recompute when the line
         # count changes (adding/removing a directive line) or when a fold
-        # directive was edited in place (P1-C: no newline added, so lines()
+            # directive was edited in place (no newline added, so lines()
         # is unchanged but the fold tree still moved).
         if editor.lines() != self._last_lines or fold_dirty:
             self._last_lines = editor.lines()

@@ -72,8 +72,8 @@ class Microcontroller(QtWidgets.QWidget):
         # local ``root`` (mirroring the Model tab); it used to be assigned to
         # ``self.root`` while the loops read a never-defined bare ``root``, so
         # every restore raised a NameError swallowed by "Passes previous
-        # values" and the Microcontroller tab never restored anything (audit
-        # R2-2). Kept as a local and pre-bound to None so a missing/empty XML
+        # values" and the Microcontroller tab never restored anything. Kept as
+        # a local and pre-bound to None so a missing or empty XML
         # simply skips the restore instead of relying on a caught exception.
         root = None
         try:

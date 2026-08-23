@@ -1,6 +1,6 @@
-"""S4: Verify-stage toolbar declutter + dock space priority.
+"""Verify-stage toolbar declutter and dock space priority.
 
-Pins the information architecture introduced in S4 so a later refactor can't
+Pins the information architecture so a later refactor cannot
 silently regress it: file actions folded into one menu, a single accented
 primary action, the iverilog lock driven off one widget list, and splitters
 that give growth to the editor (not the console/sidebar).

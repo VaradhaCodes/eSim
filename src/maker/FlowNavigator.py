@@ -35,7 +35,7 @@ def _make_bus_closer(bus):
     ``closeEvent`` stops the DesignBus watchdog on an explicit close, but the
     Model Creation dock is usually torn down by parent destruction (Close
     Project / tab close -> deleteLater), which Qt never delivers a closeEvent
-    for -- so the observer thread leaked (H4 / R3-2). Wiring this to
+    for, so the observer thread leaked. Wiring this to
     ``destroyed`` closes the class. It captures only the bus (a plain object),
     never the dying widget, and is idempotent with closeEvent's own close()."""
     def _close(*_a):
@@ -276,7 +276,7 @@ class FlowNavigator(QtWidgets.QWidget):
         if hasattr(self, "tabbar"):
             self.tabbar.setStyleSheet(
                 f"QWidget#flowTabBar {{ background:{t['bar_bg']};"
-                " border: none; }}")
+                " border: none; }")
         # Segmented [ Verilog | VHDL ] toggle — per-end radii read as one pill.
         base = (f"QPushButton {{ border:1px solid {t['seg_border']};"
                 f" background:{t['seg_bg']}; color:{t['seg_fg']};"

@@ -91,7 +91,7 @@ def _make_verifier_teardown(state):
     but dock destruction (Close Project / tab close -> deleteLater of the whole
     Model Creation tree) never delivers a closeEvent to nested content -- the
     QThread would then be destroyed while still running ("QThread: Destroyed
-    while thread is still running", native-crash territory, R3-12).
+    while thread is still running", which can cause a native crash).
 
     Wired to ``destroyed``, this cancels + joins whatever run is live. It reads
     only the mutable ``state`` dict (plain job/cancel/tmpdir refs), never the
@@ -920,7 +920,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         # Plain mirror of the teardown-critical run state (job / cancel token /
         # tmpdir), read by the destroyed-slot teardown WITHOUT touching this
         # (possibly dying) widget. closeEvent covers explicit close; this covers
-        # dock destruction, which skips closeEvent (R3-12).
+        # dock destruction, which skips closeEvent.
         self._teardown_state = {"job": None, "cancel": None, "tmpdir": None}
         self.destroyed.connect(_make_verifier_teardown(self._teardown_state))
         # Filled by _design_sources at each compile: the on-disk source name
@@ -2244,7 +2244,7 @@ class VerilogVerifier(QtWidgets.QWidget):
         iverilog echoes the source filename in its errors, and both the
         squiggle (highlight_errors_from_log) and double-click jump match it with
         a ``[\\w./-]`` regex. A label with spaces or parens — e.g. the
-        ``foo (2).v`` that S5's duplicate disambiguation can produce — would not
+        ``foo (2).v`` that duplicate disambiguation can produce — would not
         match, so the error would land nowhere. Sanitise to word chars while
         keeping the .v/.sv extension."""
         base = label if label.endswith(('.v', '.sv')) else label + '.v'

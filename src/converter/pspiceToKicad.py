@@ -28,7 +28,7 @@ class PspiceConverter:
         # getsize on a path the user typed, or on a file a sync client removed
         # between the file-dialog pick and now, raises FileNotFoundError on the
         # GUI thread (excepthook dialog). Read the size defensively so a
-        # missing / unreadable source degrades to a clear dialog instead (M5).
+        # missing or unreadable source degrades to a clear dialog instead.
         try:
             file_size = os.path.getsize(file_path)
         except OSError as e:
@@ -135,7 +135,7 @@ class PspiceConverter:
                     # Conversion itself succeeded; only the copy into the
                     # workspace failed (locked by a sync client, read-only
                     # target, or the tree vanished). Report the copy failure
-                    # without throwing away the converted output (M5).
+                    # without throwing away the converted output.
                     print("Copy to workspace failed:", e)
                     msg_box.setIcon(QMessageBox.Icon.Warning)
                     msg_box.setText(
