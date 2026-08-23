@@ -27,7 +27,6 @@
 # =========================================================================
 
 # importing the files and libraries
-import hdlparse.verilog_parser as vlog
 from PyQt6 import QtCore, QtGui, QtWidgets
 from configuration import Dialogs
 from configuration import paths
@@ -39,7 +38,7 @@ from os.path import expanduser
 from .DesignBus import DesignBus
 from .MakerchipBridge import MakerchipBridge
 from . import verilog_library
-from .hdl.ports import top_module_name
+from .hdl.ports import extract_ports
 from .VerilogVerifier import HdlEditor
 home = expanduser("~")
 
@@ -70,6 +69,98 @@ def makerchipTOSAccepted(display=True):
 
         return False
     return True
+
+
+def build_makerchip_wrapper(text, module_name, ports, lint_codes):
+    """Build a deterministic, directly simulatable Makerchip TLV document.
+
+    The user's module remains ordinary Verilog inside ``\\SV``. A small top
+    module drives scalar inputs from different ``cyc_cnt`` bits, vectors from
+    the counter bus and common reset aliases from Makerchip's reset input. This
+    produces useful activity for gates and counters instead of the old static
+    continuous ``$random()`` calls.
+    """
+    lines = [r"\TLV_version 1d: tl-x.org", r"\SV"]
+    valid_lints = [str(code).strip() for code in lint_codes
+                   if str(code).strip()]
+    lines.extend("/* verilator lint_off %s */" % code
+                 for code in valid_lints)
+    lines.extend([
+        "",
+        "// eSim source starts here",
+        text.rstrip(),
+        "// eSim source ends here",
+        "",
+        "module top(",
+        "    input  logic        clk,",
+        "    input  logic        reset,",
+        "    input  logic [31:0] cyc_cnt,",
+        "    output logic        passed,",
+        "    output logic        failed",
+        ");",
+    ])
+
+    top_ports = {"clk", "reset", "cyc_cnt", "passed", "failed"}
+    clock_names = {"clk", "clock", "clk_i", "i_clk"}
+    reset_names = {"rst", "reset", "reset_i", "i_reset"}
+    reset_n_names = {"rst_n", "reset_n", "nreset", "nrst"}
+
+    def signal_name(mode, name):
+        # Only the three Makerchip testbench inputs may be connected directly.
+        # A DUT port named passed/failed (or an output named clk/reset) gets an
+        # alias so the wrapper never creates two drivers for its own ports.
+        if mode in ("input", "inout") and name in {
+                "clk", "reset", "cyc_cnt"}:
+            return name
+        return "dut_" + name if name in top_ports else name
+
+    for mode, name, width in ports:
+        signal = signal_name(mode, name)
+        if signal not in {"clk", "reset", "cyc_cnt"}:
+            data_type = (width or "").strip()
+            width_part = (" " + data_type) if data_type else ""
+            lines.append("    logic%s %s;  // %s" %
+                         (width_part, signal, mode))
+
+    drive_bit = 0
+    for mode, name, width in ports:
+        signal = signal_name(mode, name)
+        if mode not in ("input", "inout") or signal in {
+                "clk", "reset", "cyc_cnt"}:
+            continue
+        lowered = name.lower()
+        if lowered in reset_n_names:
+            drive = "~reset"
+        elif lowered in reset_names:
+            drive = "reset"
+        elif lowered in clock_names:
+            drive = "clk"
+        elif (width or "").strip():
+            drive = "cyc_cnt"
+        else:
+            drive = "cyc_cnt[%d]" % (drive_bit % 32)
+            drive_bit += 1
+        lines.append("    assign %s = %s;" % (signal, drive))
+
+    connections = ", ".join(
+        ".%s(%s)" % (name, signal_name(mode, name))
+        for mode, name, _width in ports)
+    lines.extend([
+        "    %s dut(%s);" % (module_name, connections),
+        "",
+        "    // End after enough cycles to exercise combinational truth tables",
+        "    // and a short sequential trace. Makerchip uses these outputs to",
+        "    // finish the simulation and publish its VCD.",
+        "    assign passed = cyc_cnt > 32'd20;",
+        "    assign failed = 1'b0;",
+        "",
+        r"\TLV",
+        "// Add TL-Verilog / Visual Debug constructs here if desired.",
+        r"\SV",
+        "endmodule",
+        "",
+    ])
+    return "\n".join(lines)
 
 
 # beginning class Maker. This class create the Maker Tab
@@ -314,8 +405,8 @@ class Maker(QtWidgets.QWidget):
             if not makerchipTOSAccepted(True):
                 return
 
-            # Makerchip reads the design off disk; flush any in-editor edits
-            # first so it sees the current text, not a stale file.
+            # Flush Author's in-memory design before deriving the Makerchip
+            # wrapper, so one click always opens exactly what is on screen.
             if self.bus is not None:
                 materialized = self.bus.materialize()
                 if materialized:
@@ -331,113 +422,35 @@ class Maker(QtWidgets.QWidget):
                 return
 
             print("Running Makerchip IDE...........................")
-            # self.file = open(self.verilogfile,"w")
-            # self.file.write(self.entry_var[1].toPlainText())
-            # self.file.close()
             filename = self.verilogfile
-            if os.path.splitext(self.verilogfile)[1].lower() != ".tlv":
-                reply = Dialogs.warning(
-                    self,
-                    "Do you want to automate the top module? ",
-                    "<b>Choose Yes to generate a Makerchip-ready .tlv wrapper "
-                    "with a top module, or No to open the Verilog file "
-                    "unchanged.</b><br/><br/>Browser edits are saved "
-                    "automatically to the file opened in Makerchip. The "
-                    "generated .tlv file sits beside the current Verilog "
-                    "file.<br/><br/>The opened source is processed by the "
-                    "hosted Makerchip service. Makerchip requires an active "
-                    "internet connection and a modern browser.",
-                    QtWidgets.QMessageBox.StandardButton.Yes
-                    | QtWidgets.QMessageBox.StandardButton.No
-                    | QtWidgets.QMessageBox.StandardButton.Cancel)
-                if reply == QtWidgets.QMessageBox.StandardButton.Cancel:
+            if os.path.splitext(filename)[1].lower() != ".tlv":
+                with open(filename, encoding="utf-8",
+                          errors="replace") as source_file:
+                    text = source_file.read()
+                module_name, ports = extract_ports(text)
+                if module_name is None:
+                    Dialogs.critical(
+                        self,
+                        "Error Message",
+                        "<b>Error: no Verilog module could be read from this "
+                        "design.</b><br/><br/>Check it for a syntax error, "
+                        "then try again.",
+                        QtWidgets.QMessageBox.StandardButton.Ok)
+                    self.obj_Appconfig.print_info(
+                        "Makerchip stopped: no parseable module in the "
+                        "current design")
                     return
-                if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-                    with open(self.verilogfile) as fh:
-                        code = fh.read()
-                    text = code
-                    filename = os.path.splitext(self.verilogfile)[0] + ".tlv"
-                    # Word-boundary strip of the standalone wire/reg keywords;
-                    # the old spaced-substring replace still mangled tokens at
-                    # line-start or tab-adjacent (out_reg, wire_sel).
-                    code = re.sub(r'\b(wire|reg)\b', ' ', code)
-                    vlog_ex = vlog.VerilogExtractor()
-                    vlog_mods = vlog_ex.extract_objects_from_source(code)
-
-                    # Wrap the design's TOP module, whatever the file is
-                    # called. This used to require the file name and the module
-                    # name to match, which meant pasting a design in and
-                    # pressing this button could only ever fail. An empty or
-                    # failed parse is still reported clearly here rather than
-                    # crashing later on a loop variable referenced after its
-                    # loop.
-                    top_name = top_module_name(text)
-                    module = None
-                    for m in vlog_mods:
-                        if top_name and m.name == top_name:
-                            module = m
-                            break
-                    if module is None and vlog_mods:
-                        module = vlog_mods[-1]
-                    if module is None:
-                        Dialogs.critical(
-                            self,
-                            "Error Message",
-                            "<b>Error: no Verilog module could be read from "
-                            "this design.</b><br/><br/>Check it for a syntax "
-                            "error, then try again.",
-                            QtWidgets.QMessageBox.StandardButton.Ok)
-                        self.obj_Appconfig.print_info(
-                            'Makerchip stopped: no parseable module in the '
-                            'current design')
-                        return
-
-                    with open(
-                            paths.library_path("tlv/lint_off.txt")) as fh:
-                        lint_off = fh.readlines()
-                    string = '''\\TLV_version 1d: tl-x.org\n\\SV\n'''
-                    for item in lint_off:
-                        string += "/* verilator lint_off " + \
-                            item.strip("\n") + "*/  "
-                    string += '''\n\n//Your Verilog/System \
-Verilog Code Starts Here:\n''' + \
-                        text + '''\n\n//Top Module Code \
-Starts here:\n\tmodule top(input \
-logic clk, input logic reset, input logic [31:0] cyc_cnt, \
-output logic passed, output logic failed);\n'''
-                    print(module.name)
-                    # The three passes below all describe the SAME module, so
-                    # they read it straight off `module` instead of re-scanning
-                    # vlog_mods for a file-name match each time.
-                    reserved = ("clk", "reset", "cyc_cnt", "passed", "failed")
-                    for p in module.ports:
-                        if str(p.name) not in reserved:
-                            string += '\t\tlogic ' + p.data_type\
-                                + " " + p.name + ";//" + p.mode + "\n"
-                    string += "//The $random() can be replaced \
-if user wants to assign values\n"
-                    for p in module.ports:
-                        if str(p.mode) in ("input", "inout") \
-                                and str(p.name) not in reserved:
-                            string += '\t\tassign ' + p.name\
-                                + " = " + "$random();\n"
-
-                    string += '\t\t' + module.name + " " + module.name + '('
-                    i = 0
-                    for p in module.ports:
-                        i = i + 1
-                        string += "."+p.name+"("+p.name+")"
-                        if i == len(module.ports):
-                            string += ");\n\t\n\\TLV\n//\
-Add \\TLV here if desired\
-                                     \n\\SV\nendmodule\n\n"
-                        else:
-                            string += ", "
-                    # Write the .tlv only now that generation has fully
-                    # succeeded, so a failure/return above never leaves a
-                    # half-written, corrupt file on disk.
-                    with open(filename, 'w') as f:
-                        f.write(string)
+                with open(paths.library_path("tlv/lint_off.txt"),
+                          encoding="utf-8") as lint_file:
+                    lint_codes = lint_file.readlines()
+                filename = os.path.splitext(filename)[0] + ".tlv"
+                wrapper = build_makerchip_wrapper(
+                    text, module_name, ports, lint_codes)
+                # Build fully in memory, then write once: parse failures never
+                # leave a partial/corrupt wrapper beside the Verilog source.
+                with open(filename, "w", encoding="utf-8",
+                          newline="\n") as wrapper_file:
+                    wrapper_file.write(wrapper)
 
             print("File: " + filename)
             self.stop_makerchip_bridge()
@@ -450,25 +463,12 @@ Add \\TLV here if desired\
                 raise RuntimeError("the default browser could not be opened")
             self.obj_Appconfig.print_info(
                 "Makerchip opened for " + filename)
-        except Exception as e:
-            print(e)
+        except Exception as error:
+            print("Could not open Makerchip IDE:", error)
             Dialogs.critical(
                 self, "Error Message",
                 "Could not open Makerchip. Check that a default browser is "
                 "configured and that the internet connection is available.")
-            print("Could not open Makerchip IDE:", e)
-        #   initial = self.read_file()
-
-        # while True:
-        #     current = self.read_file()
-        #     if initial != current:
-        #         for line in current:
-        #             if line not in initial:
-        #                 print(line)
-        #         initial = current
-        # self.processfile = QtCore.QProcess(self)
-        # self.processfile.start("python3 notify.py")
-        # print(self.processfile.readChannel())
 
     # This creates the buttons/options
 
@@ -515,9 +515,9 @@ Add \\TLV here if desired\
 
         self.runoptions = QtWidgets.QPushButton("Edit in Makerchip IDE")
         self.runoptions.setToolTip(
-            "Open this design in hosted Makerchip using your default browser. "
-            "Edits autosave to the opened file; compilation runs in the "
-            "Makerchip service."
+            "Open a Makerchip-ready copy in your default browser. eSim "
+            "prepares and simulates it automatically; browser edits autosave "
+            "to that local copy."
         )
         self.runoptions.setToolTipDuration(5000)
         self.optionsgroupbtn.addButton(self.runoptions)

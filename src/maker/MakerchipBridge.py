@@ -48,7 +48,9 @@ def _page_html(session_path, filename):
     #file { font-weight: 650; }
     #status { color: #a7c4d9; }
     #status.error { color: #ffadad; }
-    #conflict { margin-left: auto; display: none; gap: 8px; align-items: center; }
+    #actions { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+    #open-log { display: none; border-color: #b96b6b; }
+    #conflict { display: none; gap: 8px; align-items: center; }
     button { border: 1px solid #4f7895; border-radius: 5px; padding: 5px 9px;
              background: #20394b; color: #edf6ff; cursor: pointer; }
     #makerchip { min-height: 0; }
@@ -58,10 +60,13 @@ def _page_html(session_path, filename):
   <div id="bar">
     <span id="file"></span>
     <span id="status">Loading Makerchip…</span>
-    <span id="conflict">
-      The file changed outside this browser.
-      <button id="reload">Reload file</button>
-      <button id="overwrite">Keep browser edit</button>
+    <span id="actions">
+      <button id="open-log">Open compile log</button>
+      <span id="conflict">
+        The file changed outside this browser.
+        <button id="reload">Reload file</button>
+        <button id="overwrite">Keep browser edit</button>
+      </span>
     </span>
   </div>
   <div id="makerchip"></div>
@@ -71,6 +76,7 @@ def _page_html(session_path, filename):
     const pluginUrl = __MAKERCHIP_PLUGIN__;
     const status = document.getElementById('status');
     const conflict = document.getElementById('conflict');
+    const openLog = document.getElementById('open-log');
     document.getElementById('file').textContent = filename;
 
     let revision = null;
@@ -79,6 +85,7 @@ def _page_html(session_path, filename):
     let saveInFlight = false;
     let saveAgain = false;
     let latestConflict = null;
+    const compilationLogs = new Map();
 
     function setStatus(message, isError = false) {
       status.textContent = message;
@@ -124,7 +131,7 @@ def _page_html(session_path, filename):
           revision = reply.body.revision;
           latestConflict = null;
           conflict.style.display = 'none';
-          setStatus('Saved to eSim file');
+          setStatus('Saved locally · recompiling…');
         }
       } catch (error) {
         setStatus('Could not save: ' + error.message, true);
@@ -152,13 +159,52 @@ def _page_html(session_path, filename):
       saveNow(true);
     });
 
+    openLog.addEventListener('click', async () => {
+      if (!ide) return;
+      try { await ide.api.activatePane('Log'); } catch (_) {}
+    });
+
     try {
       const initial = await readFile();
       revision = initial.revision;
       const {default: IdePlugin} = await import(pluginUrl);
       class EsimMakerchip extends IdePlugin {
-        onReady() { setStatus('Ready · edits autosave to eSim'); }
+        onReady() { setStatus('Compiling simulation…'); }
         onCodeChange() { queueSave(); }
+        openWaveform() {
+          void this.api.activatePane('Waveform').then(() => {
+            setStatus(
+              'Simulation ready · Waveform opened · Diagram/Viz need TL-Verilog');
+          }).catch(() => {
+            setStatus('Simulation ready · open Waveform to inspect signals');
+          });
+        }
+        onCompilationLog(id, log, complete, type) {
+          const all = (compilationLogs.get(id) || '') + (log || '');
+          compilationLogs.set(id, all);
+          if (!complete) {
+            setStatus('Compiling simulation…');
+            return;
+          }
+          if (type === 'verilator') {
+            const failed = /%Error|\bError:|Exiting due to [1-9]/i.test(all);
+            if (failed) {
+              openLog.style.display = 'inline-block';
+              setStatus('Compilation failed · open the log for details', true);
+            } else {
+              openLog.style.display = 'none';
+              setStatus('Simulation ready · opening Waveform…');
+              // The completed Verilator callback is consistently available in
+              // stable Makerchip releases. Give its pane a moment to ingest
+              // the VCD before switching tabs.
+              setTimeout(() => this.openWaveform(), 300);
+            }
+          }
+        }
+        onCompilationVcd() {
+          openLog.style.display = 'none';
+          this.openWaveform();
+        }
       }
       ide = await EsimMakerchip.create('makerchip', {
         code: initial.code,

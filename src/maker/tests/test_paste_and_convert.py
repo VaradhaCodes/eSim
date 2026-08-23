@@ -90,9 +90,7 @@ def test_a_design_appears_in_the_library_panel(author, qapp):
 
 def test_edit_in_makerchip_opens_materialized_design_through_bridge(
         author, qapp, monkeypatch):
-    """The button must use the supported plugin bridge, not makerchip-app."""
-    from PyQt6 import QtWidgets
-
+    """One click creates a simulatable copy and opens the plugin bridge."""
     w, _bus = author
     home = _paste(author, NAND)
     opened = []
@@ -111,7 +109,7 @@ def test_edit_in_makerchip_opens_materialized_design_through_bridge(
     monkeypatch.setattr(Maker, "makerchipTOSAccepted", lambda *_a: True)
     monkeypatch.setattr(
         Maker.Dialogs, "warning",
-        lambda *_a, **_k: QtWidgets.QMessageBox.StandardButton.No)
+        lambda *_a, **_k: pytest.fail("Makerchip must not show a mode dialog"))
     monkeypatch.setattr(Maker, "MakerchipBridge", FakeBridge)
     monkeypatch.setattr(
         Maker.QtGui.QDesktopServices, "openUrl",
@@ -120,7 +118,14 @@ def test_edit_in_makerchip_opens_materialized_design_through_bridge(
     w.runmakerchip()
 
     assert isinstance(w._makerchip_bridge, FakeBridge)
-    assert w._makerchip_bridge.filename == home
+    wrapper = os.path.splitext(home)[0] + ".tlv"
+    assert w._makerchip_bridge.filename == wrapper
+    generated = open(wrapper, encoding="utf-8").read()
+    assert "/* verilator lint_off */" not in generated
+    assert "assign a = cyc_cnt[0];" in generated
+    assert "assign b = cyc_cnt[1];" in generated
+    assert "assign passed = cyc_cnt > 32'd20;" in generated
+    assert "assign failed = 1'b0;" in generated
     assert opened == ["http://127.0.0.1:43210/session/test/"]
 
 

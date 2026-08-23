@@ -45,7 +45,12 @@ def test_host_page_uses_supported_v2_plugin_and_autosave(running_bridge):
     assert "IdePlugin.create" not in page  # subclass factory is used below
     assert "EsimMakerchip.create('makerchip'" in page
     assert "onCodeChange()" in page
-    assert "edits autosave to eSim" in page
+    assert "onCompilationLog(" in page
+    assert "onCompilationVcd()" in page
+    assert "Open compile log" in page
+    assert "Simulation ready · Waveform opened" in page
+    assert "setTimeout(() => this.openWaveform(), 300)" in page
+    assert "this.api.activatePane('Waveform')" in page
 
 
 def test_browser_save_writes_the_exact_design_file(running_bridge):
