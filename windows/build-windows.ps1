@@ -177,8 +177,11 @@ function Stage-App {
     # working tree against a real toolchain) -- without /XJ robocopy walks
     # straight through them and mirrors the installed tree's gigabytes back
     # into the stage, so the installer would repackage its own output.
+    # A linked git worktree has a root .git FILE (pointing at the parent
+    # repository), not the .git directory covered by /XD. Exclude the filename
+    # too so an installer built from a worktree never leaks that absolute path.
     robocopy $RepoRoot $Stage /MIR /XJ /NFL /NDL /NJH /NJS /XD @xd `
-        /XF '*.pyc' '*.pyo' '*.raw' 'plot_data_*.txt' '.DS_Store' `
+        /XF '.git' '*.pyc' '*.pyo' '*.raw' 'plot_data_*.txt' '.DS_Store' `
             'fp-info-cache' `
             'nghdl-simulator-source.tar.xz' `
             'install-nghdl.sh' | Out-Null
@@ -1259,6 +1262,13 @@ function Assert-CleanStage {
     Log 'Verifying stage carries no local models or audit scratch'
     $bad = @()
 
+    # /XD handles an ordinary checkout's .git directory; /XF handles the .git
+    # pointer file used by linked worktrees. Keep this independent guard so a
+    # future staging rewrite still cannot publish repository metadata.
+    if (Test-Path (Join-Path $Stage '.git')) {
+        $bad += 'VCS metadata: .git'
+    }
+
     foreach ($d in @('Ngveri', 'NgVeriCosim', 'Nghdl')) {
         $dir = Join-Path $Stage "library\modelParamXML\$d"
         if (-not (Test-Path $dir)) { continue }
@@ -1318,7 +1328,7 @@ function Assert-CleanStage {
         Die ("stage is not clean -- refusing to package:`n  " +
              ($bad -join "`n  "))
     }
-    Log 'Stage clean: no local models, no audit scratch'
+    Log 'Stage clean: no VCS metadata, local models, or audit scratch'
 }
 
 # ----------------------------------------------------------------- main ----

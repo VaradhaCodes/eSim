@@ -303,6 +303,18 @@ def test_packages_lock_is_shipped_not_excluded():
             assert pattern.strip() != '*'
 
 
+def test_linked_worktree_git_pointer_is_excluded_and_rejected():
+    """A linked worktree uses a root .git file, so /XD alone is insufficient."""
+    text = _read(BUILD_PS1)
+    stage = text.split('function Stage-App', 1)[1].split(
+        '\nfunction ', 1)[0]
+    clean = text.split('function Assert-CleanStage', 1)[1].split(
+        '\nfunction ', 1)[0]
+    assert "/XF '.git'" in stage
+    assert "Join-Path $Stage '.git'" in clean
+    assert 'VCS metadata: .git' in clean
+
+
 # --------------------------------------------------------------------------
 # SKY130 -- expanded, repaired, and electrically smoke-tested before shipping
 # --------------------------------------------------------------------------
