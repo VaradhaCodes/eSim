@@ -357,11 +357,12 @@ flatpak run org.fossee.eSim
 **Quick install** — paste this in a terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/merge-upstream/Ubuntu/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash
 ```
 
-Downloads eSim to `~/eSim` and runs the installer. Re-run the same line to
-update; add `-s -- --uninstall` to remove it. Upgrading from an older eSim
+Downloads the reviewed v2.6 release to `~/eSim` and runs the installer.
+Re-run the same line to refresh that release; add `-s -- --uninstall` to
+remove it. Upgrading from an older eSim
 2.x? Same line — the installer sweeps old-eSim artifacts and installs
 cleanly on top.
 
