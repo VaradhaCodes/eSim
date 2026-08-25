@@ -276,7 +276,7 @@ class FlowNavigator(QtWidgets.QWidget):
         if hasattr(self, "tabbar"):
             self.tabbar.setStyleSheet(
                 f"QWidget#flowTabBar {{ background:{t['bar_bg']};"
-                f" border-bottom:1px solid {t['bar_border']}; }}")
+                " border: none; }}")
         # Segmented [ Verilog | VHDL ] toggle — per-end radii read as one pill.
         base = (f"QPushButton {{ border:1px solid {t['seg_border']};"
                 f" background:{t['seg_bg']}; color:{t['seg_fg']};"

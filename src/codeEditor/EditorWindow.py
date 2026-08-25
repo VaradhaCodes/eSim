@@ -38,15 +38,24 @@ QMenu { background: #FFFFFF; border: 1px solid #D0D7DE;
         border-radius: 8px; padding: 4px; }
 QMenu::item { padding: 5px 22px; border-radius: 5px; }
 QMenu::item:selected { background: #E7ECF1; }
-QTabWidget::pane { border: 0; border-top: 1px solid #E1E4E8; }
+QTabWidget#editorTabs::pane { background: #FFFFFF;
+    border: 1px solid #D3E0EE; border-bottom: 0; margin-top: -1px; }
 QTabBar { qproperty-drawBase: 0; }
 QTabBar::tab { background: #EEF1F4; color: #41484F;
-               padding: 6px 10px 6px 12px; margin-right: 2px;
+               border: 1px solid #D3E0EE; border-bottom: 0;
+               padding: 8px 16px; margin-right: 2px;
                border-top-left-radius: 8px;
                border-top-right-radius: 8px; }
 QTabBar::tab:selected { background: #FFFFFF; color: #1F2328;
-                        border: 1px solid #E1E4E8; border-bottom: 0; }
+                        border: 1px solid #D3E0EE; border-bottom: 0;
+                        border-top: 2px solid #0077A8; }
 QTabBar::tab:hover { background: #F6F8FA; }
+QTabBar::close-button { image: url("images/dock_close_light.svg");
+    subcontrol-position: right; margin: 2px 6px 2px 2px;
+    border-radius: 4px; }
+QTabBar::close-button:hover {
+    image: url("images/dock_close_light_hover.svg");
+    background: rgba(225,29,72,0.10); }
 QStatusBar { background: #F6F8FA; border-top: 1px solid #E1E4E8;
              color: #57606A; }
 QStatusBar QLabel { color: #57606A; padding: 0 8px; }
@@ -76,10 +85,6 @@ QToolButton#findExpand:checked { color: #0366D6; background: #DDEBFB;
 #findBar QPushButton { border: 1px solid #D0D7DE; border-radius: 6px;
                        padding: 4px 12px; background: #FFFFFF; }
 #findBar QPushButton:hover { background: #EEF1F4; }
-QToolButton#tabClose { border: none; border-radius: 9px;
-                       color: #8A9199; font-size: 14px;
-                       padding: 0; }
-QToolButton#tabClose:hover { background: #E1604D; color: #FFFFFF; }
 #infoBar { background: #FCE5C0; border-bottom: 1px solid #E5C97A; }
 QLabel#infoTitle { color: #5C4405; font-weight: 700; background: transparent; }
 QLabel#infoMessage { color: #6B5410; background: transparent; }
@@ -110,16 +115,24 @@ QMenu::item { padding: 5px 22px; border-radius: 5px; }
 QMenu::item:selected { background: rgba(83,215,255,0.16); color: #F8FBFF; }
 QMenu::separator { height: 1px; background: rgba(83,215,255,0.12);
                    margin: 4px 8px; }
-QTabWidget::pane { border: 0; border-top: 1px solid rgba(83,215,255,0.12); }
+QTabWidget#editorTabs::pane { background: #0E1728;
+    border: 1px solid #243450; border-bottom: 0; margin-top: -1px; }
 QTabBar { qproperty-drawBase: 0; }
 QTabBar::tab { background: #0A1020; color: #94A8C3;
-               padding: 6px 10px 6px 12px; margin-right: 2px;
+               border: 1px solid #243450; border-bottom: 0;
+               padding: 8px 16px; margin-right: 2px;
                border-top-left-radius: 8px;
                border-top-right-radius: 8px; }
 QTabBar::tab:selected { background: #0E1728; color: #F8FBFF;
-                        border: 1px solid rgba(83,215,255,0.16);
-                        border-bottom: 0; }
+                        border: 1px solid #243450; border-bottom: 0;
+                        border-top: 2px solid #53D7FF; }
 QTabBar::tab:hover { background: rgba(83,215,255,0.08); }
+QTabBar::close-button { image: url("images/dock_close_dark.svg");
+    subcontrol-position: right; margin: 2px 6px 2px 2px;
+    border-radius: 4px; }
+QTabBar::close-button:hover {
+    image: url("images/dock_close_dark_hover.svg");
+    background: rgba(251,113,133,0.18); }
 QStatusBar { background: #0A1020;
              border-top: 1px solid rgba(83,215,255,0.12); color: #94A8C3; }
 QStatusBar QLabel { color: #94A8C3; padding: 0 8px; }
@@ -155,10 +168,6 @@ QToolButton#findExpand:checked { color: #8BEAFF;
                        background: #0E1728; color: #E6EDF7; }
 #findBar QPushButton:hover { background: rgba(83,215,255,0.12);
                              color: #F8FBFF; }
-QToolButton#tabClose { border: none; border-radius: 9px;
-                       color: #94A8C3; font-size: 14px;
-                       padding: 0; }
-QToolButton#tabClose:hover { background: #FB7185; color: #050812; }
 #infoBar { background: rgba(60,48,16,0.96);
            border-bottom: 1px solid rgba(201,162,39,0.40); }
 QLabel#infoTitle { color: #F6D88A; font-weight: 700; background: transparent; }
@@ -232,7 +241,17 @@ class EditorWindow(QtWidgets.QMainWindow):
         _OPEN_WINDOWS.add(self)
 
         self.tabs = QtWidgets.QTabWidget()
-        self.tabs.setMovable(True)
+        self.tabs.setObjectName("editorTabs")
+        # Qt's native movable tabs only drag their child close buttons once an
+        # application stylesheet is active. Reuse the verifier's painted drag
+        # bar in free mode so the whole tab follows the pointer and every tab
+        # can change position.
+        from maker.VerilogVerifier import PinnedTabBar
+        self.tabs.setTabBar(PinnedTabBar(
+            pin_last=False, background_object="editorCentral"))
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(
+            lambda index: self._close_editor(self.tabs.widget(index)))
         self.tabs.setDocumentMode(True)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         tab_bar = self.tabs.tabBar()
@@ -322,7 +341,6 @@ class EditorWindow(QtWidgets.QMainWindow):
 
         index = self.tabs.addTab(editor, os.path.basename(file_path))
         self.tabs.setTabToolTip(index, file_path)
-        self._add_close_button(index, editor)
         self._open_tabs[key] = editor
         self._apply_view_settings(editor)
         self.tabs.setCurrentWidget(editor)
@@ -568,18 +586,6 @@ class EditorWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # tab / lifecycle handling
     # ------------------------------------------------------------------
-    def _add_close_button(self, index, editor):
-        btn = QtWidgets.QToolButton()
-        btn.setObjectName("tabClose")
-        btn.setText("✕")
-        from frontEnd.theme_utils import zoom_px
-        btn.setFixedSize(zoom_px(18), zoom_px(18))
-        btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        btn.setToolTip("Close (Ctrl+W)")
-        btn.clicked.connect(lambda _c=False, e=editor: self._close_editor(e))
-        self.tabs.tabBar().setTabButton(
-            index, QtWidgets.QTabBar.ButtonPosition.RightSide, btn)
-
     def _on_tab_changed(self, _index):
         self._update_status()
         self._update_window_title()

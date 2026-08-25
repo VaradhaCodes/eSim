@@ -88,6 +88,7 @@ def test_the_drag_is_painted_by_the_bar_not_by_qt(verifier):
     # carries the tab itself; these are the pieces that has to have.
     bar = verifier.editor_tabs.tabBar()
     assert not bar.isMovable()
+    assert not bar.drawBase()
 
     verifier.add_module_tab("second.v", "module second; endmodule")
     end = _press_and_move(bar, 0, bar.tabRect(0).width())

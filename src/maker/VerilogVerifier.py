@@ -450,9 +450,17 @@ class PinnedTabBar(QtWidgets.QTabBar):
     _SLIDE_MS = 150
     _SETTLE_MS = 130
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, pin_last=True,
+                 background_object="verilogRoot"):
         super().__init__(parent)
+        self._pin_last = pin_last
+        self._background_object = background_object
         self.setMovable(False)
+        # QStyle paints a native base line behind the styled rounded tabs. It
+        # shows through their top corners and inter-tab gaps as a bright line
+        # in dark mode (dark in light mode). Our pane/tab borders already own
+        # the connected edge, so the native base must not be drawn.
+        self.setDrawBase(False)
         self._drag_locked = False
         self._press_pos = None
         self._press_index = -1
@@ -475,7 +483,10 @@ class PinnedTabBar(QtWidgets.QTabBar):
     #  Geometry helpers
     # ------------------------------------------------------------------ #
     def _pinned(self):
-        return self.count() - 1
+        # ``count()`` is deliberately one past the last tab in free mode, so
+        # every existing tab remains draggable and the neighbour tests below
+        # naturally include the final tab.
+        return self.count() - 1 if self._pin_last else self.count()
 
     def _drag_rect(self):
         rect = self.tabRect(self._drag_index)
@@ -509,7 +520,8 @@ class PinnedTabBar(QtWidgets.QTabBar):
         it follows a re-theme without a token to keep in sync."""
         fallback = self.palette().color(QtGui.QPalette.ColorRole.Window)
         root = self
-        while root is not None and root.objectName() != "verilogRoot":
+        while (root is not None
+               and root.objectName() != self._background_object):
             root = root.parentWidget()
         if root is None:
             return fallback
@@ -577,7 +589,15 @@ class PinnedTabBar(QtWidgets.QTabBar):
         # The carried tab stays inside the strip, and stops at the pinned tab:
         # clamping the ghost is what keeps the testbench last without any
         # snap-back.
-        limit = self.tabRect(self._pinned()).left() - width
+        if self._pin_last:
+            limit = self.tabRect(self._pinned()).left() - width
+        elif self.count():
+            # Free bars stop at the end of the final tab, rather than at the
+            # widget's far edge (which may contain a wide empty strip).
+            last = self.tabRect(self.count() - 1)
+            limit = last.right() + 1 - width
+        else:
+            limit = 0
         self._ghost_x = max(0, min(cursor_x - self._grab_dx, max(0, limit)))
         # Swap once the LEADING EDGE of the carried tab passes the neighbour's
         # midpoint, against the immediate neighbour only.
@@ -684,7 +704,8 @@ class PinnedTabBar(QtWidgets.QTabBar):
         pos = event.position().toPoint()
         self._press_index = self.tabAt(pos)
         self._press_pos = pos
-        self._drag_locked = self._press_index == self._pinned()
+        self._drag_locked = (self._pin_last
+                             and self._press_index == self._pinned())
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -694,9 +715,9 @@ class PinnedTabBar(QtWidgets.QTabBar):
             # actually be carried, plain arrow over the pinned testbench so the
             # user is not invited to drag something that will not move.
             over = self.tabAt(pos)
-            self.setCursor(
-                QtCore.Qt.CursorShape.ArrowCursor if over == self._pinned()
-                else QtCore.Qt.CursorShape.OpenHandCursor)
+            pinned = self._pin_last and over == self._pinned()
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor if pinned
+                           else QtCore.Qt.CursorShape.OpenHandCursor)
             super().mouseMoveEvent(event)
             return
         if self._drag_locked:
