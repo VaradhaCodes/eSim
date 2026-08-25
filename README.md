@@ -357,11 +357,11 @@ flatpak run org.fossee.eSim
 **Quick install** — paste this in a terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash
+curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
 ```
 
-Downloads the reviewed v2.6 release to `~/eSim` and runs the installer.
-Re-run the same line to refresh that release; add `-s -- --uninstall` to
+Downloads the current eSim 2.6 source from FOSSEE to `~/eSim` and runs the installer.
+Re-run the same line to refresh the installation; add `-s -- --uninstall` to
 remove it. Upgrading from an older eSim
 2.x? Same line — the installer sweeps old-eSim artifacts and installs
 cleanly on top.
@@ -423,7 +423,7 @@ chmod +x ihp/install-ngspice-latest.sh
 |:---------|:-----|:--------|
 | Docker Image Build | `.github/workflows/docker-image.yml` | Builds and publishes the eSim Docker image |
 | Docker Launcher Build | `.github/workflows/docker-launcher-build.yml` | Builds the cross-platform Python launcher |
-| Ubuntu Release | `.github/workflows/release_ubuntu.yml` | Automated Ubuntu `.deb` package builds |
+| Ubuntu Release | `.github/workflows/release_ubuntu.yml` | Builds the Ubuntu release zip and SHA-256 checksum |
 
 | Packaging Format | Directory | Description |
 |:-----------------|:----------|:------------|

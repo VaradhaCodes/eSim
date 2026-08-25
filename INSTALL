@@ -19,7 +19,7 @@ Table of contents
     --------------------------------------------
     Open a terminal and paste:
 
-        $ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash
+        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
 
     This downloads eSim to ~/eSim and runs the same installer described
     below. Re-running the line later updates eSim in place (your built
@@ -34,8 +34,8 @@ Table of contents
 
     It can also uninstall or preview:
 
-        $ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash -s -- --uninstall
-        $ curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash -s -- --dry-run
+        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash -s -- --uninstall
+        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash -s -- --dry-run
 
     Manual install (downloaded zip)
     -------------------------------

@@ -15,9 +15,9 @@ There is also a zero-download-page install path for Ubuntu:
 (see README/INSTALL). It fetches the branch tarball to `~/eSim` and execs
 `Ubuntu/install-eSim.sh` there — it contains NO install logic of its own, so
 it needs no per-release work beyond keeping its default `ESIM_BRANCH`/
-`ESIM_REPO` pointed at the branch users should get (currently
-`merge-upstream`, the fork's default branch; flip to the release
-branch/`master` when this work merges).
+`ESIM_REPO` pointed at the source users should get. The merged-source defaults
+are `FOSSEE/eSim` and `master`; tagged release instructions set `ESIM_BRANCH`
+to the release tag so that an installation remains pinned to that release.
 
 ---
 

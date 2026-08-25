@@ -2,7 +2,7 @@
 #=============================================================================
 #          FILE: bootstrap.sh
 #
-#         USAGE: curl -fsSL https://raw.githubusercontent.com/VaradhaCodes/eSim/merge-upstream/Ubuntu/bootstrap.sh | bash
+#         USAGE: curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
 #                curl -fsSL .../bootstrap.sh | bash -s -- --uninstall
 #                curl -fsSL .../bootstrap.sh | bash -s -- --dry-run
 #
@@ -21,13 +21,13 @@
 #                as-is and never overwritten.
 #
 #     OVERRIDES: ESIM_DIR    where the eSim tree lives   (default ~/eSim)
-#                ESIM_BRANCH branch/tag to download      (default merge-upstream)
-#                ESIM_REPO   GitHub owner/repo           (default VaradhaCodes/eSim)
+#                ESIM_BRANCH branch/tag to download      (default master)
+#                ESIM_REPO   GitHub owner/repo           (default FOSSEE/eSim)
 #=============================================================================
 set -euo pipefail
 
-ESIM_REPO="${ESIM_REPO:-VaradhaCodes/eSim}"
-ESIM_BRANCH="${ESIM_BRANCH:-merge-upstream}"
+ESIM_REPO="${ESIM_REPO:-FOSSEE/eSim}"
+ESIM_BRANCH="${ESIM_BRANCH:-master}"
 ESIM_DIR="${ESIM_DIR:-$HOME/eSim}"
 MARKER=".esim-bootstrap"          # stamped only on trees THIS script created
 

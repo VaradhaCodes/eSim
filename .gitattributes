@@ -78,6 +78,11 @@ plot_data_*.txt                  export-ignore
 # MSYS2 sh runs these; CRLF from autocrlf checkout breaks them on fresh clones.
 windows/*.sh text eol=lf
 
+# Maintainers also run the release builder from Linux or WSL. Keep its shebang
+# and shell syntax usable even when the checkout was created by Windows Git.
+/make-release.sh text eol=lf
+/VERSION text eol=lf
+
 # Same reasoning, higher stakes: these two ARE the Ubuntu install path. A
 # contributor on Windows with core.autocrlf=true checks them out as CRLF, and
 # an editor that writes the file back verbatim commits them that way -- which
