@@ -1,4 +1,4 @@
-"""Generated-C buffer sizing on the maker (Verilator) side — MAKER_AUDIT M11.
+"""Generated-C buffer sizing on the maker (Verilator) side.
 
 ``sim_main_<model>.h`` used to declare ``int <model>_temp_<port>[1024]`` for
 every port and ``sim_main_<model>.cpp`` an instance array of a fixed 1024,

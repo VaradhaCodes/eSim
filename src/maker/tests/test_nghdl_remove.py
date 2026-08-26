@@ -82,7 +82,7 @@ def test_append_is_idempotent(tmp_path):
 
 
 def test_append_repairs_missing_trailing_newline(tmp_path):
-    # The exact M22 bug: a last line without "\n" must not glue to the new
+    # A last line without "\n" must not glue to the new
     # name ("muxxor2"); the new entry has to start on its own line.
     mp = str(tmp_path / "modpath.lst")
     with open(mp, "w") as f:

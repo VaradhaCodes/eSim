@@ -1,14 +1,14 @@
-"""install-nghdl.sh hardening — MAKER_AUDIT M17 and M20.
+"""Regression guards for install-nghdl.sh hardening.
 
 Shell that only runs on a real Ubuntu box, so these are a syntax check plus
 structural guards on the three behaviours that bite the user:
 
-* M17 — ``--uninstall`` purged ghdl/verilator (packages shared with anything
+* ``--uninstall`` purged ghdl/verilator (packages shared with anything
   else on the machine) without asking, and removed /usr/bin/ngspice without
   saying that nothing replaced it.
-* M20a — the Icarus fallback cloned ~200 MB of history to check out one pinned
+* The Icarus fallback cloned ~200 MB of history to check out one pinned
   commit, on exactly the slow machines that path exists for.
-* M20b — the simulator upgrade deleted the working tree BEFORE proving the new
+* The simulator upgrade deleted the working tree BEFORE proving the new
   one had been extracted, and swallowed the failure with ``|| true``: a failed
   upgrade left the user with no simulator at all.
 
@@ -55,7 +55,7 @@ def test_script_parses():
     assert subprocess.run([bash, "-n", _SCRIPT]).returncode == 0
 
 
-# ---------------------------------------------------------------- M17
+# Shared-package uninstall behavior
 
 
 def test_uninstall_asks_before_purging_shared_packages():

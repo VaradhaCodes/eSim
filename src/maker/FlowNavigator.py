@@ -35,7 +35,7 @@ def _make_bus_closer(bus):
     ``closeEvent`` stops the DesignBus watchdog on an explicit close, but the
     Model Creation dock is usually torn down by parent destruction (Close
     Project / tab close -> deleteLater), which Qt never delivers a closeEvent
-    for -- so the observer thread leaked (H4 / R3-2). Wiring this to
+    for, so the observer thread leaked. Wiring this to
     ``destroyed`` closes the class. It captures only the bus (a plain object),
     never the dying widget, and is idempotent with closeEvent's own close()."""
     def _close(*_a):

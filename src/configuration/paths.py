@@ -95,7 +95,7 @@ def read_workspace(default_path=None, default_check="0"):
         # in Workspace -- only "0" (Unchecked) and "2" (Checked) are ever
         # written. A hand-edited/corrupt token ("5", "x") otherwise reaches
         # that constructor and aborts startup with a raw ValueError before any
-        # window appears (H7). Clamp anything unexpected to the default here,
+    # window appears. Clamp anything unexpected to the default here,
         # the single source every consumer reads.
         if check not in ("0", "2"):
             check = str(default_check)

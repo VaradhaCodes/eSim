@@ -29,7 +29,7 @@ class Model(QtWidgets.QWidget):
         # prev-values XML is missing or has no <model> child; the restore loops
         # below then simply skip. Previously ``root`` was only bound inside the
         # try, so a bare access outside the swallowing try/except would raise
-        # UnboundLocalError (the latent crash shape flagged in audit R3-13).
+        # UnboundLocalError.
         root = None
         try:
             f = open(

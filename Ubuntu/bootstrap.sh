@@ -2,7 +2,9 @@
 #=============================================================================
 #          FILE: bootstrap.sh
 #
-#         USAGE: curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
+#         USAGE: curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/v2.6/Ubuntu/bootstrap.sh \
+#                  | ESIM_BRANCH=v2.6 bash
+#                # Development snapshot: curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
 #                curl -fsSL .../bootstrap.sh | bash -s -- --uninstall
 #                curl -fsSL .../bootstrap.sh | bash -s -- --dry-run
 #

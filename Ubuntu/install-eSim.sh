@@ -948,18 +948,16 @@ copyKicadLibrary() {
     # The 3 libraries eSim rewrites at runtime when users build HDL models.
     local gen_libs=(eSim_Ngveri eSim_NgVeriCosim eSim_Nghdl) g
 
-    # --- Static libs: the 14 eSim never rewrites go into KiCad's own dir and
-    #     stay ROOT-OWNED. No chown here: the old chown -R of the whole symbols
-    #     dir hijacked ownership of KiCad's standard libraries.
-    # --chown/--chmod: plain `sudo rsync -a` preserves the SOURCE owner/mode,
-    # i.e. the user's repo checkout — leaving user-owned, group-writable files
-    # in /usr/share. Force the root-owned 644 a system dir is supposed to have.
-    sudo mkdir -p /usr/share/kicad/symbols
-    sudo rsync -a --chown=root:root --chmod=D755,F644 \
+    # --- Static libraries are copied to an eSim-owned directory. They never
+    #     share KiCad's system library directory, so their registrations can
+    #     use stable absolute paths and uninstall never affects KiCad files.
+    local staticdir="$config_dir/kicad_static"
+    mkdir -p "$staticdir"
+    rsync -a --delete \
         --exclude='eSim_Ngveri.kicad_sym' \
         --exclude='eSim_NgVeriCosim.kicad_sym' \
         --exclude='eSim_Nghdl.kicad_sym' \
-        "$libdir/eSim-symbols/" /usr/share/kicad/symbols/
+        "$libdir/eSim-symbols/" "$staticdir/"
 
     # --- Generated libs: live in the user's own ~/.esim/kicad_symbols so the
     #     app never needs write access to /usr/share. Seed each ONCE ( -n ) —
@@ -982,9 +980,8 @@ copyKicadLibrary() {
     mkdir -p "$cfg/$ver"
     log "Using KiCad config dir: $cfg/$ver"
 
-    # Rewrite the 3 generated-lib uris from ${KICAD6_SYMBOL_DIR}/<lib> to their
-    # ~/.esim absolute path on a TEMP copy of the template (never modify the
-    # file inside $libdir), then install it.
+    # Rewrite eSim library URIs to their owned absolute paths on a temporary
+    # copy of the template (never modify the file inside $libdir).
     local tmptable
     tmptable=$(mktemp)
     cp "$libdir/template/sym-lib-table" "$tmptable"
@@ -992,11 +989,13 @@ copyKicadLibrary() {
         sed -i "s|\${KICAD6_SYMBOL_DIR}/$g.kicad_sym|$gendir/$g.kicad_sym|g" \
             "$tmptable"
     done
+    sed -i "s|\${KICAD6_SYMBOL_DIR}/eSim_|$staticdir/eSim_|g" "$tmptable"
+    sed -i "s|@ESIM_STATIC_SYMBOL_DIR@|$staticdir|g" "$tmptable"
     cp "$tmptable" "$cfg/$ver/sym-lib-table" 2>/dev/null \
         || warn "sym-lib-table copy failed (eSim registers libs at runtime anyway)"
     rm -f "$tmptable"
 
-    log "Static eSim symbols -> /usr/share/kicad/symbols (root-owned)"
+    log "Static eSim symbols -> $staticdir"
     log "Generated symbols   -> $gendir (user-writable)"
 
     # The extracted copy is only needed during install.

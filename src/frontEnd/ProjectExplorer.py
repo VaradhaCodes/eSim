@@ -529,7 +529,7 @@ class ProjectExplorer(QtWidgets.QWidget):
             # False for a vanished folder (stale USB / unmounted network drive).
             # Bail out then -- setting a dead path current makes every later tool
             # click operate on a ghost project (eeschema on a missing file,
-            # "netlist not found", NgspiceWidget on a nonexistent cwd) -- M4.
+        # "netlist not found", NgspiceWidget on a nonexistent cwd).
             if not self.refreshProject(self.filePath):
                 return
 
@@ -636,7 +636,7 @@ class ProjectExplorer(QtWidgets.QWidget):
             if parentnode is None:
                 # The folder exists but has no tree node to rebuild against.
                 # Record its contents and report success rather than raising
-                # AttributeError on None.childCount() (M4).
+                # AttributeError on None.childCount().
                 self.obj_appconfig.project_explorer[
                     canonical_path(filePath)] = filelistnew
                 self._persist()

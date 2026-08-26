@@ -98,7 +98,7 @@ class Appconfig:
     #: The GUI-thread reporter (a QObject) that print_* emit through once the
     #: window is up. None in headless/test/pre-GUI runs -- print_* then write
     #: the plain-list sink directly. Created on the GUI thread by
-    #: attach_gui_reporter(); see the M9 note there.
+    #: attach_gui_reporter(); see the thread-affinity note there.
     _reporter = None
 
     # class-level, shared -- seeded by load_config(). Default None so ModelicaUI
@@ -255,7 +255,7 @@ class Appconfig:
 
         MUST run on the GUI thread once the sink is a QTextEdit -- callers reach
         it only through _dispatch(), which marshals worker-thread calls onto the
-        GUI thread via the reporter (M9)."""
+        GUI thread via the reporter."""
         notes = self.noteArea['Note']
         try:
             notes.append(line)
@@ -278,7 +278,7 @@ class Appconfig:
 
         The console sink is a QTextEdit and the status bar is a QStatusBar once
         the GUI is up; touching either from a thread other than the GUI thread
-        is undefined behaviour in Qt and can corrupt state natively (M9). The
+        is undefined behaviour in Qt and can corrupt state natively. The
         codebase does not print from workers today, but nothing stops a future
         BackgroundJob fn from calling print_info -- so route through the
         GUI-thread reporter when it exists: its signals use AutoConnection, so a
@@ -322,19 +322,18 @@ class Appconfig:
         QStatusBar and any QWidget dialog may be touched. It carries two kinds
         of signal, both of which deliver their slot on the GUI thread:
 
-        * ``note`` / ``status`` (AutoConnection) -- M9. A same-thread emit runs
+        * ``note`` / ``status`` (AutoConnection). A same-thread emit runs
           the slot directly (order preserved, identical to the old inline
           print_* path); a worker-thread emit is queued onto the GUI thread.
-        * ``deferred`` (QueuedConnection, carries a callable) -- B1 + M12. It is
+        * ``deferred`` (QueuedConnection, carries a callable). It is
           queued even for a same-thread emit, so post_to_gui() below always
           defers: safe from a worker thread AND safe from inside a
           paint/close/teardown handler (it cannot re-enter the event loop that
           is already running). The excepthook posts its modal dialog through
           this.
 
-        This is the single queued-signal error reporter the crash audit's
-        systemic note 1 asks for ('B1/B2/M9 are the same disease; one object
-        fixes the class').
+        This is the single queued-signal error reporter used by background
+        workers, keeping message-box creation on the GUI thread.
 
         Defined lazily inside the method so ``import Appconfig`` stays Qt-free
         for the many non-GUI importers (matching this module's no-import-side-
@@ -356,7 +355,7 @@ class Appconfig:
                 self.note.connect(self._on_note)
                 self.status.connect(self._on_status)
                 # QueuedConnection: ALWAYS deferred to the next GUI event-loop
-                # turn, even on the GUI thread -- that is the M12 reentrancy fix.
+                # turn, even on the GUI thread, to prevent re-entrancy.
                 self.deferred.connect(
                     self._on_deferred,
                     QtCore.Qt.ConnectionType.QueuedConnection)

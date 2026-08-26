@@ -92,7 +92,7 @@ class NewProjectInfo(QtWidgets.QWidget):
             # and the registry save used to sit OUTSIDE the try, so a disk-full
             # or a workspace turning read-only between the probe and the write
             # raised a raw excepthook dialog and left a half-created project on
-            # disk (M7). Anything that fails now rolls the whole thing back.
+            # disk. Anything that fails now rolls the whole thing back.
             try:
                 os.mkdir(self.projDir)
                 self.projFile = os.path.join(

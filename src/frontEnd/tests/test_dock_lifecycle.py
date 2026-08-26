@@ -1,5 +1,4 @@
-"""Regression tests for S3 dock lifecycle (audit area-02 F3 / area-04 F3 /
-area-06 F1).
+"""Regression tests for dock creation, replacement, and teardown.
 
 Close Project must *destroy* a project's docks, not merely hide them: hiding
 left plot canvases + refresh timers, QWebEngineViews, QScintilla editors and

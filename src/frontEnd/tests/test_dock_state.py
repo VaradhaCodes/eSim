@@ -1,4 +1,4 @@
-"""Regression tests for area-02 F9/F10.
+"""Regression tests for dock state persistence and restoration.
 
 F9(a): the dock registry + naming counter are per-instance state, not module
 globals -- two DockAreas no longer share one ``dock`` dict / ``count``.

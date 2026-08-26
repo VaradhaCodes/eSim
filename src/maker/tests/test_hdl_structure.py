@@ -2,7 +2,7 @@
 module discovery, ANSI/bus-width-aware port extraction, dependency ordering,
 and width-honouring testbench stubs.
 
-These pin the S5 design-side hardening: each test corresponds to a way the
+These pin the design-side hardening: each test corresponds to a way the
 previous implementation silently produced wrong output (empty ports on
 single-line ANSI headers, dropped bus widths, comment-hijacked module names,
 first-module-instead-of-top, missed parameterised instantiations,

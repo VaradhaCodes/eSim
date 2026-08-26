@@ -162,16 +162,16 @@ graph TB
 | `docs/` | 📁 Directory | **Sphinx documentation** — RST files for ReadTheDocs auto-generated developer docs |
 | `code/` | 📁 Directory | **Sphinx autodoc config** — mirrors `src/` structure for API documentation generation |
 | `flatpak/` | 📁 Directory | **Flatpak packaging** — manifest and wrapper scripts for universal Linux distribution |
-| `appimage/` | 📁 Directory | **AppImage packaging** — build scripts for portable Linux AppImage bundles |
+| `appimage/` | 📁 Directory | Legacy AppImage contribution, retained for future modernization; not verified for eSim 2.6 |
 | `docker-launcher/` | 📁 Directory | **Docker support** — Dockerfile, launcher script, and CI workflows for containerized builds |
-| `snap/` | 📁 Directory | **Snap packaging** — `snapcraft.yaml` for building Snap packages |
+| `snap/` | 📁 Directory | Legacy Snap manifest, retained for future maintenance; not verified for eSim 2.6 |
 | `ihp/` | 📁 Directory | **IHP PDK integration** — install script, `.spiceinit` config, NMOS example, and ngspice latest installer for IHP SG13G2 SiGe BiCMOS PDK |
 | `patches/` | 📁 Directory | **Source patches** — patch files for modifying Ngspice/GHDL behavior in sandboxed environments |
 | `.github/` | 📁 Directory | **GitHub config** — issue templates, PR templates, and CI/CD workflow definitions |
 | `setup.py` | 📄 File | Python package configuration for pip installation |
 | `requirements.txt` | 📄 File | Python dependency list (PyQt6, matplotlib, numpy, scipy, etc.) |
 | `conf.py` | 📄 File | Sphinx documentation configuration |
-| `VERSION` | 📄 File | Current version identifier (`2.5`) |
+| `VERSION` | 📄 File | Current version identifier (`2.6`) |
 | `INSTALL` | 📄 File | Detailed multi-platform installation instructions |
 | `LICENSE` | 📄 File | GNU General Public License v3.0 |
 
@@ -354,15 +354,23 @@ flatpak run org.fossee.eSim
 
 ### 🐧 Ubuntu — Native Installer
 
-**Quick install** — paste this in a terminal:
+**eSim 2.6 quick install** — paste this in a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/v2.6/Ubuntu/bootstrap.sh \
+  | ESIM_BRANCH=v2.6 bash
+```
+
+This pins both the bootstrap script and downloaded source to the eSim 2.6
+release. It becomes available after FOSSEE tags the merged commit as `v2.6`.
+
+For a moving development snapshot, use:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
 ```
 
-Downloads the current eSim 2.6 source from FOSSEE to `~/eSim` and runs the installer.
-Re-run the same line to refresh the installation; add `-s -- --uninstall` to
-remove it. Upgrading from an older eSim
+Upgrading from an older eSim
 2.x? Same line — the installer sweeps old-eSim artifacts and installs
 cleanly on top.
 
@@ -428,8 +436,8 @@ chmod +x ihp/install-ngspice-latest.sh
 | Packaging Format | Directory | Description |
 |:-----------------|:----------|:------------|
 | Flatpak | `flatpak/` | Universal Linux package via Flathub |
-| AppImage | `appimage/` | Portable single-file Linux executable |
-| Snap | `snap/` | Ubuntu Snap Store package |
+| AppImage | `appimage/` | Legacy contribution; not a verified eSim 2.6 release path |
+| Snap | `snap/` | Legacy manifest; not a verified eSim 2.6 release path |
 | Docker | `docker-launcher/` | Containerized distribution with GUI forwarding |
 
 ---

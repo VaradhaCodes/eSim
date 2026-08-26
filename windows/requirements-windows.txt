@@ -9,7 +9,7 @@
 #
 # scipy is deliberately absent: nothing in the tree imports it (verified
 # repo-wide) and it cost 128 MB installed. requirements.txt still lists it
-# for Ubuntu until the same audit lands there; Optimize-Stage purges it from
+# for Ubuntu until the dependency review lands there; Optimize-Stage purges it from
 # stages provisioned before this change.
 PyQt6>=6.6
 PyQt6-QScintilla>=2.14

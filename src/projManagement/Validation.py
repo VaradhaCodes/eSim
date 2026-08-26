@@ -143,7 +143,7 @@ class Validation:
         lookSub = os.path.join(str(subDir), str(subName) + ".sub")
         # Read the .sub directly instead of exists()-then-open: the anchor can
         # vanish (sync client / manual delete) or lock in the gap between the
-        # check and the open (M10 race), which used to raise FileNotFoundError
+        # check and the open, which used to raise FileNotFoundError
         # on the GUI thread. A missing / unreadable anchor degrades to the same
         # "no .sub here" terminal code the callers already handle.
         try:
@@ -208,7 +208,7 @@ class Validation:
         last_line = []
 
         # os.stat / open / read on a path that vanished or locked between the
-        # caller's exists-check and here raises on the GUI thread (M10 race).
+        # caller's exists-check and here raises on the GUI thread.
         # Treat an unreadable / missing / disappearing file as an invalid
         # subcircuit (return False) — the same terminal the format checks below
         # already use — instead of crashing into the excepthook.

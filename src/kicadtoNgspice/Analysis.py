@@ -601,7 +601,7 @@ class Analysis(QtWidgets.QWidget):
         try:
             # .text is a property (the element's text), not a method — the
             # old .text() call raised TypeError on every run, so op_check was
-            # always seeded '0' and Operating Point never restored (R3-9).
+            # always seeded '0' and Operating Point never restored.
             self.track_obj.op_check.append(
                 str(root[1][4].text or '0'))
         except Exception:
@@ -651,7 +651,7 @@ class Analysis(QtWidgets.QWidget):
 
                 # root[1][4].text is the stored "1"/"0" string; comparing it
                 # to the int 1 was never true, so the checkbox never restored
-                # (R3-9).
+                # for earlier project files.
                 if root[1][4].text == '1':
                     self.check.setChecked(True)
                 else:

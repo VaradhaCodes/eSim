@@ -121,16 +121,16 @@ Copy this table into the release PR/issue and fill the Result column.
 
 When any W-row fails: `powershell -ExecutionPolicy Bypass -File C:\FOSSEE\eSim\windows\collect-logs.ps1` bundles the doctor report + configs + spinit + logs into one Desktop zip — attach it to the issue.
 
-### Results — 2026-07-05 packaging overhaul (Fable session)
+### Results — 2026-07-05 packaging overhaul
 
 Ran on the dev box (Ubuntu 25.04, no clean VMs available):
 
-* U1 ✅ 328 passed / 6 skipped (`src`), 6 passed (`windows/tests`), 186 (`src/maker`)
-* U2 ✅ `bash -n` clean; `--dry-run` correct on 25.04 profile
-* U3 ✅ built `dist/eSim-2.5-ubuntu.zip` (82 MB), extracted, `--dry-run` from
+* U1 [PASS] 328 passed / 6 skipped (`src`), 6 passed (`windows/tests`), 186 (`src/maker`)
+* U2 [PASS] `bash -n` clean; `--dry-run` correct on 25.04 profile
+* U3 [PASS] built `dist/eSim-2.5-ubuntu.zip` (82 MB), extracted, `--dry-run` from
   the extracted root resolves nghdl.zip + kicadLibrary tarball + sky130
-* U4–U13 ⬜ **owed to clean 24.04 + 26.04 VMs**
-* W1–W13 ⬜ **owed to a Windows build box + VM** (no Windows packaging had
+* U4–U13 [PENDING] **clean 24.04 + 26.04 VM runs required**
+* W1–W13 [PENDING] **Windows build box + VM required** (no Windows packaging had
   ever been in-repo before; `build-windows.ps1` is untested on real Windows —
   expect a shakedown run; all manifest sha256 fields are blank until the
   first `-AcceptNewHashes` build)
@@ -152,25 +152,25 @@ W1–W13 still need the first real Windows run.
   *Since diagnosed and fixed — not ordering at all; see both 2026-07-12 run
   reports below.*
 
-### Results — 2026-07-12 Ubuntu 24.04 VM run (Fable session)
+### Results — 2026-07-12 Ubuntu 24.04 VM run
 
 Ran U4–U13 on a 24.04.4 VirtualBox VM (the 26.04 sweep runs on its own VM):
 
-* U1 ✅ 435 passed / 8 skipped after fixes; the `test_model_cache.py`
+* U1 [PASS] 435 passed / 8 skipped after fixes; the `test_model_cache.py`
   "ordering flake" noted above was actually a HOME-isolation bug in the test
   (module-level `_TMP_HOME` vs the repo-wide `isolated_user_home` fixture) —
   fixed, passes in every order now
-* U2 ✅ `bash -n` + `--dry-run` correct on the 24.04 profile
-* U4 ✅ clean install; second full pass after U13's purge also green
-* U6 ✅ GUI up on the live desktop 30 s, themed, Qsci/QtSvg import
-* U7 ✅ BJT_amplifier: 1008 rows, gain ≈ 20×
-* U8 ✅ NgVeri counter model: Ngveri.cm rebuilt, symbol in eSim_Ngveri
-* U9 ✅ verifier engine compile+sim+VCD parse via source-built iverilog
-* U10 ✅ and_gate VHDL co-sim: socket handshake, 194 rows, truth table clean
+* U2 [PASS] `bash -n` + `--dry-run` correct on the 24.04 profile
+* U4 [PASS] clean install; second full pass after U13's purge also green
+* U6 [PASS] GUI up on the live desktop 30 s, themed, Qsci/QtSvg import
+* U7 [PASS] BJT_amplifier: 1008 rows, gain ≈ 20×
+* U8 [PASS] NgVeri counter model: Ngveri.cm rebuilt, symbol in eSim_Ngveri
+* U9 [PASS] verifier engine compile+sim+VCD parse via source-built iverilog
+* U10 [PASS] and_gate VHDL co-sim: socket handshake, 194 rows, truth table clean
   on steady-state samples — **after** the ghdl-gcc fallback fix below
-* U11 ✅ after fixing `sudo rsync -a` source-ownership leak (`--chown=root:root`)
-* U12 ✅ eSim_Ngveri.kicad_sym byte-identical across reinstall
-* U13 ✅ no leftovers, KiCad removed by package purge only
+* U11 [PASS] after fixing `sudo rsync -a` source-ownership leak (`--chown=root:root`)
+* U12 [PASS] eSim_Ngveri.kicad_sym byte-identical across reinstall
+* U13 [PASS] no leftovers, KiCad removed by package purge only
 
 24.04-specific findings fixed this run:
 
@@ -184,7 +184,7 @@ Ran U4–U13 on a 24.04.4 VirtualBox VM (the 26.04 sweep runs on its own VM):
 3. `StandardKey.SaveAs` unbound on the Qt 6.4 fallback theme — pinned
    Ctrl+Shift+S in the Verilog Verifier.
 
-### Results — 2026-07-12 Ubuntu 26.04 clean-VM run (Fable session)
+### Results — 2026-07-12 Ubuntu 26.04 clean-VM run
 
 Ran U5–U13 on a clean Ubuntu 26.04 LTS VM (fresh box; a prior eSim 2.5
 install was fully removed first). Four breaks found and fixed — two of them
@@ -192,7 +192,7 @@ install was fully removed first). Four breaks found and fixed — two of them
 24.04 run above and landed with that run's commits; the other two are
 committed with this run:
 
-* U5 ✅ `--install` completes end-to-end (KiCad 9.0.8 from universe,
+* U5 [PASS] `--install` completes end-to-end (KiCad 9.0.8 from universe,
   PyQt6/Qsci from apt, venv, nghdl, sky130, launcher, doctor all-green).
   **Fix 1:** the nghdl-simulator (ngspice-45.2) tarball is a repacked source
   tree, so automake maintainer mode re-runs `aclocal-1.16` (absent on
@@ -201,26 +201,26 @@ committed with this run:
   **Fix 2:** the GUI hard-imports `PyQt6.QtSvg`, which Debian/Ubuntu split
   into `python3-pyqt6.qtsvg` (NOT a dependency of `python3-pyqt6`) —
   added to `QT_PKGS` + an install-time import check.
-* U6 ✅ `esim` launches, PyQt6 GUI stays up, Qsci imports (after Fix 2).
-* U7 ✅ `Examples/Halfwave_Rectifier` netlist through the nghdl ngspice:
+* U6 [PASS] `esim` launches, PyQt6 GUI stays up, Qsci imports (after Fix 2).
+* U7 [PASS] `Examples/Halfwave_Rectifier` netlist through the nghdl ngspice:
   62 data rows, `plot_data_v/i.txt` produced.
-* U8 ✅ NgVeri Verilator build driven through the real
+* U8 [PASS] NgVeri Verilator build driven through the real
   `ModelGeneration` pipeline; symbol lands in `~/.esim` `eSim_Ngveri`,
   model simulates. **Fix 3:** hdlparse silently drops the FIRST port of a
   single-line ANSI header (`module m(input a, input b, ...)`) — the header
   splitter now also breaks the line after `(`.
-* U9 ✅ compile+simulate with the source-built iverilog/vvp (libvvp is
+* U9 [PASS] compile+simulate with the source-built iverilog/vvp (libvvp is
   resolved via `[COSIM] IVERILOG_LIB` / `LD_LIBRARY_PATH` by design —
   bare-shell `vvp` without that env fails, which is expected).
-* U10 ✅ nghdl `and_gate` VHDL co-sim end-to-end on ghdl-llvm 5.0.1:
+* U10 [PASS] nghdl `and_gate` VHDL co-sim end-to-end on ghdl-llvm 5.0.1:
   ghdlserver elaborates (`ghdl -e -Wl,ghdlserver.o`), socket sim runs,
   correct output. This was the first real run of the ngspice-45.2 rewrite.
-* U11 ✅ **Fix 4:** `sudo rsync -a` preserved the checkout's user ownership
+* U11 [PASS] **Fix 4:** `sudo rsync -a` preserved the checkout's user ownership
   on `/usr/share/kicad/symbols` (files AND the dir) — fixed as
   `--chown=root:root --chmod=D755,F644` (landed via the 24.04 run's commit).
-* U12 ✅ built model (U8) survives a full `--install` re-run byte-identical;
+* U12 [PASS] built model (U8) survives a full `--install` re-run byte-identical;
   no generated libs leak into `/usr/share`.
-* U13 ✅ uninstall leaves zero eSim artifacts; `/usr/share/kicad` reduced to
+* U13 [PASS] uninstall leaves zero eSim artifacts; `/usr/share/kicad` reduced to
   an empty package-purged dir, nothing KiCad-owned over-wiped. Note: the
   `modelParamXML/{Nghdl,Ngveri}/*` wipe also deletes the four git-tracked
   orphan XMLs (or_gate, advanced_pwm, dvsd_8_bit_priority_encoder,
@@ -234,7 +234,7 @@ committed with this run:
   and each file standalone are now all green (435 passed / 8 skipped full).
   (`test_model_cache.py` itself got the identical fix from the 24.04 run's
   commit; the other two are committed with this run.)
-* U4 ✅ covered by the 24.04 run above. W1–W13 ⬜ still owed.
+* U4 [PASS] covered by the 24.04 run above. W1–W13 remain pending.
 
 ## 5. When a code change adds a dependency or data file
 

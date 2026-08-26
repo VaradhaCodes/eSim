@@ -1,6 +1,6 @@
 """Regression tests for projManagement.Validation.
 
-Covers area-01 F6:
+Covers project-input validation:
   - validateSub returns an explicit "NOSUBCKT" when a .sub file exists but
     holds no ".subckt" line (previously fell off the end returning None, which
     string-comparing callers turned into a confusing wrong-branch message).

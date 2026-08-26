@@ -752,7 +752,7 @@ class Convert:
                         # For mosfet library name come along with MOSFET
                         # dimension information. A model-track entry without
                         # the ":W=.. L=.." suffix used to IndexError here
-                        # (R3-10); surface it as a readable error instead.
+                        # surface it as a readable error instead.
                         if len(tempStr) < 2:
                             raise ValueError(
                                 "MOSFET '" + words[0] + "' has no W/L "
@@ -769,7 +769,7 @@ class Convert:
 
                         # A library file that was moved/renamed/unplugged
                         # between selection and Convert used to raise a raw
-                        # FileNotFoundError (R3-10); surface it clearly.
+                        # FileNotFoundError; surface it clearly.
                         try:
                             shutil.copy2(libAbsPath, projpath)
                         except OSError as copy_err:
@@ -897,7 +897,7 @@ sky130_fd_pr__model__r+c.model.spice
                     dst = projpath
                     # A subcircuit directory that was moved/renamed/unplugged
                     # between selection and Convert used to raise a raw
-                    # FileNotFoundError from os.listdir (R3-10); surface it.
+                    # FileNotFoundError from os.listdir; surface it.
                     try:
                         sub_files = os.listdir(src)
                     except OSError as list_err:

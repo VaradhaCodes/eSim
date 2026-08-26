@@ -478,7 +478,7 @@ class _RenderMixin:
 
             # An empty trace (header-only / all-rows-dropped run) makes
             # np.min/np.max raise "zero-size array to reduction" — skip it
-            # so the Timing view still renders the remaining traces (R2-3).
+            # so the Timing view still renders the remaining traces.
             if n == 0:
                 continue
 

@@ -874,7 +874,7 @@ class MainWindow(QtWidgets.QWidget):
         # attr_source must always be bound before the serialization loop
         # below. A prevvalues cache that has no <source> node (corrupt or
         # from an older schematic revision) used to leave it unassigned ->
-        # UnboundLocalError at "for child in attr_source" (M1 / R3-4-B).
+        # UnboundLocalError at "for child in attr_source".
         attr_source = None
         if check == 1:
             for child in attr_parent:
@@ -898,8 +898,8 @@ class MainWindow(QtWidgets.QWidget):
                     for grand_child in child:
                         # Source-type drift (remembered XML carries more
                         # source fields than the live tab now has) used to
-                        # index past entry_var_keys -> IndexError (M1 /
-                        # R3-4-C). Stop restoring once the live fields run out.
+                        # index past entry_var_keys -> IndexError.
+                        # Stop restoring once the live fields run out.
                         if grand_child_count >= len(entry_var_keys):
                             break
                         grand_child.text = \
@@ -1091,7 +1091,7 @@ class MainWindow(QtWidgets.QWidget):
                         for item in value:
                             # Guard the parallel index walk: a model whose
                             # tracked range outruns model_entry_var used to
-                            # IndexError here (M1). Stop at the live end.
+                            # IndexError here. Stop at the live end.
                             if i >= len(
                                     self.obj_model.obj_trac.model_entry_var):
                                 break
@@ -1696,7 +1696,7 @@ class MainWindow(QtWidgets.QWidget):
                 # Skip through the .control block. If .endc is missing
                 # (hand-edited .cir.out), the shared iterator simply
                 # exhausts and the outer for-loop ends — no StopIteration
-                # escapes as it did with next() (M2 / R3-4-F).
+                # escapes as it did with next().
                 for ctrl_line in netlist:
                     ctrl_words = ctrl_line.strip().split()
                     if ctrl_words and ctrl_words[0] == ".endc":

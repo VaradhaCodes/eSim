@@ -1,6 +1,6 @@
 """Syntax-highlighting tests for the shared code-editor theme + lexers.
 
-These pin the S2 Verilog fixes and guard the shared blast radius:
+These pin the Verilog fixes and guard the shared blast radius:
 
 * port declarations (`input wire clk`) colour the direction/net keywords as
   keywords and the signal name as a plain identifier -- not one black blob;

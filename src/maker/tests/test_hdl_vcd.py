@@ -55,7 +55,7 @@ def test_format_ascii_only_when_named_and_wide():
     assert format_vcd_val(bits, 24, 'counter') == hex(int(bits, 2))
 
 
-# --- S6: ugly-but-valid VCDs --------------------------------------------- #
+# Ugly-but-valid VCDs ------------------------------------------------------ #
 
 REAL_VCD = """\
 $timescale 1ns $end
@@ -116,7 +116,7 @@ def test_missing_timescale_defaults():
     assert timescale == "Time"
 
 
-# --- S6: CSV export (pure) ----------------------------------------------- #
+# CSV export (pure) -------------------------------------------------------- #
 
 def test_to_csv_matches_known_waveform():
     _, _, _, raw, timescale = parse_vcd_for_plot(VCD)

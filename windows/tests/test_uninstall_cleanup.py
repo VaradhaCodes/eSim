@@ -114,6 +114,20 @@ def test_generated_rows_follow_the_user_data_answer(home, install, table):
     assert read_names(table) == []
 
 
+def test_static_legacy_rows_follow_the_user_data_answer(home, install, table):
+    static = home / ".esim" / "kicad_static" / "legacy"
+    write_table(table, [
+        row("eSim_PSpice", str(static / "eSim_PSpice.lib")),
+        row("CONNECT", str(static / "CONNECT.lib")),
+    ])
+    assert uc.clean_sym_lib_table(str(table), str(install)) == 0
+    assert read_names(table) == ["eSim_PSpice", "CONNECT"]
+
+    assert uc.clean_sym_lib_table(str(table), str(install),
+                                  purge_user_data=True) == 2
+    assert read_names(table) == []
+
+
 def test_legacy_kicad_symbol_dir_rows_go(home, install, table):
     write_table(table, [
         row("eSim_Nghdl", "${KICAD6_SYMBOL_DIR}/eSim_Nghdl.kicad_sym"),

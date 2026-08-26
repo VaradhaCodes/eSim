@@ -134,8 +134,7 @@ class CodeEditor(QsciScintilla):
         except OSError:
             # The file vanished between the watcher event and this reload
             # (external delete/rename, or a network path dropping out). Keep
-            # the current buffer instead of crashing through _read_bytes'
-            # unguarded open() (audit R3-13).
+            # the current buffer instead of crashing while reading the file.
             return
         self.setModified(False)
         line = min(line, max(0, self.lines() - 1))

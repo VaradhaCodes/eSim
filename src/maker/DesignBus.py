@@ -52,7 +52,7 @@ except ImportError:
     # and the lazy materialize before Convert never need it -- only the passive
     # external-edit watch does. Importing maker.makerchip (-> DesignBus) must
     # never brick Model Creation just because watchdog is missing or fails to
-    # load (M8), mirroring the graceful QScintilla fallback in
+    # load, mirroring the graceful QScintilla fallback in
     # codeEditor.EditorWindow.
     watchdog = None
     _HAS_WATCHDOG = False

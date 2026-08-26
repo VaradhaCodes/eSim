@@ -110,7 +110,7 @@ entirely in `windows/`:
 | `build-windows.ps1` | The one build command. Downloads pinned deps, builds the sim toolchain from source inside MSYS2, stages the tree, compiles the installer. |
 | `deps-manifest.json` | Every third-party download: URL + version + sha256 + why. The build refuses hash mismatches. |
 | `requirements-windows.txt` | The pip wheel set for the bundled Python. |
-| `installer.iss` | Inno Setup script (readable, diffable — the reason for Inno over NSIS). |
+| `installer.iss` | Inno Setup script (readable and easy to compare — the reason for Inno over NSIS). |
 | `launcher/` | `eSim.exe` sources (C, ~1s compile with the staged mingw). The native GUI launcher the shortcuts and Windows search resolve to: embedded icon + version info, no console flash. Mirrors `esim.bat`'s environment setup exactly — change them together. |
 | `esim.bat` | Relocatable terminal launcher: prepends bundled tool paths (custom ngspice first) + `SPICE_LIB_DIR`, runs the bootstrap, starts the GUI. `esim.bat --doctor` prints the toolchain report. |
 | `windows_bootstrap.py` | Per-user every-launch setup (`~/.esim/config.ini`, symbol seeding, the full `~/.nghdl/config.ini`, ngspice `spinit` relocation, KiCad `sym-lib-table` registration). Pure stdlib, OS-independent, unit-tested on Linux (`windows/tests/`). |
@@ -244,21 +244,22 @@ KiCad bundled inside at `tools\kicad`) and its `.sha256`.
 
 ### What works / what doesn't on Windows
 
-Status legend: ✅ = verified on a clean Windows VM; 🧪 = fully scripted and
-Linux-unit-tested, **awaiting the first Windows VM shakedown** (rows flip to
-✅ only after checklist W1–W13 in MAINTAINERS-PACKAGING.md passes). Run
+Status legend: **Verified** means exercised on a clean Windows VM;
+**Scripted** means Linux-unit-tested but still awaiting the first Windows VM
+shakedown (rows become Verified only after checklist W1–W13 in
+MAINTAINERS-PACKAGING.md passes). Run
 `esim.bat --doctor` (or Help → *Check Simulation Toolchain*) on any install
 to see the live truth for that machine.
 
 | Feature | Status | Why |
 |---|---|---|
-| Schematic + ngspice simulation + plotting | 🧪 | Custom eSim ngspice (console build) at `tools\nghdl\install_dir`; official zip only as Compact fallback |
-| Verilog Verifier (iverilog) | 🧪 | Source-built Icarus staged at `library/bin/iverilog/` where `CosimConfig` probes first |
-| NgVeri code-model builds | 🧪 *Full* flavour only | mingw gcc/make/verilator via `MSYS_HOME`; doctor-gated with per-tool errors |
-| NgVeri d_cosim (Icarus) flow | 🧪 *Full* | Custom ngspice carries `d_cosim`/`ivlng`; iverilog built `--enable-libvvp` |
-| NGHDL / GHDL VHDL co-simulation | 🧪 *Full* | Custom ngspice (`ghdl.cm`) + MSYS2 `ghdl-llvm` + staged `nghdl/src` python/ghdlserver (`_WIN32` socket code already in-tree); Winsock now linked via `-lws2_32` |
-| SKY130 PDK | 🧪 | Expanded, repaired and CMOS-inverter-tested during every Windows build; awaiting clean-VM W6 confirmation |
-| IHP PDK | ❌ not shipped | IHP's installer remains Ubuntu-only |
+| Schematic + ngspice simulation + plotting | Scripted | Custom eSim ngspice (console build) at `tools\nghdl\install_dir`; official zip only as Compact fallback |
+| Verilog Verifier (iverilog) | Scripted | Source-built Icarus staged at `library/bin/iverilog/` where `CosimConfig` probes first |
+| NgVeri code-model builds | Scripted; *Full* flavour only | mingw gcc/make/verilator via `MSYS_HOME`; doctor-gated with per-tool errors |
+| NgVeri d_cosim (Icarus) flow | Scripted; *Full* | Custom ngspice carries `d_cosim`/`ivlng`; iverilog built `--enable-libvvp` |
+| NGHDL / GHDL VHDL co-simulation | Scripted; *Full* | Custom ngspice (`ghdl.cm`) + MSYS2 `ghdl-llvm` + staged `nghdl/src` python/ghdlserver (`_WIN32` socket code already in-tree); Winsock now linked via `-lws2_32` |
+| SKY130 PDK | Scripted | Expanded, repaired and CMOS-inverter-tested during every Windows build; awaiting clean-VM W6 confirmation |
+| IHP PDK | Not shipped | IHP's installer remains Ubuntu-only |
 
 ### Uninstall (Windows)
 

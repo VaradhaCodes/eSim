@@ -196,6 +196,13 @@ def test_register_appends_and_repoints(home, root, kicad_config_root):
     # Static lib appended, referenced in place from the install dir.
     assert "eSim_Devices" in content
     assert str(root) in content
+    legacy = root / "library" / "kicadLibrary" / "eSim-symbols" / "legacy"
+    legacy.mkdir()
+    (legacy / "eSim_PSpice.lib").write_text("EESchema-LIBRARY Version 2.4\n")
+    assert wb.register_kicad_libraries(str(root)) is True
+    content = table.read_text()
+    assert '(name "eSim_PSpice")' in content
+    assert str(legacy / "eSim_PSpice.lib") in content
     # Idempotent: second run changes nothing.
     wb.register_kicad_libraries(str(root))
     assert table.read_text() == content

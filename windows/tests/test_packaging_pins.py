@@ -1,4 +1,4 @@
-"""Static guards for the Windows packaging inputs (MAKER_AUDIT M18 + M19).
+"""Static guards for the Windows packaging inputs.
 
 Nothing here builds or installs anything: these read installer.iss,
 deps-manifest.json, requirements-windows.txt, build-windows.ps1 and
@@ -7,10 +7,10 @@ would otherwise have to catch by hand, on a VM, once per release.
 
 Two of them are the point of the file:
 
-  * the users-modify ACE stays SCOPED (M18) -- a future edit that puts it back
+  * the users-modify ACE stays scoped -- a future edit that puts it back
     on {app} re-opens write access to python\\, eSim.exe, tools\\kicad\\bin and
     tools\\msys64\\ for every local user of a shared machine;
-  * the Windows and Ubuntu pin lists stay IDENTICAL (M19) -- they are two
+  * the Windows and Ubuntu pin lists stay identical -- they are two
     files, they install the same four tools, and nothing but a test keeps a
     bump to one from silently skipping the other.
 
@@ -40,7 +40,7 @@ SKY130_PREPARE = os.path.join(
 WRITTEN_DIRS = ('{app}\\tools\\nghdl', '{app}\\library\\modelParamXML')
 
 # Read-only at runtime; a users-modify ACE on any of these (or on a parent
-# that would inherit down to them) is the M18 tamper vector.
+# that would inherit down to them) would reopen a tamper vector.
 MUST_NOT_BE_WRITABLE = (
     '{app}',
     '{app}\\python',
@@ -82,7 +82,7 @@ def _dirs_with_permissions():
 
 
 # --------------------------------------------------------------------------
-# M18 -- the users-modify grant is scoped to what the app writes
+# The users-modify grant is scoped to what the app writes
 # --------------------------------------------------------------------------
 
 def test_permissions_granted_only_on_runtime_written_dirs():
@@ -125,7 +125,7 @@ def test_written_dirs_are_populated_by_files_not_just_created():
 
 
 # --------------------------------------------------------------------------
-# M19.1 -- every downloaded artifact is hash-pinned
+# Every downloaded artifact is hash-pinned
 # --------------------------------------------------------------------------
 
 def _manifest():
@@ -159,7 +159,7 @@ def test_iverilog_hash_records_its_provenance():
 
 
 # --------------------------------------------------------------------------
-# M19.2 / M19.3 -- pip specs are pinned, bounded, and identical on both OSes
+# Pip specs are pinned, bounded, and identical on both OSes
 # --------------------------------------------------------------------------
 
 def _windows_pins():
@@ -274,7 +274,7 @@ def test_ubuntu_pip_loop_warns_on_every_failure():
 
 
 # --------------------------------------------------------------------------
-# M19.4 -- the rolling MSYS2 package set is at least recorded
+# The rolling MSYS2 package set is recorded
 # --------------------------------------------------------------------------
 
 def test_build_records_msys2_package_lock():

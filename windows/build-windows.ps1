@@ -521,7 +521,7 @@ function Stage-Msys {
     # ROLLING, so two builds a week apart ship different gcc/verilator/ghdl
     # with nothing in the artifact recording which. Pinning package URLs
     # against repo.msys2.org's archive is the full fix; this makes a release
-    # AUDITABLE today -- the same role python-wheels.lock plays for the pip
+    # Traceable today -- the same role python-wheels.lock plays for the pip
     # set. It is written INSIDE the tree (unlike python-wheels.lock, which
     # installer.iss excludes) so a user's install can be identified after the
     # fact, from the installed files alone, when a model build misbehaves.
@@ -1146,21 +1146,7 @@ function Reset-StageModels {
             }
     }
 
-    # --- 2) audit / handoff scratch --------------------------------------- --
-    # Untracked on a clean checkout, but a packager's tree can still hold them
-    # (they were tracked until the cleanup commit) and robocopy would ship them
-    # -- captured stdout and all, absolute C:\Users\<name>\... paths included.
-    foreach ($p in @('CRASH_AUDIT.md', 'MAKER_AUDIT.md', 'audit_harness',
-                     'verify_theme_crash.py', 'THEME_HANDOFF.md',
-                     'SYNTAX_HANDOFF.md')) {
-        $t = Join-Path $Stage $p
-        if (Test-Path $t) {
-            Log "  drop audit scratch: $p"
-            Remove-Item $t -Recurse -Force
-        }
-    }
-
-    # --- 3) icm model dirs + modpath.lst ------------------------------------
+    # --- 2) icm model dirs + modpath.lst ------------------------------------
     $nghdlDst = Join-Path $Stage 'tools\nghdl'
     $icmRoots = @("$nghdlDst\src\xspice\icm", "$nghdlDst\release\src\xspice\icm")
     $dirty = $false
@@ -1259,7 +1245,7 @@ function Assert-CleanStage {
 
        Fails the build rather than warning: a leak is only discoverable after
        the installer is in users' hands. #>
-    Log 'Verifying stage carries no local models or audit scratch'
+    Log 'Verifying release stage contents'
     $bad = @()
 
     # /XD handles an ordinary checkout's .git directory; /XF handles the .git
@@ -1275,12 +1261,6 @@ function Assert-CleanStage {
         $bad += Get-ChildItem $dir -Filter '*.xml' -File -ErrorAction SilentlyContinue |
             Where-Object { $script:ShippedModelXml -notcontains $_.Name } |
             ForEach-Object { "local model xml: modelParamXML\$d\$($_.Name)" }
-    }
-
-    foreach ($p in @('CRASH_AUDIT.md', 'MAKER_AUDIT.md', 'audit_harness',
-                     'verify_theme_crash.py', 'THEME_HANDOFF.md',
-                     'SYNTAX_HANDOFF.md')) {
-        if (Test-Path (Join-Path $Stage $p)) { $bad += "audit scratch: $p" }
     }
 
     $nghdlDst = Join-Path $Stage 'tools\nghdl'
@@ -1328,7 +1308,7 @@ function Assert-CleanStage {
         Die ("stage is not clean -- refusing to package:`n  " +
              ($bad -join "`n  "))
     }
-    Log 'Stage clean: no VCS metadata, local models, or audit scratch'
+    Log 'Stage clean: no VCS metadata or local models'
 }
 
 # ----------------------------------------------------------------- main ----

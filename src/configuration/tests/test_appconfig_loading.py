@@ -1,4 +1,4 @@
-"""Area-01 F2: Appconfig is a plain class whose disk state is loaded by
+"""Appconfig is a plain class whose disk state is loaded by
 explicit classmethods, not at import time.
 
 These lock the two properties the refactor bought us:

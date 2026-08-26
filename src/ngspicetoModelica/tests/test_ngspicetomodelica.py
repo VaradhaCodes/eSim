@@ -1,4 +1,4 @@
-"""Area-08 F5: characterization + skip-collector tests for the ngspice→Modelica
+"""Characterization and skip-collector tests for the ngspice→Modelica
 converter.
 
 The converter had no tests and swallowed every unmappable parameter with a

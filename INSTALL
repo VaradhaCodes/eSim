@@ -19,13 +19,18 @@ Table of contents
     --------------------------------------------
     Open a terminal and paste:
 
+        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/v2.6/Ubuntu/bootstrap.sh \
+            | ESIM_BRANCH=v2.6 bash
+
+    This pins both the bootstrap script and downloaded source to eSim 2.6 and
+    runs the same installer described below. The command becomes available
+    after FOSSEE tags the merged commit as v2.6.
+
+    For a moving development snapshot, use:
+
         $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash
 
-    This downloads eSim to ~/eSim and runs the same installer described
-    below. Re-running the line later updates eSim in place (your built
-    models are kept).
-
-    Already have an OLDER eSim (2.x) on this machine? Run the same line —
+    Already have an OLDER eSim (2.x) on this machine? Run the stable command —
     the installer detects and sweeps old-eSim artifacts (stale launchers,
     old KiCad apt sources, the /usr/local GHDL old nghdl built) and installs
     cleanly on top. There is no need to uninstall first, and two eSim
@@ -34,8 +39,8 @@ Table of contents
 
     It can also uninstall or preview:
 
-        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash -s -- --uninstall
-        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/master/Ubuntu/bootstrap.sh | bash -s -- --dry-run
+        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash -s -- --uninstall
+        $ curl -fsSL https://raw.githubusercontent.com/FOSSEE/eSim/v2.6/Ubuntu/bootstrap.sh | ESIM_BRANCH=v2.6 bash -s -- --dry-run
 
     Manual install (downloaded zip)
     -------------------------------

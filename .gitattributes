@@ -56,6 +56,16 @@
 # ---- Windows-only packaging tree; the curl/zip paths are Ubuntu-only ----
 /windows/                        export-ignore
 
+# ---- legacy packaging contributions (preserved, not released for 2.6) ----
+/appimage/                       export-ignore
+/snap/                           export-ignore
+
+# Preserved legacy text formats contain significant historical whitespace.
+appimage/build-appimage.sh whitespace=-trailing-space
+snap/snapcraft.yaml whitespace=-trailing-space,-blank-at-eof
+src/converter/schematic_converters/ConvertedLibs/*.lib whitespace=-trailing-space
+library/kicadLibrary/eSim-symbols/legacy/*.lib whitespace=-trailing-space
+
 # ---- test suites ----
 /src/conftest.py                 export-ignore
 src/**/tests/                    export-ignore
@@ -95,14 +105,3 @@ Ubuntu/*.sh text eol=lf
 # against an LF source tree. A CRLF checkout on a contributor's Windows box,
 # committed back verbatim, produces a patch that no longer applies.
 patches/ngspice/*.patch text eol=lf
-
-# ---- audit / handoff scratch (also .gitignore'd; this is the archive guard) ----
-# One-off fuzz/soak harnesses and the audit write-ups that drove a fix batch.
-# Untracked as of the cleanup commit, so these lines normally match nothing --
-# they exist so that re-adding one by hand still cannot put it in a user
-# download. The regression tests those passes produced live in src/*/tests and
-# DO stay in the repo (they are export-ignored above like every other test).
-/CRASH_AUDIT.md                  export-ignore
-/MAKER_AUDIT.md                  export-ignore
-/audit_harness/                  export-ignore
-/verify_theme_crash.py           export-ignore

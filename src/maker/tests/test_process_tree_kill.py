@@ -1,4 +1,4 @@
-"""Process-tree termination — MAKER_AUDIT M14.
+"""Regression tests for process-tree termination.
 
 The build watchdog (``ModelGeneration._run``) and the IDE's Cancel button
 (``hdl.icarus.CancelToken``) both used ``Popen.kill()``, which ends the direct

@@ -35,8 +35,8 @@ def _isolate_matplotlib_rcparams():
     ``plotWindow._setup_matplotlib_style`` mutates ``plt.rcParams`` (font sizes
     keyed off the DPI, plus theme colors) on every construction. rcParams is a
     single process-wide dict, so without this each plotWindow build bleeds its
-    font/theme state into later tests and modules (audit R2-6 names rcParams as
-    a cross-test leak vector). Snapshot before, restore after — a no-op for the
+    font/theme state into later tests and modules. Snapshot before, restore
+    after — a no-op for the
     tests that don't build a plotWindow.
     """
     import matplotlib
