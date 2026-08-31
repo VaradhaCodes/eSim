@@ -718,6 +718,12 @@ class EditorWindow(QtWidgets.QMainWindow):
     def _apply_chrome_theme(self):
         """Paint the window chrome to match the active Aurora theme."""
         sheet = STYLE_DARK if theme.is_dark_theme() else STYLE_LIGHT
+        # The shared Aurora icons live beside frontEnd's QSS, not in the
+        # launcher's working directory (which varies between installations).
+        image_dir = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "frontEnd", "images"))
+        sheet = sheet.replace('url("images/',
+                              'url("%s/' % image_dir.replace(os.sep, '/'))
         if sheet == self._chrome_sheet:
             return
         self._chrome_sheet = sheet
