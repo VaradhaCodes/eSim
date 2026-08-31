@@ -40,6 +40,18 @@ jobs:
       - name: Install packaging tools
         run: sudo apt-get update && sudo apt-get install -y zip xz-utils
 
+      - name: Read release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: release_version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          packaged_version="$(tr -d '\r\n' < VERSION)"
+          if [ "$version" != "$packaged_version" ]; then
+            echo "::error::Release tag must match VERSION ($packaged_version)."
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
       - name: Build the release zip
         run: |
           chmod +x make-release.sh
@@ -83,14 +95,14 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: eSim ${{ github.ref_name }}
+          name: eSim-${{ steps.release_version.outputs.version }}
           files: |
             dist/eSim-*-ubuntu.zip
             dist/eSim-*-ubuntu.zip.sha256
           body: |
-            ## eSim ${{ github.ref_name }} — Ubuntu
+            ## Ubuntu
 
-            Supported: Ubuntu 23.04 / 24.04 / 25.04 / 26.04 (64-bit).
+            Supported: Ubuntu 24.04 / 25.04 / 26.04 (64-bit).
 
             **Install with one line** (nothing to download by hand):
 
@@ -98,8 +110,7 @@ jobs:
             curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/Ubuntu/bootstrap.sh | ESIM_BRANCH=${{ github.ref_name }} bash
             ```
 
-            (`ESIM_BRANCH` pins the download to this release. Drop it and you
-            get the current development branch instead.)
+            Keep `ESIM_BRANCH` set to `${{ github.ref_name }}` to install this release.
 
             **Or grab the zip below**, then:
 

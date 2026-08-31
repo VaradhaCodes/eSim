@@ -109,7 +109,7 @@ eSim release
 version    : $VERSION
 git_commit : $commit$dirty
 built      : $date_str (UTC)
-target     : Ubuntu 23.04 / 24.04 / 25.04 / 26.04
+target     : Ubuntu 24.04 / 25.04 / 26.04
 installer  : unified (./install-eSim.sh --install | --uninstall)
 EOF
 
